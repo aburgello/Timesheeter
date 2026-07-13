@@ -1,48 +1,107 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+﻿import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Briefcase, Film, Users, Tag, AlignLeft, Building2,
   Plus, Pencil, Trash2, X, Check, Search,
   RefreshCw, Shield, AlertTriangle, ChevronLeft, ChevronRight,
-  ArrowUpAZ, ArrowDownAZ, LayoutDashboard, TrendingUp, CheckCircle2, UserCog, Activity,
+  ArrowUpAZ, ArrowDownAZ, CheckCircle2, UserCog,
+  FolderPlus, Folder, FolderOpen, Sparkles, Loader2,
+  FileBarChart, ClipboardList, Globe, Layers, Download, Network, TrendingUp,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
+import { confirmAction } from "../lib/confirm";
+import { notify } from "../lib/toast";
+import { isServiceAccount, DEPT_GROUPS } from "../lib/people";
 import { SEED_CLIENTS, SEED_PROJECT_DESCRIPTIONS } from "../data/seedData";
 import { DEFAULT_JOBS, CATEGORIES } from "../constants";
+import { fullName as cleanFullName, cleanNamePart } from "../lib/formatName";
+import PageHeader from "./shared/PageHeader";
+import HubRow from "./shared/HubRow";
+import DateField from "./shared/DateField";
+import OrgChart from "./OrgChart";
+import StudioAnalytics from "./StudioAnalytics";
 
 // Film titles extracted from DEFAULT_JOBS (everything before " : XY")
 const SEED_FILMS = [...new Set(
   DEFAULT_JOBS.map(j => j.split(" : ")[0]?.trim()).filter(f => f && !f.startsWith("XYi "))
 )].sort();
 
-// ── Access control ────────────────────────────────────────────────────────────
-// Add Wrike user IDs of management users here.
-// Your Wrike ID is shown on the Profile Hub page (under your name, first 8 chars).
-// Ask Claude to help you find the full ID if needed.
-export const MANAGEMENT_IDS = [
-  "KUAWDLVN", "KUAQT4JC"
-];
+// Access control lives in lib/access.js (App and the Rail read it at startup;
+// importing it from this lazy-loaded chunk would drag Administration into the
+// main bundle). Re-exported here for compatibility.
+export { MANAGEMENT_IDS } from "../lib/access";
+import { MANAGEMENT_IDS } from "../lib/access";
 
 const OFFICES = ["LDN", "LA"];
 const PRINT_DIGITAL = ["Digital", "Print", "Both"];
 
-const TABS = [
-  { id: "overview",  label: "Overview",            icon: LayoutDashboard },
-  { id: "jobs",      label: "Job Book",            icon: Briefcase },
-  { id: "feed",      label: "Jobs Feed",           icon: Activity  },
-  { id: "people",    label: "People",              icon: Users     },
-  { id: "positions", label: "Positions",           icon: UserCog   },
-  { id: "films",     label: "Films",               icon: Film      },
-  { id: "clients",   label: "Clients",             icon: Building2 },
-  { id: "categories",label: "Item Categories",     icon: Tag       },
-  { id: "descs",     label: "Project Descriptions",icon: AlignLeft },
+// Jobs (Setup / Book / Feed) deliberately live on the standalone Job Book
+// page now (JobBook.jsx) — Administration keeps Reports, Staff Accounts, and
+// the reference-data lists, matching the PMs' mental model.
+//
+// Navigation is a two-level drill-down (group -> item), the same HubRow
+// idiom Profile Hub uses, instead of an 11-wide tab bar. One decision at a
+// time, in a shape a manager already knows from the rest of the app — that
+// consistency is the whole point of this structure, not a tab count problem.
+const NAV_GROUPS = [
+  {
+    id: "reports",
+    label: "Reports",
+    desc: "Logged time by job, and who still needs to submit",
+    icon: FileBarChart,
+    gradient: "from-[#122027] to-[#12a0e1]",
+    items: [
+      { id: "project-time", label: "Project/Time", icon: FileBarChart, desc: "Every logged hour, grouped by job" },
+      { id: "studio-analytics", label: "Studio Analytics", icon: TrendingUp, desc: "Throughput, workload, overdue & hours — charted" },
+      { id: "timesheet-completion", label: "Timesheet Completion", icon: ClipboardList, desc: "Who hasn't submitted for the week", soon: true },
+    ],
+  },
+  {
+    id: "staff",
+    label: "Staff Accounts",
+    desc: "People, their positions & department access",
+    icon: Users,
+    gradient: "from-teal-500 to-[#1cc1a5]",
+    items: [
+      { id: "people", label: "People", icon: Users, desc: "Everyone's role, position & department" },
+      { id: "positions", label: "Positions", icon: UserCog, desc: "Job titles used across the team" },
+    ],
+  },
+  {
+    id: "supporting",
+    label: "Supporting Content",
+    desc: "Films, clients, descriptions, categories, countries & departments",
+    icon: Layers,
+    gradient: "from-violet-500 to-purple-600",
+    items: [
+      { id: "films", label: "Films", icon: Film, desc: "Every film in production" },
+      { id: "clients", label: "Clients", icon: Building2, desc: "Studios and companies you work with" },
+      { id: "descs", label: "Project Type Descriptions", icon: AlignLeft, desc: "The project types that follow each job number" },
+      { id: "categories", label: "Item Categories", icon: Tag, desc: "Work item categories used on jobs" },
+      { id: "translations", label: "Translation Countries", icon: Globe, desc: "Countries available for translation work" },
+      { id: "departments", label: "Departments", icon: Layers, desc: "The department list used across the app" },
+    ],
+  },
+  {
+    id: "orgchart-group",
+    label: "Org Chart",
+    desc: "Company structure & reporting lines",
+    icon: Network,
+    gradient: "from-indigo-600 to-slate-800",
+    items: [
+      { id: "orgchart", label: "Org Chart", icon: Network, desc: "Who reports to whom, across the whole company" },
+    ],
+  },
 ];
 
-const TAB_GROUPS = [
-  { ids: ["overview"] },
-  { ids: ["jobs", "feed"],      label: "Jobs"      },
-  { ids: ["people", "positions"], label: "Team"    },
-  { ids: ["films", "clients", "categories", "descs"], label: "Reference" },
-];
+function findNavItem(id) {
+  for (const group of NAV_GROUPS) {
+    const item = group.items.find((i) => i.id === id);
+    if (item) return { group, item };
+  }
+  return null;
+}
 
 // ── Project Description quick-filter chips ────────────────────────────────────
 // keyword uses "<CODE> " (with trailing space) so "UK Something" matches but
@@ -54,18 +113,6 @@ const DESC_QUICK_FILTERS = [
   { label: "INT", keyword: "INT ", gradient: "from-violet-500 to-violet-700"   },
   { label: "IRE", keyword: "IRE ", gradient: "from-emerald-400 to-teal-600"    },
   { label: "XYi", keyword: "XYi ", gradient: "from-[#12a0e1] to-[#0872a0]"   },
-];
-
-// ── Department groups (for People tab) ────────────────────────────────────────
-const DEPARTMENTS = ["PM", "Motion", "Digital", "AM", "Operations", "Print"];
-const DEPT_GROUPS = [
-  { label: "PM",         color: "bg-blue-50 text-blue-700 border-blue-200",           gradient: "from-blue-500 to-blue-700"         },
-  { label: "Motion",     color: "bg-violet-50 text-violet-700 border-violet-200",     gradient: "from-violet-500 to-violet-700"     },
-  { label: "Digital",    color: "bg-cyan-50 text-cyan-700 border-cyan-200",           gradient: "from-cyan-500 to-sky-600"          },
-  { label: "AM",         color: "bg-amber-50 text-amber-700 border-amber-200",        gradient: "from-amber-400 to-orange-500"      },
-  { label: "Operations", color: "bg-emerald-50 text-emerald-700 border-emerald-200",  gradient: "from-emerald-500 to-teal-600"      },
-  { label: "Print",      color: "bg-orange-50 text-orange-700 border-orange-200",     gradient: "from-orange-400 to-orange-600"     },
-  { label: "—",          color: "bg-slate-50 text-slate-500 border-slate-200",        gradient: "from-slate-400 to-slate-600"       },
 ];
 
 // ── Studio quick-filter groups (for Clients tab) ──────────────────────────────
@@ -214,13 +261,24 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
   };
 
   const remove = async (id) => {
-    if (!confirm("Delete this item?")) return;
+    const ok = await confirmAction({
+      title: "Delete this item?",
+      message: `It will be removed from the ${label.toLowerCase()} list for everyone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     await supabase.from(table).delete().eq("id", id);
     await load();
   };
 
   const seedData = async (seedArr) => {
-    if (!confirm(`This will insert ${seedArr.length} items. Continue?`)) return;
+    const ok = await confirmAction({
+      title: `Seed ${seedArr.length} items?`,
+      message: `The starter ${label.toLowerCase()} list will be inserted. Existing entries are left untouched.`,
+      confirmLabel: "Seed list",
+    });
+    if (!ok) return;
     setSaving(true);
     const chunks = [];
     for (let i = 0; i < seedArr.length; i += 100) chunks.push(seedArr.slice(i, i + 100));
@@ -618,53 +676,115 @@ function FieldLabel({ text, required }) {
   );
 }
 
-// Searchable combobox with optional gradient filter chips.
-// onBlur closes immediately (no setTimeout) because item selection uses onMouseDown,
-// which fires before blur — so the selection is already committed when blur runs.
-function ComboField({ label, value, onChange, options, placeholder, required, filters = [] }) {
+// ── Combobox grouping helpers ─────────────────────────────────────────────────
+// Filtering used to live in loud gradient chips above each field, which clashed
+// with the form. Instead we fold it into the dropdown: options group under
+// sticky headers (same idiom as Tracker/Legacy's SearchableSelect), so scanning
+// by territory/studio/type is a property of the list, not extra chrome.
+const afterDash = (s) => { const i = s.indexOf(" - "); return i >= 0 ? s.slice(i + 3) : s; };
+// "Digital - Production" → "Digital"; "AUS - Foo" → "AUS"; else a bucket.
+const prefixGroup = (s) => {
+  const i = s.indexOf(" - ");
+  if (i >= 0) return s.slice(0, i);
+  return s.startsWith("XYi") ? "XYi" : "Other";
+};
+
+// Project descriptions lead with a territory token but separate it with a SPACE
+// as often as a dash ("UK Titles", "AUS - DOOH", "XYi Internal"), so split on the
+// leading token itself rather than a fixed " - " delimiter.
+const DESC_PREFIXES = ["AUS", "UK", "DOM", "INT", "IRE", "XYi"];
+const descGroup = (s) => {
+  for (const p of DESC_PREFIXES) if (new RegExp(`^${p}[\\s\\-]`, "i").test(s)) return p;
+  return "Other";
+};
+const descLabel = (s) => {
+  for (const p of DESC_PREFIXES) {
+    const m = s.match(new RegExp(`^${p}[\\s\\-]+`, "i"));
+    if (m) return s.slice(m[0].length);
+  }
+  return s;
+};
+const STUDIO_KEYS = ["Universal", "Paramount", "Sony", "Disney", "Warner"];
+const studioGroup = (s) => {
+  const u = s.toLowerCase();
+  for (const k of STUDIO_KEYS) if (u.includes(k.toLowerCase())) return k;
+  return u.includes("xyi") ? "XYi" : "Other";
+};
+
+// Group orders double as the dropdown's quick-filter chips — most-used buckets
+// first so the common picks (Universal/Paramount, Digital/Print) are one tap in.
+const CLIENT_GROUP_ORDER = ["Universal", "Paramount", "Sony", "Disney", "Warner", "XYi"];
+// Exactly the two busiest desks per studio — "<Studio> Pictures International"
+// then "…UK" — floated to the top of their group. Anchored to the end so
+// "NBCUniversal International Ltd" and "Universal Pictures BAFTA - UK" don't match.
+const CLIENT_PIN_RANK = (name) => {
+  if (/ Pictures International$/i.test(name)) return 0;
+  if (/ Pictures UK$/i.test(name) || /^Paramount UK$/i.test(name)) return 1;
+  return 999;
+};
+const DESC_GROUP_ORDER = ["AUS", "UK", "DOM", "INT", "IRE", "XYi"];
+const CAT_GROUP_ORDER = ["Digital", "Print", "XYi"];
+
+// Searchable combobox. Free text is allowed (type a new value); selection uses
+// onMouseDown so it commits before the input's onBlur closes the list.
+//   groupBy      — bucket the dropdown under sticky headers
+//   formatOption — shorten each row's label (e.g. drop the prefix it sits under)
+//   groupOrder   — priority order for groups (Digital/Print before the rest);
+//                  also drives the quick-filter chip bar at the top of the list,
+//                  so the common buckets are one tap away without loud chips
+//                  cluttering the form body.
+function ComboField({ label, value, onChange, options, placeholder, required, groupBy = null, formatOption = null, groupOrder = null, pinRankFn = null }) {
   const [q, setQ] = useState(value);
   const [open, setOpen] = useState(false);
-  const [activeFilter, setActiveFilter] = useState(null);
+  const [activeGroup, setActiveGroup] = useState(null);
 
   // Sync display value when parent sets it externally (e.g. opening edit modal)
   useEffect(() => { setQ(value ?? ""); }, [value]);
 
   const hits = useMemo(() => {
-    let list = activeFilter ? options.filter(o => activeFilter.match(o)) : options;
+    let list = options;
     if (q) list = list.filter(o => o.toLowerCase().includes(q.toLowerCase()));
-    return list.slice(0, 60);
-  }, [options, q, activeFilter]);
+    // Filter to the picked group BEFORE capping — otherwise a group that sorts
+    // late in the alphabet (UK, XYi) can be entirely cut by the slice and the
+    // chip would show nothing even though matches exist.
+    if (activeGroup && groupBy) list = list.filter(o => (groupBy(o) || "Other") === activeGroup);
+    return list.slice(0, 200);
+  }, [options, q, activeGroup, groupBy]);
+
+  const groups = useMemo(() => {
+    if (!groupBy) return null;
+    const m = new Map();
+    for (const o of hits) {
+      const g = groupBy(o) || "Other";
+      if (!m.has(g)) m.set(g, []);
+      m.get(g).push(o);
+    }
+    let entries = [...m.entries()];
+    // Float pinned entries to the top of their group; the rest keep their order.
+    if (pinRankFn) entries.forEach(([, items]) => items.sort((a, b) => pinRankFn(a) - pinRankFn(b)));
+    if (groupOrder) {
+      const rank = (g) => { const i = groupOrder.indexOf(g); return i === -1 ? groupOrder.length + 1 : i; };
+      entries.sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]));
+    }
+    return entries;
+  }, [hits, groupBy, groupOrder, pinRankFn]);
+
+  const disp = (o) => (formatOption ? formatOption(o) : o);
+  const isPinned = (o) => !!pinRankFn && pinRankFn(o) < 999;
+  const pick = (o) => { onChange(o); setQ(o); setOpen(false); setActiveGroup(null); };
+  const rowCls = (o) => {
+    const sel = o === value;
+    const pinned = isPinned(o);
+    return `flex items-center text-left px-3 py-2 text-xs rounded-lg transition-colors ${
+      sel ? "bg-[#10b981]/15 text-[#0f766e] font-bold"
+        : pinned ? "bg-[#f0fbf7] text-[#0f766e] font-semibold hover:bg-[#e4f7ef]"
+          : "text-[#33454f] hover:bg-slate-50"
+    }`;
+  };
 
   return (
     <div>
       <FieldLabel text={label} required={required} />
-      {filters.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-2">
-          {filters.map(f => {
-            const count = options.filter(o => f.match(o)).length;
-            if (count === 0) return null;
-            const isActive = activeFilter?.label === f.label;
-            return (
-              <button key={f.label} type="button"
-                onMouseDown={e => { e.preventDefault(); setActiveFilter(isActive ? null : f); setOpen(true); }}
-                className={`group/fc relative px-3 py-1 rounded-xl text-[11px] font-bold border overflow-hidden transition-all ${
-                  isActive ? "border-transparent text-white shadow-sm" : "border-[#dce4ec] text-[#768994] hover:border-transparent hover:text-white"
-                }`}>
-                <div className={`absolute inset-0 bg-gradient-to-br ${f.gradient} transition-opacity duration-200 ${
-                  isActive ? "opacity-100" : "opacity-20 group-hover/fc:opacity-100"
-                }`} />
-                <span className="relative z-10">{f.label}</span>
-              </button>
-            );
-          })}
-          {activeFilter && (
-            <button type="button" onMouseDown={e => { e.preventDefault(); setActiveFilter(null); }}
-              className="flex items-center gap-0.5 px-1.5 py-1 text-[10px] font-bold text-slate-400 hover:text-rose-500 transition-colors">
-              <X className="w-3 h-3" /> Clear
-            </button>
-          )}
-        </div>
-      )}
       <div className="relative">
         <input value={q}
           onChange={e => { setQ(e.target.value); onChange(e.target.value); setOpen(true); }}
@@ -673,19 +793,139 @@ function ComboField({ label, value, onChange, options, placeholder, required, fi
           placeholder={placeholder || "Search or type…"}
           className={MODAL_INPUT} />
         {open && hits.length > 0 && (
-          <div className="absolute z-[100] left-0 right-0 mt-1.5 bg-white border border-[#dce4ec] rounded-2xl shadow-2xl max-h-52 overflow-y-auto">
-            {hits.map(o => (
-              <button key={o} type="button"
-                onMouseDown={e => { e.preventDefault(); onChange(o); setQ(o); setOpen(false); }}
-                className={`w-full text-left px-4 py-2.5 text-sm border-b border-[#dce4ec]/60 last:border-0 transition-colors ${
-                  o === value ? "bg-[#12a0e1]/10 text-[#12a0e1] font-bold" : "text-[#122027] hover:bg-slate-50"
-                }`}>
-                {o}
-              </button>
-            ))}
+          <div className="absolute z-[100] left-0 right-0 mt-1.5 bg-white border border-[#dce4ec] rounded-2xl shadow-2xl max-h-72 overflow-y-auto">
+            {groupOrder && (
+              <div className="flex flex-wrap gap-1.5 p-2 border-b border-[#eef2f6] sticky top-0 bg-white z-20">
+                {groupOrder.map(g => {
+                  const on = activeGroup === g;
+                  return (
+                    <button key={g} type="button"
+                      onMouseDown={e => { e.preventDefault(); setActiveGroup(on ? null : g); }}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                        on ? "bg-[#10b981] border-[#10b981] text-white"
+                          : "bg-white border-[#dce4ec] text-[#768994] hover:border-[#10b981] hover:text-[#0d9488]"
+                      }`}>{g}</button>
+                  );
+                })}
+                {activeGroup && (
+                  <button type="button" onMouseDown={e => { e.preventDefault(); setActiveGroup(null); }}
+                    className="px-1.5 py-1 text-[10px] font-bold text-slate-400 hover:text-rose-500 transition-colors">Clear</button>
+                )}
+              </div>
+            )}
+            <div className="p-1.5">
+              {groups ? groups.map(([g, items]) => (
+                <div key={g} className="mb-1.5 last:mb-0">
+                  <div className="px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-[#0d9488] bg-[#f4faf8] rounded-lg">{g}</div>
+                  <div className="grid grid-cols-2 gap-1 mt-1">
+                    {items.map(o => (
+                      <button key={o} type="button" onMouseDown={e => { e.preventDefault(); pick(o); }}
+                        className={rowCls(o)} title={o}>
+                        {isPinned(o) && <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] shrink-0 mr-2" />}
+                        <span className="truncate">{disp(o)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )) : (
+                <div className="grid grid-cols-2 gap-1">
+                  {hits.map(o => (
+                    <button key={o} type="button" onMouseDown={e => { e.preventDefault(); pick(o); }}
+                      className={rowCls(o)} title={o}>
+                      {isPinned(o) && <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] shrink-0 mr-2" />}
+                      <span className="truncate">{disp(o)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Searchable, selection-only dropdown — same visual language as ComboField's
+// popup, but you can't commit free text, only pick an existing option. Use
+// for pickers whose values must reference an existing row (e.g. Film Setup's
+// film picker), as opposed to ComboField which lets you introduce new values.
+function StrictSelect({ value, onChange, options, placeholder, loading, className = "" }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState(null);
+  const btnRef = useRef(null);
+
+  const hits = useMemo(() => {
+    if (!q) return options.slice(0, 60);
+    return options.filter(o => o.toLowerCase().includes(q.toLowerCase())).slice(0, 60);
+  }, [options, q]);
+
+  const toggle = () => {
+    if (!open) setRect(btnRef.current.getBoundingClientRect());
+    setOpen(o => !o);
+  };
+
+  // The panel is portaled to <body> and positioned from the button's own
+  // rect, rather than CSS-nested `absolute` inside whatever card/accordion
+  // it happens to sit in — nesting meant it inherited that ancestor's
+  // clipping and paint order, so once a card was tall enough (or another
+  // card sat right below it) the open panel could render clipped or
+  // behind the next sibling instead of on top of everything, regardless
+  // of its own z-index. Keep the rect in sync while open so scrolling the
+  // page doesn't leave it stranded over the wrong spot.
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => setRect(btnRef.current.getBoundingClientRect());
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open]);
+
+  return (
+    <div className={className}>
+      <button ref={btnRef} type="button" disabled={loading}
+        onClick={toggle}
+        className="w-full flex items-center justify-between gap-2 border border-[#dce4ec] rounded-xl px-3 py-2.5 text-sm font-bold text-[#122027] outline-none focus:border-[#12a0e1] bg-white disabled:opacity-50 transition-colors hover:border-[#12a0e1]">
+        <span className={`min-w-0 truncate ${value ? "" : "text-[#b0bec5] font-medium"}`}>
+          {loading ? "Loading…" : (value || placeholder || "Select…")}
+        </span>
+        <ChevronRight className={`w-3.5 h-3.5 text-[#768994] shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && rect && createPortal(
+        <>
+          <div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-[9999] bg-white border border-[#dce4ec] rounded-2xl shadow-2xl overflow-hidden"
+            style={{ top: rect.bottom + 6, left: rect.left, width: rect.width }}
+          >
+            <div className="p-2 border-b border-[#dce4ec]/60">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#b0bec5]" />
+                <input autoFocus value={q} onChange={e => setQ(e.target.value)}
+                  placeholder="Search…"
+                  className="w-full pl-8 pr-2 py-1.5 text-sm text-[#122027] outline-none bg-slate-50 rounded-xl" />
+              </div>
+            </div>
+            <div className="max-h-52 overflow-y-auto">
+              {hits.length === 0 && <p className="px-4 py-3 text-sm text-[#b0bec5]">No matches</p>}
+              {hits.map(o => (
+                <button key={o} type="button"
+                  onClick={() => { onChange(o); setQ(""); setOpen(false); }}
+                  className={`w-full text-left px-4 py-2.5 text-sm border-b border-[#dce4ec]/60 last:border-0 transition-colors ${
+                    o === value ? "bg-[#12a0e1]/10 text-[#12a0e1] font-bold" : "text-[#122027] hover:bg-slate-50"
+                  }`}>
+                  {o}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
     </div>
   );
 }
@@ -714,34 +954,21 @@ function PillField({ label, value, onChange, options, colorMap }) {
   );
 }
 
-// ── Filter chip configs (module-level — stable references) ───────────────────
-const CLIENT_FILTERS = [
-  { label: "Universal", gradient: "from-blue-500 to-indigo-700", match: s => s.toLowerCase().includes("universal") },
-  { label: "Paramount", gradient: "from-sky-400 to-blue-700",    match: s => s.toLowerCase().includes("paramount") },
-  { label: "Netflix",   gradient: "from-red-500 to-red-800",     match: s => s.toLowerCase().includes("netflix")   },
-  { label: "Apple",     gradient: "from-slate-400 to-slate-700", match: s => s.toLowerCase().includes("apple")     },
-  { label: "Amazon",    gradient: "from-amber-400 to-orange-600",match: s => s.toLowerCase().includes("amazon")    },
-];
-const DESC_FILTERS = [
-  { label: "AUS", gradient: "from-green-500 to-emerald-600",  match: s => /^AUS[\s\-]/i.test(s) },
-  { label: "UK",  gradient: "from-blue-500 to-blue-700",      match: s => /^UK[\s\-]/i.test(s)  },
-  { label: "DOM", gradient: "from-amber-400 to-orange-500",   match: s => /^DOM[\s\-]/i.test(s) },
-  { label: "INT", gradient: "from-violet-500 to-violet-700",  match: s => /^INT[\s\-]/i.test(s) },
-  { label: "IRE", gradient: "from-emerald-400 to-teal-600",   match: s => /^IRE[\s\-]/i.test(s) },
-  { label: "XYi", gradient: "from-[#12a0e1] to-[#0872a0]",   match: s => /^XYi[\s\-]/i.test(s) },
-];
-const CAT_FILTERS = [
-  { label: "Digital", gradient: "from-cyan-500 to-sky-600",      match: s => s.startsWith("Digital") },
-  { label: "Print",   gradient: "from-orange-400 to-orange-600", match: s => s.startsWith("Print")   },
-  { label: "XYi",    gradient: "from-violet-500 to-violet-700",  match: s => s.startsWith("XYi")    },
-];
 const PD_COLOR_MAP = { Digital: "bg-cyan-600 border-cyan-600", Print: "bg-orange-500 border-orange-500", Both: "bg-violet-600 border-violet-600" };
+const JOB_STATUSES = ["Inactive", "Active", "Closed"];
+const STATUS_COLOR_MAP = { Inactive: "bg-slate-400 border-slate-400", Active: "bg-[#12a0e1] border-[#12a0e1]", Closed: "bg-[#1cc1a5] border-[#1cc1a5]" };
+const STATUS_BADGE = { Inactive: "bg-slate-100 text-slate-500", Active: "bg-[#12a0e1]/10 text-[#12a0e1]", Closed: "bg-[#1cc1a5]/10 text-[#1cc1a5]" };
 
-// ── Job Form Modal ─────────────────────────────────────────────────────────────
-function JobModal({ job, clients, films, categories, descs, onSave, onClose, saving }) {
+// ── Job Form ───────────────────────────────────────────────────────────────────
+// Fields + footer for creating/editing a Job Book row. Shared by JobModal (edit,
+// from Job Book) and the Custom Job tab in Jobs Setup (create) — same form,
+// different chrome around it (layout="modal" adds the fixed-footer/scroll
+// behaviour a popup needs; layout="inline" just flows in the page).
+function JobForm({ job, clients, films, categories, descs, onSave, onCancel, saving, submitLabel, layout = "modal" }) {
   const isEdit = !!job?.id;
   const [orderedByOpts, setOrderedByOpts] = useState([]);
   const [billedToOpts, setBilledToOpts]   = useState([]);
+  const [nextCode, setNextCode] = useState(null); // e.g. "XY025999" — allocated once when creating a new job
 
   useEffect(() => {
     supabase.from("jobs")
@@ -755,7 +982,25 @@ function JobModal({ job, clients, films, categories, descs, onSave, onClose, sav
       });
   }, []);
 
+  // New jobs get the next sequential XY code auto-allocated, same source of truth
+  // (max across jobs + tasks) as the Bulk Campaign flow — never manually typed.
+  useEffect(() => {
+    if (isEdit) return;
+    Promise.all([
+      supabase.from("jobs").select("job_number"),
+      supabase.from("tasks").select("job_number"),
+    ]).then(([{ data: jobRows }, { data: taskRows }]) => {
+      let maxNum = 0;
+      [...(jobRows || []), ...(taskRows || [])].forEach(r => {
+        const m = (r.job_number || "").match(/XY(\d+)/);
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+      });
+      setNextCode(`XY${String(maxNum + 1).padStart(6, "0")}`);
+    });
+  }, [isEdit]);
+
   const [form, setForm] = useState({
+    job_number: job?.job_number || "",
     start_date: job?.start_date ? job.start_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
     client: job?.client || "",
     film_title: job?.film_title || "",
@@ -770,11 +1015,220 @@ function JobModal({ job, clients, films, categories, descs, onSave, onClose, sav
     estimated_cost: job?.estimated_cost ?? "",
     completed_date: job?.completed_date ? job.completed_date.slice(0, 10) : "",
     job_done: job?.job_done || false,
+    status: job?.status || (isEdit ? "Inactive" : "Active"),
     notes: job?.notes || "",
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  // Create tucks billing/admin fields behind a disclosure; edit shows them open.
+  const [showAdmin, setShowAdmin] = useState(isEdit);
+  const bodyClass = layout === "modal" ? "overflow-y-auto flex-1 px-6 py-5 space-y-6" : "space-y-6";
+  const footerClass = layout === "modal"
+    ? "px-6 py-4 border-t border-[#dce4ec] flex items-center justify-end gap-2 shrink-0"
+    : "mt-3 pt-6 border-t border-[#dce4ec] flex items-center justify-end gap-2";
 
+  // Live preview: "Film Title : XY025999, Project Description" — updates as you type
+  const livePreview = useMemo(() => {
+    if (!nextCode) return "";
+    const film = form.film_title.trim();
+    const desc = form.project_description.trim();
+    let s = film ? `${film} : ${nextCode}` : nextCode;
+    if (desc) s += `, ${desc}`;
+    return s;
+  }, [nextCode, form.film_title, form.project_description]);
+
+  const canSave = isEdit
+    ? form.job_number.trim() && form.client && form.start_date
+    : nextCode && form.client && form.start_date;
+
+  const handleSave = () => onSave(isEdit ? form : { ...form, job_number: livePreview });
+
+  return (
+    <>
+      <div className={bodyClass}>
+        {/* Hero — the assembling job label is the one thing this form exists to
+            produce, so it leads instead of sitting muted at the top. */}
+        <div>
+          <FieldLabel text="Job Number" required />
+          {isEdit ? (
+            <input value={form.job_number} onChange={e => set("job_number", e.target.value)}
+              placeholder="e.g. The Odyssey : XY025999, Finishing"
+              className={`${MODAL_INPUT} font-mono`} />
+          ) : (
+            <>
+              <div className="bg-[#f4faf8] border border-[#d5ebe4] rounded-2xl px-4 py-3.5 min-h-[54px] flex items-center flex-wrap gap-x-1.5 gap-y-1 leading-snug">
+                <span className={`text-base font-bold ${form.film_title.trim() ? "text-[#122027]" : "text-[#b0bec5]"}`}>
+                  {form.film_title.trim() || "Film title"}
+                </span>
+                <span className="text-[#b0bec5] font-bold">:</span>
+                <span className="font-mono text-sm font-bold text-[#0f766e] bg-[#dcf3ec] px-2 py-0.5 rounded-md">
+                  {nextCode || "XY…"}
+                </span>
+                <span className="text-[#b0bec5] font-bold">,</span>
+                <span className={`text-sm font-medium ${form.project_description.trim() ? "text-[#33454f]" : "text-[#b0bec5]"}`}>
+                  {form.project_description.trim() || "project description"}
+                </span>
+              </div>
+              <p className="text-[10px] text-[#768994] mt-1.5">
+                Auto-allocated — the label builds itself from the film and project description below.
+              </p>
+            </>
+          )}
+        </div>
+
+        {/* Essentials — film, client, description, category, start date compose
+            the label above and are the minimum to file the job. */}
+        <div className="grid grid-cols-2 gap-5">
+          <ComboField label="Film Title" value={form.film_title} onChange={v => set("film_title", v)}
+            options={films} placeholder="Search films, or type something else (e.g. Studio Management)…" />
+          <ComboField label="Client" required value={form.client} onChange={v => set("client", v)}
+            options={clients} placeholder="Search clients…"
+            groupBy={studioGroup} groupOrder={CLIENT_GROUP_ORDER} pinRankFn={CLIENT_PIN_RANK} />
+        </div>
+
+        <ComboField label="Project Description" value={form.project_description}
+          onChange={v => set("project_description", v)}
+          options={descs} placeholder="Search descriptions or type a new one…"
+          groupBy={descGroup} formatOption={descLabel} groupOrder={DESC_GROUP_ORDER} />
+
+        <div className="grid grid-cols-2 gap-5">
+          <ComboField label="Item Category" value={form.job_work_category}
+            onChange={v => set("job_work_category", v)}
+            options={categories} placeholder="Search categories…"
+            groupBy={prefixGroup} formatOption={afterDash} groupOrder={CAT_GROUP_ORDER} />
+          <div>
+            <FieldLabel text="Start Date" required />
+            <DateField value={form.start_date} onChange={v => set("start_date", v)} allowClear={false} placeholder="Pick a start date…" />
+          </div>
+        </div>
+
+        {/* Billing & admin — everything optional at creation, one disclosure. */}
+        <div className="border border-[#dce4ec] rounded-2xl overflow-hidden">
+          <button type="button" onClick={() => setShowAdmin(s => !s)}
+            className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-[#fbfdff] hover:bg-slate-50 transition-colors">
+            <span className="flex items-center gap-2.5 min-w-0">
+              <ChevronRight className={`w-4 h-4 text-[#768994] shrink-0 transition-transform ${showAdmin ? "rotate-90" : ""}`} />
+              <span className="text-xs font-bold text-[#33454f]">Billing &amp; admin</span>
+              {!showAdmin && (
+                <span className="hidden sm:inline text-[10px] font-bold text-[#768994] bg-slate-100 px-2 py-0.5 rounded-full truncate">
+                  Office · Print/Digital · Ordered by · Costs · Notes
+                </span>
+              )}
+            </span>
+            <span className="text-[11px] font-bold text-[#0d9488] shrink-0">Optional</span>
+          </button>
+          {showAdmin && (
+            <div className="px-4 py-5 space-y-6 border-t border-[#dce4ec]">
+              <div className="grid grid-cols-2 gap-5">
+                <PillField label="Office" value={form.office} onChange={v => set("office", v)} options={OFFICES} />
+                <PillField label="Print / Digital" value={form.print_digital} onChange={v => set("print_digital", v)}
+                  options={PRINT_DIGITAL} colorMap={PD_COLOR_MAP} />
+              </div>
+
+              <div className="grid grid-cols-2 gap-5">
+                <ComboField label="Ordered By" value={form.ordered_by} onChange={v => set("ordered_by", v)}
+                  options={orderedByOpts} placeholder="Name or type new…" />
+                <ComboField label="Billed To" value={form.billed_to} onChange={v => set("billed_to", v)}
+                  options={billedToOpts} placeholder="Company or name…" />
+              </div>
+
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-3">Costs</p>
+                <div className="grid grid-cols-3 gap-4">
+                  {[["Fixed", "fixed_cost"], ["3rd Party", "third_party_cost"], ["Estimated", "estimated_cost"]].map(([lbl, field]) => (
+                    <div key={field}>
+                      <FieldLabel text={lbl} />
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#768994] text-sm font-bold select-none">£</span>
+                        <input type="number" step="0.01" min="0" value={form[field]}
+                          onChange={e => set(field, e.target.value)} placeholder="0.00"
+                          className={`${MODAL_INPUT} pl-8`} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <FieldLabel text="Notes" />
+                <textarea value={form.notes} onChange={e => set("notes", e.target.value)}
+                  rows={3} placeholder="Any additional notes…"
+                  className={`${MODAL_INPUT} resize-none`} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Lifecycle — edit only. A job you're creating now is never "done", and
+            its create-time Inactive/Active choice lives in the footer instead. */}
+        {isEdit && (
+          <div className="space-y-6">
+            <PillField label="Status" value={form.status} onChange={v => set("status", v)}
+              options={JOB_STATUSES} colorMap={STATUS_COLOR_MAP} />
+
+            <div className="grid grid-cols-2 gap-5">
+              <div>
+                <FieldLabel text="Completed Date" />
+                <DateField value={form.completed_date} onChange={v => set("completed_date", v)} placeholder="Not completed yet…" />
+              </div>
+              <div className="flex items-end">
+                <button type="button" onClick={() => set("job_done", !form.job_done)}
+                  className={`flex items-center gap-2.5 w-full px-4 py-2.5 rounded-2xl border font-bold text-sm transition-all ${
+                    form.job_done
+                      ? "bg-[#1cc1a5]/10 border-[#1cc1a5] text-[#1cc1a5]"
+                      : "bg-white border-[#dce4ec] text-[#768994] hover:border-[#1cc1a5]/50"
+                  }`}>
+                  <div className={`w-5 h-5 rounded-lg border-2 flex items-center justify-center shrink-0 transition-colors ${
+                    form.job_done ? "bg-[#1cc1a5] border-[#1cc1a5]" : "border-[#dce4ec]"
+                  }`}>
+                    {form.job_done && <Check className="w-3 h-3 text-white" />}
+                  </div>
+                  Job Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className={footerClass}>
+        {/* Create-time status lives here, opposite the actions — present without
+            re-cluttering the field stack. Closed only makes sense once editing. */}
+        {!isEdit && (
+          <div className="mr-auto">
+            <p className="text-[9px] font-black uppercase tracking-widest text-[#768994] mb-1.5">Status</p>
+            <div className="inline-flex border border-[#dce4ec] rounded-xl overflow-hidden">
+              {["Inactive", "Active"].map(s => (
+                <button key={s} type="button" onClick={() => set("status", s)}
+                  className={`px-4 py-1.5 text-xs font-bold transition-colors ${
+                    form.status === s ? "bg-[#10b981] text-white" : "bg-white text-[#768994] hover:text-[#122027]"
+                  }`}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {onCancel && (
+          <button onClick={onCancel}
+            className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-all">
+            Cancel
+          </button>
+        )}
+        <button onClick={handleSave} disabled={saving || !canSave}
+          className={`flex items-center gap-2 px-6 py-2.5 text-white text-sm font-bold rounded-2xl transition-all disabled:opacity-50 shadow-sm ${
+            isEdit ? "bg-[#12a0e1] hover:bg-[#0d8bc4]" : "bg-[#10b981] hover:bg-[#0d9488]"
+          }`}>
+          {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+          {submitLabel || (isEdit ? "Save Changes" : "Create Job")}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ── Job Form Modal (edit only — creation now lives in Jobs Setup > Custom Job) ─
+function JobModal({ job, clients, films, categories, descs, onSave, onClose, saving }) {
   return (
     // onMouseDown instead of onClick: fires before blur, so the close is instant
     // and never races with a combobox dropdown's state updates.
@@ -783,125 +1237,487 @@ function JobModal({ job, clients, films, categories, descs, onSave, onClose, sav
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden border border-[#dce4ec]"
         onMouseDown={e => e.stopPropagation()}>
 
-        {/* Header */}
         <div className="px-6 pt-5 pb-4 border-b border-[#dce4ec] flex items-center justify-between shrink-0">
           <div>
             <p className="text-[9px] font-black uppercase tracking-widest text-[#12a0e1] mb-0.5">Job Book</p>
-            <h2 className="text-xl font-black text-[#122027]">
-              {isEdit ? `Edit ${job.job_number}` : "New Job"}
-            </h2>
+            <h2 className="text-xl font-black text-[#122027]">Edit {job?.job_number}</h2>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Body */}
-        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6">
-
-          <div className="grid grid-cols-2 gap-5">
-            <div>
-              <FieldLabel text="Start Date" required />
-              <input type="date" value={form.start_date} onChange={e => set("start_date", e.target.value)}
-                className={MODAL_INPUT} />
-            </div>
-            <PillField label="Office" value={form.office} onChange={v => set("office", v)} options={OFFICES} />
-          </div>
-
-          <div className="grid grid-cols-2 gap-5">
-            <ComboField label="Client" required value={form.client} onChange={v => set("client", v)}
-              options={clients} placeholder="Search clients…" filters={CLIENT_FILTERS} />
-            <PillField label="Print / Digital" value={form.print_digital} onChange={v => set("print_digital", v)}
-              options={PRINT_DIGITAL} colorMap={PD_COLOR_MAP} />
-          </div>
-
-          <ComboField label="Film Title" value={form.film_title} onChange={v => set("film_title", v)}
-            options={films} placeholder="Search films…" />
-
-          <ComboField label="Project Description" value={form.project_description}
-            onChange={v => set("project_description", v)}
-            options={descs} placeholder="Search descriptions or type a new one…"
-            filters={DESC_FILTERS} />
-
-          <ComboField label="Item Category" value={form.job_work_category}
-            onChange={v => set("job_work_category", v)}
-            options={categories} placeholder="Search categories…"
-            filters={CAT_FILTERS} />
-
-          <div className="grid grid-cols-2 gap-5">
-            <ComboField label="Ordered By" value={form.ordered_by} onChange={v => set("ordered_by", v)}
-              options={orderedByOpts} placeholder="Name or type new…" />
-            <ComboField label="Billed To" value={form.billed_to} onChange={v => set("billed_to", v)}
-              options={billedToOpts} placeholder="Company or name…" />
-          </div>
-
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-3">Costs</p>
-            <div className="grid grid-cols-3 gap-4">
-              {[["Fixed", "fixed_cost"], ["3rd Party", "third_party_cost"], ["Estimated", "estimated_cost"]].map(([lbl, field]) => (
-                <div key={field}>
-                  <FieldLabel text={lbl} />
-                  <div className="relative">
-                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#768994] text-sm font-bold select-none">£</span>
-                    <input type="number" step="0.01" min="0" value={form[field]}
-                      onChange={e => set(field, e.target.value)} placeholder="0.00"
-                      className={`${MODAL_INPUT} pl-8`} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-5">
-            <div>
-              <FieldLabel text="Completed Date" />
-              <input type="date" value={form.completed_date} onChange={e => set("completed_date", e.target.value)}
-                className={MODAL_INPUT} />
-            </div>
-            <div className="flex items-end">
-              <button type="button" onClick={() => set("job_done", !form.job_done)}
-                className={`flex items-center gap-2.5 w-full px-4 py-2.5 rounded-2xl border font-bold text-sm transition-all ${
-                  form.job_done
-                    ? "bg-[#1cc1a5]/10 border-[#1cc1a5] text-[#1cc1a5]"
-                    : "bg-white border-[#dce4ec] text-[#768994] hover:border-[#1cc1a5]/50"
-                }`}>
-                <div className={`w-5 h-5 rounded-lg border-2 flex items-center justify-center shrink-0 transition-colors ${
-                  form.job_done ? "bg-[#1cc1a5] border-[#1cc1a5]" : "border-[#dce4ec]"
-                }`}>
-                  {form.job_done && <Check className="w-3 h-3 text-white" />}
-                </div>
-                Job Done
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <FieldLabel text="Notes" />
-            <textarea value={form.notes} onChange={e => set("notes", e.target.value)}
-              rows={3} placeholder="Any additional notes…"
-              className={`${MODAL_INPUT} resize-none`} />
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-[#dce4ec] flex justify-end gap-2 shrink-0">
-          <button onClick={onClose}
-            className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-all">
-            Cancel
-          </button>
-          <button onClick={() => onSave(form)} disabled={saving || !form.client || !form.start_date}
-            className="flex items-center gap-2 px-6 py-2.5 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-sm font-bold rounded-2xl transition-all disabled:opacity-50 shadow-sm">
-            {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-            {isEdit ? "Save Changes" : "Create Job"}
-          </button>
-        </div>
+        <JobForm job={job} clients={clients} films={films} categories={categories} descs={descs}
+          onSave={onSave} onCancel={onClose} saving={saving} layout="modal" />
       </div>
     </div>
   );
 }
 
+// ── Film Setup: Wrike master-template folder trees ────────────────────────────
+// Mirrors each studio's "_STUDIO_MASTER_TEMPLATES" folder in Wrike. Every node
+// tagged jobNumber:true gets its own auto-generated job number when a film is
+// created — mirrors how the real template's "JOBNUMBER_..." folders are
+// currently hand-replaced per new job.
+const FOLDER_TEMPLATES = {
+  Paramount: {
+    label: "_Paramount_MASTER_TEMPLATES",
+    children: [
+      { label: "_House_Keeping" },
+      { label: "Digital" },
+      { label: "Launch", children: [
+        { label: "Artwork_Launch" },
+        { label: "Character_Poster_Launch" },
+        { label: "PLF_Launch" },
+        { label: "Reporting" },
+      ]},
+      { label: "Print", children: [
+        { label: "DOM" },
+        { label: "INT_Creative", children: [
+          { label: "JOBNUMBER_Finishing", jobNumber: true },
+          { label: "JOBNUMBER_Print_Quad_Creation_OV", jobNumber: true },
+          { label: "INTL", children: [
+            { label: "JOBNUMBER_CMYK_Conversions", jobNumber: true },
+            { label: "JOBNUMBER_INTL_Asset_Chart", jobNumber: true },
+            { label: "JOBNUMBER_INTL_Outdoor_Campaign_Bespoke", jobNumber: true },
+            { label: "JOBNUMBER_INTL_Outdoor_Campaign_Masters", jobNumber: true },
+            { label: "JOBNUMBER_INTL_PRINT_Outdoor_Campaign_Markets", jobNumber: true },
+            { label: "JOBNUMBER_Print_OV_Mechs", jobNumber: true },
+            { label: "JOBNUMBER_Standee", jobNumber: true },
+            { label: "JOBNUMBER_TYPE_Title_Adjustment", jobNumber: true },
+            { label: "JOBNUMBER_TYPE_Titles", jobNumber: true },
+          ]},
+        ]},
+      ]},
+    ],
+  },
+};
+
+const STUDIO_OPTIONS = ["Paramount", "Universal"];
+// Studios we can currently fetch/test live from Wrike (have a master-template folder).
+// Paramount also ships a hardcoded fallback tree above; Universal is fetch-only.
+const TESTABLE_STUDIOS = new Set(["Paramount", "Universal"]);
+
+const JOBS_SETUP_TABS = [
+  { id: "campaign", label: "Bulk Campaign", desc: "Generate a whole campaign's job numbers at once from a studio's Wrike folder template.", icon: FolderPlus, color: "from-blue-500 to-[#12a0e1]" },
+  { id: "custom",   label: "Custom Job",    desc: "Add a single one-off job manually, with its own job number and details.", icon: Plus, color: "from-emerald-500 to-teal-600" },
+];
+
+// Exported: also rendered inside the PMs' standalone Job Book page (JobBook.jsx).
+export function JobsSetupSection({ setActiveTab }) {
+  const [innerTab, setInnerTab] = useState("campaign");
+  const [studio, setStudio] = useState("Paramount");
+  const [filmTitle, setFilmTitle] = useState("");
+  const [fetchedTemplate, setFetchedTemplate] = useState(null); // real subtree pulled live from Wrike
+  const [fetchingTemplate, setFetchingTemplate] = useState(false);
+  const [fetchInfo, setFetchInfo] = useState(null); // { rootLabel, jobCount } | { error }
+  const [films, setFilms] = useState([]);
+  const [filmsLoading, setFilmsLoading] = useState(true);
+  const [clients, setClients] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [descs, setDescs] = useState([]);
+  const [customSaving, setCustomSaving] = useState(false);
+  const [customCreated, setCustomCreated] = useState(null); // job_number of the row just created
+
+  // Slots already activated for the selected film — { [templateSlotLabel]: jobRow }.
+  // Nothing gets created until a slot is clicked, so a film never ends up with a
+  // pile of job numbers nobody asked for — you activate exactly what's needed,
+  // as and when the work comes in, and can come back to activate more later.
+  const [slotJobs, setSlotJobs] = useState({});
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [activatingSlot, setActivatingSlot] = useState(null); // slot label currently being created
+  const [activateError, setActivateError] = useState(null);
+
+  // Films are added in the Films tab first — this section only picks from that
+  // list, it never creates new films, so the two stay in sync by construction.
+  useEffect(() => {
+    supabase.from("films").select("title").order("title").then(({ data }) => {
+      setFilms((data || []).map(f => f.title));
+      setFilmsLoading(false);
+    });
+    supabase.from("clients").select("name").order("name").then(({ data }) => setClients((data || []).map(c => c.name)));
+    supabase.from("job_categories").select("name").order("name").then(({ data }) => setCategories((data || []).map(c => c.name)));
+    supabase.from("project_descriptions").select("description").order("description").then(({ data }) => setDescs((data || []).map(d => d.description)));
+  }, []);
+
+  const handleCreateCustomJob = async (form) => {
+    setCustomSaving(true);
+    const payload = {
+      ...form,
+      start_date: form.start_date || null,
+      completed_date: form.completed_date || null,
+      fixed_cost: form.fixed_cost === "" ? null : parseFloat(form.fixed_cost),
+      third_party_cost: form.third_party_cost === "" ? null : parseFloat(form.third_party_cost),
+      estimated_cost: form.estimated_cost === "" ? null : parseFloat(form.estimated_cost),
+    };
+    const { error } = await supabase.from("jobs").insert(payload);
+    setCustomSaving(false);
+    if (!error) setCustomCreated(form.job_number);
+    else notify(
+      error.code === "23505"
+        ? `Job number "${form.job_number}" already exists in Job Book.`
+        : "Failed to create job: " + error.message,
+      "error"
+    );
+  };
+
+  // Walk the template, collecting every jobNumber:true leaf with a human-readable description
+  const collectJobLeaves = (node) => {
+    let leaves = node.jobNumber
+      ? [{ label: node.label, description: node.label.replace(/^JOBNUMBER_?/i, "").replace(/_/g, " ").trim() || "General" }]
+      : [];
+    (node.children || []).forEach(c => { leaves = leaves.concat(collectJobLeaves(c)); });
+    return leaves;
+  };
+
+  // Pull the real master-template folder subtree from Wrike via the OAuth
+  // proxy. Builds the same { label, children, jobNumber } shape as the
+  // hardcoded FOLDER_TEMPLATES, tagging every "JOBNUMBER_..." folder so it
+  // gets a generated code.
+  const fetchTemplateFromWrike = async () => {
+    if (!localStorage.getItem("wrike_user_id")) { setFetchInfo({ error: "Wrike not connected — connect it in Profile → Settings first." }); return; }
+    setFetchingTemplate(true);
+    setFetchInfo(null);
+    try {
+      const FF = encodeURIComponent("[childIds]");
+      const fd = {};
+      let url = `/api/wrike/folders?fields=${FF}`;
+      while (url) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Wrike folders fetch failed (${res.status})`);
+        const json = await res.json();
+        (json.data || []).forEach(f => { fd[f.id] = { id: f.id, title: f.title, childIds: f.childIds || [] }; });
+        url = json.nextPageToken
+          ? `/api/wrike/folders?fields=${FF}&nextPageToken=${json.nextPageToken}`
+          : null;
+      }
+      // Find candidate master-template roots by fuzzy title match. There can be
+      // several ("_Paramount_MASTER_TEMPLATES", a "... copy", archived dupes), so
+      // build each subtree and pick the one with the most JOBNUMBER folders,
+      // penalising obvious duplicates — that's the real, populated template.
+      const wanted = studio.toUpperCase();
+      const candidates = Object.values(fd).filter(f => {
+        const norm = (f.title || "").toUpperCase().replace(/[_\s]+/g, " ");
+        return norm.includes(wanted) && norm.includes("MASTER TEMPLATE");
+      });
+      if (!candidates.length) throw new Error(`No "${studio}" master-template folder found in Wrike.`);
+
+      const buildFrom = (rootId) => {
+        const visited = new Set();
+        const build = (id) => {
+          if (visited.has(id)) return null;
+          visited.add(id);
+          const node = fd[id];
+          if (!node) return null;
+          const children = (node.childIds || []).map(build).filter(Boolean);
+          const out = { label: node.title };
+          if (children.length) out.children = children;
+          if (/JOBNUMBER/i.test(node.title || "")) out.jobNumber = true;
+          return out;
+        };
+        return build(rootId);
+      };
+
+      let best = null;
+      for (const cand of candidates) {
+        const tree = buildFrom(cand.id);
+        const jobCount = collectJobLeaves(tree).length;
+        const isDupe = /\b(COPY|ARCHIVE|ARCHIVED|OLD|BACKUP|BAK)\b/i.test(cand.title || "");
+        const score = jobCount - (isDupe ? 1e6 : 0) - (cand.title || "").length * 0.001;
+        if (!best || score > best.score) best = { tree, jobCount, title: cand.title, score };
+      }
+      setFetchedTemplate(best.tree);
+      setFetchInfo({ rootLabel: best.title, jobCount: best.jobCount });
+    } catch (e) {
+      setFetchInfo({ error: e.message });
+      setFetchedTemplate(null);
+    } finally {
+      setFetchingTemplate(false);
+    }
+  };
+
+  // Load which slots are already activated for the selected film — keyed by
+  // template_slot, so we know per JOBNUMBER_ folder whether it already has a
+  // real job number or is still a pending, un-clicked placeholder.
+  const loadSlotJobs = useCallback(async (film) => {
+    if (!film) { setSlotJobs({}); return; }
+    setLoadingSlots(true);
+    const { data } = await supabase.from("jobs").select("*").eq("film_title", film).not("template_slot", "is", null);
+    const map = {};
+    (data || []).forEach(j => { map[j.template_slot] = j; });
+    setSlotJobs(map);
+    setLoadingSlots(false);
+  }, []);
+
+  useEffect(() => { loadSlotJobs(filmTitle); }, [filmTitle, loadSlotJobs]);
+
+  // Activate exactly one slot: allocate the next sequential XY code fresh
+  // (reflects anything created anywhere since we last looked), create one job
+  // for it, and mark it activated locally. Nothing else in the template is
+  // touched — the rest stay pending until someone clicks them too.
+  const activateSlot = async (leaf) => {
+    if (!filmTitle.trim() || activatingSlot || slotJobs[leaf.label]) return;
+    setActivatingSlot(leaf.label);
+    setActivateError(null);
+    try {
+      const [{ data: jobRows }, { data: taskRows }] = await Promise.all([
+        supabase.from("jobs").select("job_number"),
+        supabase.from("tasks").select("job_number"),
+      ]);
+      let maxNum = 0;
+      [...(jobRows || []), ...(taskRows || [])].forEach(r => {
+        const m = (r.job_number || "").match(/XY(\d+)/);
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+      });
+      const code = `XY${String(maxNum + 1).padStart(6, "0")}`;
+      const row = {
+        job_number: `${filmTitle.trim()} : ${code}, ${leaf.description}`,
+        film_title: filmTitle.trim(),
+        template_slot: leaf.label,
+        status: "Inactive",
+        start_date: new Date().toISOString().slice(0, 10),
+      };
+      const { data, error } = await supabase.from("jobs").insert(row).select().single();
+      if (error) throw error;
+      setSlotJobs(prev => ({ ...prev, [leaf.label]: data }));
+    } catch (e) {
+      setActivateError(e.code === "23505" ? "That job number was just taken by another activation — try again." : e.message);
+    } finally {
+      setActivatingSlot(null);
+    }
+  };
+
+  // Recursive tree renderer — activated JOBNUMBER_ leaves show their real code;
+  // pending ones stay clickable placeholders you can activate right in the tree.
+  // Uses a path-based key since live Wrike data can have repeated folder names
+  // across branches. The root folder in Wrike is always renamed to the film
+  // itself (e.g. "Passenger") rather than keeping the "_STUDIO_MASTER_TEMPLATES"
+  // name — mirror that here once a film is picked.
+  const renderTree = (node, depth = 0, path = "0") => {
+    const isSlot = !!node.jobNumber;
+    const activated = isSlot ? slotJobs[node.label] : null;
+    const isActivating = activatingSlot === node.label;
+    const leafDesc = isSlot ? node.label.replace(/^JOBNUMBER_?/i, "").replace(/_/g, " ").trim() || "General" : null;
+
+    let displayLabel = node.label;
+    if (depth === 0 && filmTitle.trim()) displayLabel = filmTitle.trim().replace(/\s+/g, "_");
+    else if (activated) displayLabel = node.label.replace(/^JOBNUMBER/i, activated.job_number.match(/XY\d+/)?.[0] || "XY??????");
+
+    return (
+      <div key={path}>
+        <div
+          onClick={isSlot && !activated && !isActivating && filmTitle.trim() ? () => activateSlot({ label: node.label, description: leafDesc }) : undefined}
+          className={`flex items-center gap-1.5 py-1 ${isSlot && !activated && filmTitle.trim() ? "cursor-pointer hover:bg-[#12a0e1]/5 rounded-lg -mx-1 px-1" : ""}`}
+          style={{ paddingLeft: depth * 18 }}>
+          {node.children?.length
+            ? <FolderOpen className="w-3.5 h-3.5 text-[#f4b740] shrink-0" />
+            : <Folder className={`w-3.5 h-3.5 shrink-0 ${isSlot && !activated ? "text-[#12a0e1]" : "text-[#b0bec5]"}`} />}
+          <span className={`text-[12px] ${activated ? "font-mono font-bold text-[#12a0e1]" : isSlot ? "text-[#122027] font-bold" : "text-[#122027]"}`}>
+            {displayLabel}
+          </span>
+          {isSlot && !activated && !isActivating && filmTitle.trim() && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-[#12a0e1] bg-[#12a0e1]/10 px-1.5 py-0.5 rounded ml-1">Click to activate</span>
+          )}
+          {isActivating && <Loader2 className="w-3 h-3 animate-spin text-[#12a0e1] ml-1" />}
+        </div>
+        {node.children?.map((c, i) => renderTree(c, depth + 1, `${path}-${i}`))}
+      </div>
+    );
+  };
+
+  const hasTemplate = !!(fetchedTemplate || FOLDER_TEMPLATES[studio]);
+  const templateToShow = fetchedTemplate || (hasTemplate ? FOLDER_TEMPLATES[studio] : null);
+  const allLeaves = templateToShow ? collectJobLeaves(templateToShow) : [];
+  const activatedCount = allLeaves.filter(l => slotJobs[l.label]).length;
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-2 gap-4">
+        {JOBS_SETUP_TABS.map(t => {
+          const Icon = t.icon;
+          const active = innerTab === t.id;
+          return (
+            <button key={t.id} onClick={() => setInnerTab(t.id)}
+              className={`text-left rounded-2xl p-5 border-2 transition-all ${
+                active
+                  ? "border-[#12a0e1] bg-[#12a0e1]/5 shadow-md"
+                  : "border-[#dce4ec] bg-white hover:border-slate-300 hover:shadow-sm"
+              }`}>
+              <div className="flex items-start justify-between mb-3">
+                <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${t.color} flex items-center justify-center shadow-sm`}>
+                  <Icon className="w-5 h-5 text-white" />
+                </div>
+                {active && (
+                  <div className="w-5 h-5 rounded-full bg-[#12a0e1] flex items-center justify-center shrink-0">
+                    <Check className="w-3 h-3 text-white" />
+                  </div>
+                )}
+              </div>
+              <p className="text-sm font-black text-[#122027] mb-1">{t.label}</p>
+              <p className="text-xs text-[#768994] leading-relaxed">{t.desc}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      {innerTab === "campaign" && (
+    <div className="flex flex-col gap-5">
+      <div className="bg-[#f8fafc] border border-[#dce4ec] rounded-2xl p-4">
+        <p className="text-xs text-[#768994] leading-relaxed">
+          Pick a film and fetch its studio template to see every possible job slot. Nothing is created just
+          from looking — <span className="font-bold text-[#122027]">click a slot</span> to allocate a real job
+          number for it right then and add it to Job Book. Come back to this same page any time to activate
+          more slots as work actually comes in, so you never end up with numbers nobody used.
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-black uppercase tracking-widest text-[#768994] mb-1.5">Studio Template</label>
+        <div className="flex gap-2">
+          {STUDIO_OPTIONS.map(s => {
+            const available = TESTABLE_STUDIOS.has(s);
+            return (
+              <button key={s} disabled={!available}
+                onClick={() => { setStudio(s); setFetchedTemplate(null); setFetchInfo(null); }}
+                className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all ${
+                  studio === s
+                    ? "bg-[#122027] text-white border-[#122027]"
+                    : available
+                      ? "bg-white text-[#122027] border-[#dce4ec] hover:border-[#12a0e1]"
+                      : "bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed"
+                }`}>
+                {s}{!available && " (soon)"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <button onClick={fetchTemplateFromWrike} disabled={fetchingTemplate || !TESTABLE_STUDIOS.has(studio)}
+          className="flex items-center gap-2 px-4 py-2 bg-white border border-[#12a0e1] text-[#12a0e1] hover:bg-[#12a0e1] hover:text-white text-xs font-bold rounded-xl transition-all disabled:opacity-40">
+          {fetchingTemplate ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          {fetchingTemplate ? "Fetching from Wrike…" : `Fetch ${studio} template from Wrike`}
+        </button>
+        {fetchInfo?.error && <span className="text-xs font-bold text-red-500">{fetchInfo.error}</span>}
+        {fetchInfo && !fetchInfo.error && (
+          <span className="text-xs font-bold text-[#1cc1a5]">
+            Loaded “{fetchInfo.rootLabel}” — {fetchInfo.jobCount} job folder{fetchInfo.jobCount === 1 ? "" : "s"}
+          </span>
+        )}
+        {fetchedTemplate && (
+          <span className="text-[10px] font-black uppercase tracking-wider text-[#12a0e1] bg-[#12a0e1]/10 px-2 py-1 rounded-lg">Live Wrike Data</span>
+        )}
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-black uppercase tracking-widest text-[#768994] mb-1.5">Film</label>
+        <StrictSelect value={filmTitle} onChange={v => setFilmTitle(v)}
+          options={films} placeholder="Select a film…" loading={filmsLoading} />
+        {!filmsLoading && films.length === 0 && (
+          <p className="text-xs text-[#768994] mt-1.5">
+            No films yet — add one in the{" "}
+            <button onClick={() => setActiveTab?.("films")} className="text-[#12a0e1] font-bold hover:underline">Films</button> tab first.
+          </p>
+        )}
+      </div>
+
+      {templateToShow && (
+        <>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs font-bold text-[#768994]">
+              {filmTitle.trim()
+                ? `${activatedCount} / ${allLeaves.length} job number${allLeaves.length === 1 ? "" : "s"} activated for “${filmTitle}”`
+                : `${allLeaves.length} job slot${allLeaves.length === 1 ? "" : "s"} in this template — select a film above to activate any of them`}
+            </span>
+            {loadingSlots && <Loader2 className="w-3.5 h-3.5 animate-spin text-[#768994]" />}
+            {activateError && <span className="text-xs font-bold text-red-500">{activateError}</span>}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="border border-[#dce4ec] rounded-2xl p-4 max-h-[420px] overflow-y-auto">
+              <p className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-2">
+                Folder Preview{fetchedTemplate ? " · live from Wrike" : ""}
+              </p>
+              {renderTree(templateToShow)}
+            </div>
+            <div className="border border-[#dce4ec] rounded-2xl p-4 max-h-[420px] overflow-y-auto">
+              <p className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-2">Job Slots</p>
+              <div className="flex flex-col gap-1.5">
+                {allLeaves.map(l => {
+                  const activated = slotJobs[l.label];
+                  const isActivating = activatingSlot === l.label;
+                  const code = activated?.job_number.match(/XY\d+/)?.[0];
+                  const canActivate = filmTitle.trim() && !activated && !isActivating;
+                  return (
+                    <button key={l.label} disabled={!canActivate}
+                      onClick={() => activateSlot(l)}
+                      title={!filmTitle.trim() && !activated ? "Select a film above first" : ""}
+                      className={`flex items-center justify-between text-[11px] border-b border-[#f0f4f8] pb-1.5 pt-0.5 text-left transition-colors ${
+                        canActivate ? "hover:bg-[#12a0e1]/5 rounded-lg -mx-1 px-1" : "cursor-default"
+                      }`}>
+                      <span className={activated ? "text-[#768994]" : "text-[#122027] font-bold"}>{l.description}</span>
+                      {activated ? (
+                        <span className="font-mono font-bold text-[#12a0e1]">{code}</span>
+                      ) : isActivating ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#12a0e1]" />
+                      ) : (
+                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                          filmTitle.trim() ? "text-[#12a0e1] bg-[#12a0e1]/10" : "text-[#b0bec5] bg-slate-100"
+                        }`}>Activate</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button onClick={() => setActiveTab?.("jobs")}
+              className="px-4 py-2.5 bg-[#122027] hover:bg-[#1a2e38] text-white text-sm font-bold rounded-2xl transition-all">
+              View in Job Book
+            </button>
+            <button disabled
+              title="Coming soon — will use the Wrike API to create the folder automatically when a slot is activated"
+              className="flex items-center gap-2 px-5 py-2.5 bg-slate-100 text-slate-400 text-sm font-bold rounded-2xl cursor-not-allowed">
+              <FolderPlus className="w-3.5 h-3.5" /> Push Folders to Wrike (Soon)
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+      )}
+
+      {innerTab === "custom" && (
+        <div>
+          {customCreated == null ? (
+            <JobForm clients={clients} films={films} categories={categories} descs={descs}
+              onSave={handleCreateCustomJob} saving={customSaving} submitLabel="Create Job" layout="inline" />
+          ) : (
+            <div className="flex items-center gap-3 py-4">
+              <span className="flex items-center gap-2 px-4 py-2.5 bg-[#1cc1a5]/10 text-[#1cc1a5] text-sm font-bold rounded-2xl">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Created {customCreated} in Job Book
+              </span>
+              <button onClick={() => setActiveTab?.("jobs")}
+                className="px-4 py-2.5 bg-[#122027] hover:bg-[#1a2e38] text-white text-sm font-bold rounded-2xl transition-all">
+                View in Job Book
+              </button>
+              <button onClick={() => setCustomCreated(null)}
+                className="px-4 py-2.5 bg-white border border-[#dce4ec] hover:border-[#12a0e1] text-[#122027] text-sm font-bold rounded-2xl transition-all">
+                Add Another Job
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Job Book Section ───────────────────────────────────────────────────────────
-function JobBookSection() {
+// Exported: also rendered standalone as the PMs' "Job Book" page (JobBook.jsx).
+export function JobBookSection({ setActiveTab }) {
   const [jobs, setJobs]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState("");
@@ -984,8 +1800,22 @@ function JobBookSection() {
     setJobs(prev => prev.map(j => j.id === job.id ? { ...j, job_done: !j.job_done } : j));
   };
 
+  // Click cycles Inactive -> Active -> Closed -> Inactive, matching the workflow:
+  // new jobs start Inactive, go Active once billing info is filled in, Closed when done.
+  const cycleStatus = async (job) => {
+    const next = JOB_STATUSES[(JOB_STATUSES.indexOf(job.status || "Inactive") + 1) % JOB_STATUSES.length];
+    await supabase.from("jobs").update({ status: next }).eq("id", job.id);
+    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: next } : j));
+  };
+
   const deleteJob = async (id) => {
-    if (!confirm("Delete this job?")) return;
+    const ok = await confirmAction({
+      title: "Delete this job?",
+      message: "The job and its Job Book record will be removed. This can't be undone.",
+      confirmLabel: "Delete job",
+      danger: true,
+    });
+    if (!ok) return;
     await supabase.from("jobs").delete().eq("id", id);
     await loadJobs();
   };
@@ -1017,9 +1847,9 @@ function JobBookSection() {
             className="w-full pl-9 pr-4 py-2 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] bg-white"
           />
         </div>
-        <button onClick={() => { setEditJob(null); setShowModal(true); }}
+        <button onClick={() => setActiveTab?.("jobsSetup")}
           className="flex items-center gap-1.5 px-4 py-2 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-sm font-bold rounded-xl transition-all shrink-0">
-          <Plus className="w-4 h-4" /> New Job
+          <Plus className="w-4 h-4" /> Add Jobs
         </button>
       </div>
 
@@ -1051,7 +1881,7 @@ function JobBookSection() {
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-slate-50 border-b border-[#dce4ec]">
-                {["Job #","Date","Client","Office","P/D","Film Title","Project Description","Costs","Ordered By","Billed To","Done",""].map(h => (
+                {["Job #","Date","Client","Office","P/D","Film Title","Project Description","Costs","Ordered By","Billed To","Status","Done",""].map(h => (
                   <th key={h} className="px-3 py-2.5 text-left text-[9px] font-black uppercase tracking-widest text-[#768994] whitespace-nowrap">
                     {h}
                   </th>
@@ -1060,7 +1890,7 @@ function JobBookSection() {
             </thead>
             <tbody>
               {paginated.length === 0 ? (
-                <tr><td colSpan={12} className="text-center py-12 text-[#768994] italic">No jobs found</td></tr>
+                <tr><td colSpan={13} className="text-center py-12 text-[#768994] italic">No jobs found</td></tr>
               ) : paginated.map(j => (
                 <tr key={j.id} className={`border-b border-[#dce4ec] last:border-0 hover:bg-slate-50/50 transition-colors ${j.job_done ? "opacity-50" : ""}`}>
                   <td className="px-3 py-2.5">
@@ -1083,6 +1913,12 @@ function JobBookSection() {
                   <td className="px-3 py-2.5 whitespace-nowrap font-bold text-[#122027]">{formatCost(j)}</td>
                   <td className="px-3 py-2.5 text-[#768994]">{j.ordered_by || "—"}</td>
                   <td className="px-3 py-2.5 text-[#768994]">{j.billed_to || "—"}</td>
+                  <td className="px-3 py-2.5">
+                    <button onClick={() => cycleStatus(j)} title="Click to change status"
+                      className={`text-[9px] font-black px-2 py-1 rounded-full transition-colors ${STATUS_BADGE[j.status || "Inactive"]}`}>
+                      {j.status || "Inactive"}
+                    </button>
+                  </td>
                   <td className="px-3 py-2.5">
                     <button onClick={() => toggleDone(j)} title="Toggle done">
                       <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${j.job_done ? "bg-[#1cc1a5] border-[#1cc1a5]" : "border-[#dce4ec] hover:border-[#1cc1a5]"}`}>
@@ -1122,7 +1958,8 @@ function JobBookSection() {
 }
 
 // ── Jobs Feed ─────────────────────────────────────────────────────────────────
-function JobsFeedSection() {
+// Exported: also rendered inside the PMs' standalone Job Book page (JobBook.jsx).
+export function JobsFeedSection() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -1149,7 +1986,18 @@ function JobsFeedSection() {
 
     const tasks = monthFilter
       ? (allTasks || []).filter(t => (toIso(t.date) || "").startsWith(monthFilter))
-      : allTasks;
+      : (allTasks || []);
+
+    // Sort by the job's actual date (not by row id / sync time) — id only
+    // reflects when a row was pulled into the app, which can be well after
+    // the work date it's tagged with. Rows without a parseable date fall
+    // to the bottom; ties break by most-recently-synced first.
+    tasks.sort((a, b) => {
+      const da = toIso(a.date) || "";
+      const db = toIso(b.date) || "";
+      if (da !== db) return db.localeCompare(da);
+      return (b.id || 0) - (a.id || 0);
+    });
 
     if (!tasks?.length) { setEntries([]); setLoading(false); return; }
 
@@ -1166,7 +2014,7 @@ function JobsFeedSection() {
     ]);
 
     const profileMap = Object.fromEntries(
-      (profiles || []).map(p => [p.wrike_user_id, `${p.first_name || ""} ${p.last_name || ""}`.trim()])
+      (profiles || []).map(p => [p.wrike_user_id, cleanFullName(p.first_name, p.last_name)])
     );
     const jobMap = Object.fromEntries((jobs || []).map(j => [j.job_number, j]));
 
@@ -1293,6 +2141,39 @@ function JobsFeedSection() {
     }
   };
 
+  // Text-only version of getCellValue for the export — the two boolean
+  // columns render a checkmark icon on screen, which can't go in a CSV cell.
+  const getCellText = (e, key) => {
+    if (key === "client_amends") return e.client_amends ? "Yes" : "";
+    if (key === "is_3d") return e.is_3d ? "Yes" : "";
+    return getCellValue(e, key);
+  };
+
+  // Same CSV-Blob-and-click-a-link approach as the app's other export
+  // (App.jsx's "Download CSV" palette action) — Excel opens CSV natively,
+  // so there's no need for an xlsx-writing dependency just for this.
+  // Exports whatever the current month/search filters are showing, not
+  // the full unfiltered table.
+  const exportToExcel = () => {
+    const headers = COLS.map(c => c.label.join(" "));
+    const rows = filtered.map(e => COLS.map(c => getCellText(e, c.key)));
+    // Leading BOM — Excel doesn't sniff UTF-8 for a local CSV file without
+    // one and falls back to Windows-1252, which mangles the em-dash
+    // placeholder (and anything else non-ASCII) into "â€"".
+    const csv = "\uFEFF" + [headers, ...rows]
+      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url;
+    const scope = monthFilter ? fmtMonthLabel(monthFilter).replace(" ", "_") : "All";
+    a.download = `ProjectTime_${scope}_${new Date().toISOString().split("T")[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="flex flex-col gap-4">
       {/* Filters row */}
@@ -1315,9 +2196,19 @@ function JobsFeedSection() {
             className="w-full pl-9 pr-3 py-2 border border-[#dce4ec] rounded-xl text-sm text-[#122027] outline-none focus:border-[#12a0e1] bg-white"
           />
         </div>
-        <span className="text-xs font-bold text-[#b0bec5] ml-auto">
-          {loading ? "Loading…" : `${filtered.length} entr${filtered.length === 1 ? "y" : "ies"}`}
-        </span>
+        <div className="flex items-center gap-3 ml-auto">
+          <span className="text-xs font-bold text-[#b0bec5]">
+            {loading ? "Loading…" : `${filtered.length} entr${filtered.length === 1 ? "y" : "ies"}`}
+          </span>
+          <button
+            onClick={exportToExcel}
+            disabled={loading || filtered.length === 0}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-all disabled:opacity-50"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export to Excel
+          </button>
+        </div>
       </div>
 
       {/* Table */}
@@ -1369,202 +2260,67 @@ function JobsFeedSection() {
   );
 }
 
-// ── Overview / Dashboard ───────────────────────────────────────────────────────
-function OverviewSection({ setActiveTab }) {
-  const [counts, setCounts] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [feedEntries, setFeedEntries] = useState([]);
-  const [feedLoading, setFeedLoading] = useState(true);
-
-  useEffect(() => {
-    Promise.all([
-      supabase.from("jobs").select("id", { count: "exact", head: true }),
-      supabase.from("profiles").select("wrike_user_id", { count: "exact", head: true }),
-      supabase.from("films").select("id", { count: "exact", head: true }),
-      supabase.from("clients").select("id", { count: "exact", head: true }),
-      supabase.from("job_categories").select("id", { count: "exact", head: true }),
-      supabase.from("project_descriptions").select("id", { count: "exact", head: true }),
-      supabase.from("positions").select("id", { count: "exact", head: true }),
-    ]).then(([jobs, people, films, clients, cats, descs, positions]) => {
-      setCounts({ jobs: jobs.count ?? 0, people: people.count ?? 0, films: films.count ?? 0, clients: clients.count ?? 0, categories: cats.count ?? 0, descriptions: descs.count ?? 0, positions: positions.count ?? 0 });
-      setLoading(false);
-    });
-  }, []);
-
-  useEffect(() => {
-    setFeedLoading(true);
-    supabase.from("tasks").select("*").order("id", { ascending: false }).limit(8)
-      .then(async ({ data: tasks }) => {
-        if (!tasks?.length) { setFeedEntries([]); setFeedLoading(false); return; }
-        const userIds = [...new Set(tasks.map(t => t.wrike_user_id).filter(Boolean))];
-        const jobNums = [...new Set(tasks.map(t => t.job_number).filter(Boolean))];
-        const [{ data: profiles }, { data: jobs }] = await Promise.all([
-          userIds.length ? supabase.from("profiles").select("wrike_user_id, first_name, last_name").in("wrike_user_id", userIds) : Promise.resolve({ data: [] }),
-          jobNums.length ? supabase.from("jobs").select("job_number, office, print_digital, job_work_category, ordered_by, billed_to, fixed_cost").in("job_number", jobNums) : Promise.resolve({ data: [] }),
-        ]);
-        const profileMap = Object.fromEntries((profiles || []).map(p => [p.wrike_user_id, `${p.first_name || ""} ${p.last_name || ""}`.trim()]));
-        const jobMap = Object.fromEntries((jobs || []).map(j => [j.job_number, j]));
-        setFeedEntries(tasks.map(t => ({ ...t, _name: profileMap[t.wrike_user_id] || "—", _job: jobMap[t.job_number] || {} })));
-        setFeedLoading(false);
-      });
-  }, []);
-
-  const fmtDate = (d) => {
-    if (!d) return "—";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) { const [y, m, day] = d.split("-"); return `${day}.${m}.${y.slice(2)}`; }
-    const slash = d.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (slash) return `${slash[1]}.${slash[2]}.${slash[3].slice(2)}`;
-    return d;
-  };
-
-  const getFilmTitle = (e) => {
-    const colonIdx = (e.job_number || "").indexOf(" : ");
-    if (colonIdx > 0) return e.job_number.slice(0, colonIdx).trim();
-    return e.film_title || "—";
-  };
-
-  const CARD_GROUPS = [
-    {
-      label: "Jobs",
-      cards: [
-        { id: "jobs", label: "Job Book",  icon: Briefcase, color: "from-[#122027] to-[#12a0e1]", light: "bg-[#12a0e1]/10 text-[#12a0e1] border-[#12a0e1]/20", count: counts.jobs },
-        { id: "feed", label: "Jobs Feed", icon: Activity,  color: "from-[#0e86be] to-[#12a0e1]", light: "bg-[#12a0e1]/10 text-[#12a0e1] border-[#12a0e1]/20", count: null },
-      ],
-    },
-    {
-      label: "Team",
-      cards: [
-        { id: "people",    label: "People",    icon: Users,   color: "from-teal-500 to-[#1cc1a5]", light: "bg-teal-50 text-teal-700 border-teal-200", count: counts.people },
-        { id: "positions", label: "Positions", icon: UserCog, color: "from-rose-500 to-pink-600",  light: "bg-rose-50 text-rose-700 border-rose-200",  count: counts.positions },
-      ],
-    },
-    {
-      label: "Reference",
-      cards: [
-        { id: "films",      label: "Films",           icon: Film,      color: "from-violet-500 to-purple-600", light: "bg-violet-50 text-violet-700 border-violet-200",    count: counts.films },
-        { id: "clients",    label: "Clients",         icon: Building2, color: "from-blue-500 to-cyan-600",     light: "bg-blue-50 text-blue-700 border-blue-200",          count: counts.clients },
-        { id: "categories", label: "Item Categories", icon: Tag,       color: "from-amber-500 to-orange-500",  light: "bg-amber-50 text-amber-700 border-amber-200",       count: counts.categories },
-        { id: "descs",      label: "Descriptions",    icon: AlignLeft, color: "from-emerald-500 to-teal-600",  light: "bg-emerald-50 text-emerald-700 border-emerald-200", count: counts.descriptions },
-      ],
-    },
-  ];
-
-  const NavCard = ({ card }) => {
-    const Icon = card.icon;
-    return (
-      <button onClick={() => setActiveTab(card.id)}
-        className="group text-left bg-white border border-[#dce4ec] rounded-2xl p-5 hover:shadow-md hover:border-slate-300 transition-all">
-        <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${card.color} flex items-center justify-center mb-4 shadow-sm group-hover:scale-105 transition-transform`}>
-          <Icon className="w-5 h-5 text-white" />
-        </div>
-        <p className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-1">{card.label}</p>
-        {card.count === null ? (
-          <p className="text-sm font-bold text-[#768994] mt-1">Live feed</p>
-        ) : loading ? (
-          <div className="h-8 w-12 bg-slate-100 rounded animate-pulse" />
-        ) : (
-          <p className="text-3xl font-black text-[#122027]">{(card.count ?? 0).toLocaleString()}</p>
-        )}
-        <p className={`text-[10px] font-bold mt-2 px-2 py-0.5 rounded-full border inline-flex items-center gap-1 ${card.light}`}>
-          Open →
-        </p>
-      </button>
-    );
-  };
-
+// ── Administration hub (level 0) ────────────────────────────────────────────
+function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
   return (
     <div className="space-y-6">
 
-      {/* Grouped nav cards */}
-      <div className="space-y-5">
-        {/* Jobs + Team side by side */}
-        <div className="flex gap-8">
-          {["Jobs", "Team"].map(groupLabel => {
-            const group = CARD_GROUPS.find(g => g.label === groupLabel);
-            return (
-              <div key={groupLabel} className="flex-1">
-                <p className="text-[9px] font-black uppercase tracking-widest text-[#b0bec8] mb-3 px-1">{groupLabel}</p>
-                <div className="grid grid-cols-2 gap-4">
-                  {group.cards.map(card => <NavCard key={card.id} card={card} />)}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Reference full row */}
-        <div>
-          <p className="text-[9px] font-black uppercase tracking-widest text-[#b0bec8] mb-3 px-1">Reference</p>
-          <div className="grid grid-cols-4 gap-4">
-            {CARD_GROUPS.find(g => g.label === "Reference").cards.map(card => <NavCard key={card.id} card={card} />)}
-          </div>
-        </div>
-      </div>
-
-      {/* Jobs Feed preview */}
-      <div className="bg-[#f8fafc] border border-[#dce4ec] rounded-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[#dce4ec]">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#122027] to-[#12a0e1] flex items-center justify-center shadow-sm">
-              <Activity className="w-3.5 h-3.5 text-white" />
-            </div>
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-[#768994]">Live</p>
-              <p className="text-sm font-black text-[#122027] leading-none">Jobs Feed</p>
-            </div>
-          </div>
-          <button onClick={() => setActiveTab("feed")}
-            className="text-[11px] font-black text-[#12a0e1] hover:text-[#0e86be] transition-colors px-3 py-1.5 rounded-lg hover:bg-[#12a0e1]/10">
-            View all →
-          </button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[11px]">
-            <thead>
-              <tr className="bg-[#122027]">
-                {["Job #", "Date", "Client", "Film", "Description", "Person", "Office"].map(h => (
-                  <th key={h} className="px-3 py-2 text-left font-black uppercase tracking-wider text-[8.5px] text-white/80 whitespace-nowrap">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {feedLoading ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i} className="border-b border-[#f0f4f8]">
-                    {Array.from({ length: 7 }).map((_, j) => (
-                      <td key={j} className="px-3 py-2"><div className="h-3 bg-slate-200 rounded animate-pulse" style={{ width: `${50 + Math.random() * 50}%` }} /></td>
+      {/* The three destinations — clicking one unfolds its items right there
+          in place (an accordion), rather than navigating to a separate
+          screen. Each is its own separate card now (was one shared
+          bordered list with rows butted against each other) — same
+          treatment PeopleSection's department cards already use, so a
+          manager sees three distinct destinations, not one dense block
+          that happens to have three rows. */}
+      <div className="space-y-4">
+        {NAV_GROUPS.map((group) => {
+          const isOpen = expandedGroup === group.id;
+          // A group with exactly one destination has nothing to unfold —
+          // an accordion revealing a single row you then click again is
+          // pure friction. Go straight there, and read as navigation (no
+          // `open` prop) rather than as an expand/collapse toggle.
+          const singleItem = group.items.length === 1;
+          return (
+            <div key={group.id} className="bg-white rounded-3xl border border-[#dce4ec] shadow-sm overflow-hidden">
+              <HubRow
+                section={group}
+                onClick={() => (singleItem ? onOpenItem(group.items[0].id) : onToggleGroup(group.id))}
+                open={singleItem ? undefined : isOpen}
+                first
+              />
+              <AnimatePresence initial={false}>
+                {isOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+                    className="overflow-hidden bg-slate-50 border-t border-[#dce4ec]"
+                  >
+                    {/* Same HubRow, just compact — identical gradient sweep
+                        and hover behavior as the parent row, not a
+                        hand-rolled approximation of it. */}
+                    {group.items.map((item) => (
+                      <HubRow
+                        key={item.id}
+                        compact
+                        section={{ ...item, gradient: group.gradient }}
+                        onClick={() => onOpenItem(item.id)}
+                        badge={
+                          item.soon ? (
+                            <span className="text-[9px] font-black uppercase tracking-widest text-[#768994] group-hover:text-white/80 bg-slate-100 group-hover:bg-white/15 px-2 py-1 rounded-full transition-colors duration-300">
+                              Coming soon
+                            </span>
+                          ) : null
+                        }
+                      />
                     ))}
-                  </tr>
-                ))
-              ) : feedEntries.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-[#b0bec5]">No recent entries</td></tr>
-              ) : feedEntries.map((e, i) => (
-                <tr key={e.id} className={`border-b border-[#f0f4f8] hover:bg-[#edf5fb] transition-colors ${i % 2 === 0 ? "bg-white" : "bg-[#f8fafc]"}`}>
-                  <td className="px-3 py-2 font-black text-[#12a0e1] text-[10px] whitespace-nowrap">
-                    {(() => {
-                      const s = e.job_number || "";
-                      const colonIdx = s.indexOf(" : ");
-                      if (colonIdx < 0) return s || "—";
-                      const after = s.slice(colonIdx + 3);
-                      const commaIdx = after.indexOf(",");
-                      return commaIdx > 0 ? after.slice(0, commaIdx).trim() : after.trim();
-                    })()}
-                  </td>
-                  <td className="px-3 py-2 text-[#768994] whitespace-nowrap font-mono">{fmtDate(e.date)}</td>
-                  <td className="px-3 py-2 text-[#122027] whitespace-nowrap">{e.client || "—"}</td>
-                  <td className="px-3 py-2 text-[#122027] whitespace-nowrap">{getFilmTitle(e)}</td>
-                  <td className="px-3 py-2 text-[#768994] max-w-[180px] truncate">{e.project_description || "—"}</td>
-                  <td className="px-3 py-2 text-[#122027] whitespace-nowrap">{e._name}</td>
-                  <td className="px-3 py-2">
-                    {e._job?.office ? (
-                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded-md bg-[#12a0e1]/10 text-[#12a0e1]">{e._job.office}</span>
-                    ) : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          );
+        })}
       </div>
 
     </div>
@@ -1575,19 +2331,31 @@ function OverviewSection({ setActiveTab }) {
 function PeopleSection() {
   const [people, setPeople]         = useState([]);
   const [positions, setPositions]   = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading]       = useState(true);
   const [syncing, setSyncing]       = useState(false);
   const [syncMsg, setSyncMsg]       = useState("");
   const [expanded, setExpanded]     = useState({});
+  const [search, setSearch]         = useState("");
+  // Per-department: has its expand/collapse animation finished? Multiple
+  // departments can be open at once here (unlike the top-level hub, this
+  // isn't an exclusive accordion), so this has to be tracked per label, not
+  // as one shared flag. See toggleGroup below for why it matters.
+  const [settled, setSettled]       = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: profiles }, { data: pos }] = await Promise.all([
+    const [{ data: profiles }, { data: pos }, { data: depts }] = await Promise.all([
       supabase.from("profiles").select("*").order("first_name"),
       supabase.from("positions").select("*").order("title"),
+      supabase.from("job_departments").select("name").order("name"),
     ]);
-    setPeople(profiles || []);
+    // Wrike's own service accounts (AM Team, Magic Wrike, All proofreaders)
+    // sync into profiles like any real contact but aren't people — never
+    // show them here.
+    setPeople((profiles || []).filter((p) => !isServiceAccount(p.wrike_user_id)));
     setPositions(pos || []);
+    setDepartments((depts || []).map(d => d.name));
     setLoading(false);
   }, []);
 
@@ -1599,29 +2367,28 @@ function PeopleSection() {
   };
 
   const syncFromWrike = async () => {
-    const token = localStorage.getItem("wrike_personal_token");
-    if (!token) { setSyncMsg("No Wrike token found — log in with your personal token first."); return; }
+    if (!localStorage.getItem("wrike_user_id")) { setSyncMsg("Wrike not connected — connect it in Profile → Settings first."); return; }
     setSyncing(true);
     setSyncMsg("");
     try {
       // Fetch contacts and groups in parallel
-      const headers = { Authorization: `Bearer ${token}` };
       const [contactsRes, groupsRes] = await Promise.all([
-        fetch("https://www.wrike.com/api/v4/contacts", { headers }),
-        fetch("https://www.wrike.com/api/v4/groups", { headers }),
+        fetch("/api/wrike/contacts"),
+        fetch("/api/wrike/groups"),
       ]);
       if (!contactsRes.ok) throw new Error(`Wrike contacts error ${contactsRes.status}`);
 
       const contacts = ((await contactsRes.json()).data || []).filter(c => c.type === "Person" && !c.deleted);
 
       // Build wrikeUserId → department map from group membership.
-      // Match group title against our DEPARTMENTS list (case-insensitive substring).
+      // Match group title against the editable job_departments list
+      // (case-insensitive substring).
       const deptMap = {};
       if (groupsRes.ok) {
         const groups = (await groupsRes.json()).data || [];
         for (const group of groups) {
           const title = group.title || "";
-          const dept = DEPARTMENTS.find(d =>
+          const dept = departments.find(d =>
             title.toLowerCase() === d.toLowerCase() ||
             title.toLowerCase().includes(d.toLowerCase()) ||
             d.toLowerCase().includes(title.toLowerCase())
@@ -1656,45 +2423,98 @@ function PeopleSection() {
     }
   };
 
-  // Bucket people into department groups
+  // Bucket people into department groups. Keyed against DEPT_GROUPS (the
+  // hardcoded visual-identity list), not the editable departments list — a
+  // brand-new department with no bucket colour yet lands in "—" instead of
+  // being silently dropped, until a developer gives it a DEPT_GROUPS entry.
+  const filteredPeople = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return people;
+    return people.filter(p => {
+      const fullName = `${p.first_name || ""} ${p.last_name || ""}`.toLowerCase();
+      return fullName.includes(q) || (p.email || "").toLowerCase().includes(q);
+    });
+  }, [people, search]);
+
   const buckets = useMemo(() => {
     const out = Object.fromEntries(DEPT_GROUPS.map(g => [g.label, []]));
-    for (const p of people) {
-      const key = p.department && DEPARTMENTS.includes(p.department) ? p.department : "—";
+    for (const p of filteredPeople) {
+      const key = p.department && DEPT_GROUPS.some(g => g.label === p.department) ? p.department : "—";
       out[key].push(p);
     }
     return out;
-  }, [people]);
+  }, [filteredPeople]);
 
-  const toggleGroup = (label) => setExpanded(prev => ({ ...prev, [label]: !prev[label] }));
+  // While searching, auto-open every department that has a match so results
+  // are visible without the user having to expand each group by hand.
+  useEffect(() => {
+    if (!search.trim()) return;
+    setExpanded(prev => {
+      const next = { ...prev };
+      for (const group of DEPT_GROUPS) {
+        if ((buckets[group.label] || []).length > 0) next[group.label] = true;
+      }
+      return next;
+    });
+  }, [search, buckets]);
+
+  const toggleGroup = (label) => {
+    // Any toggle (opening or closing) starts a height transition, so the
+    // clipping needs to be hidden again until it finishes — otherwise a
+    // dropdown left open from before the animation started would render
+    // past the box's edge mid-transition.
+    setSettled(prev => ({ ...prev, [label]: false }));
+    setExpanded(prev => ({ ...prev, [label]: !prev[label] }));
+  };
 
   const PersonCard = ({ p }) => {
-    const initials = `${p.first_name?.[0] || ""}${p.last_name?.[0] || ""}`.toUpperCase() || "?";
-    const fullName = [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unknown";
+    // Cleaned first, then initialed — an emoji leading a raw Wrike name
+    // (e.g. "🌸 Jov") would otherwise become the initial instead of the
+    // actual first letter.
+    const cleanFirst = cleanNamePart(p.first_name);
+    const cleanLast = cleanNamePart(p.last_name);
+    const initials = `${cleanFirst[0] || ""}${cleanLast[0] || ""}`.toUpperCase() || "?";
+    const fullName = [cleanFirst, cleanLast].filter(Boolean).join(" ") || "Unknown";
     return (
-      <div className="flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3.5">
+      <div className="flex items-stretch bg-white border border-[#dce4ec] rounded-2xl overflow-hidden hover:border-slate-300 hover:shadow-sm transition-all">
+        {/* Flush to the card's own edges (top/bottom/left), full height —
+            clipped to the card's rounded-2xl by the parent's overflow-hidden
+            rather than rounding the image itself, so it reads as one card
+            with a portrait on the left, not a small avatar floating in
+            padding. */}
         {p.avatar_url ? (
-          <img src={p.avatar_url} alt={fullName} className="w-10 h-10 rounded-xl object-cover shrink-0" />
+          <img src={p.avatar_url} alt={fullName} className="w-28 sm:w-32 shrink-0 object-cover" />
         ) : (
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center font-black text-sm shrink-0">
+          <div className="w-28 sm:w-32 shrink-0 bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center font-display font-bold text-lg">
             {initials}
           </div>
         )}
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-black text-[#122027] truncate">{fullName}</p>
-          <p className="text-[11px] text-[#768994] truncate">{p.email || p.wrike_user_id}</p>
-        </div>
-        <div className="flex flex-col gap-1 shrink-0">
-          <select value={p.department || ""} onChange={e => updateField(p.wrike_user_id, { department: e.target.value || null })}
-            className="text-[11px] font-bold text-[#122027] border border-[#dce4ec] rounded-lg px-2 py-1 outline-none focus:border-[#12a0e1] bg-white max-w-[110px]">
-            <option value="">No dept.</option>
-            {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
-          <select value={p.position_id || ""} onChange={e => updateField(p.wrike_user_id, { position_id: e.target.value ? Number(e.target.value) : null })}
-            className="text-[11px] text-[#768994] border border-[#dce4ec] rounded-lg px-2 py-1 outline-none focus:border-[#12a0e1] bg-white max-w-[110px]">
-            <option value="">No position</option>
-            {positions.map(pos => <option key={pos.id} value={pos.id}>{pos.title}</option>)}
-          </select>
+        <div className="flex-1 min-w-0 flex items-center gap-3 p-3.5">
+          <div className="flex-1 min-w-0">
+            <p className="font-display text-base font-bold text-[#122027] tracking-tight truncate">{fullName}</p>
+            <p className="text-xs text-[#768994] truncate">{p.email || p.wrike_user_id}</p>
+          </div>
+          {/* Same searchable dropdown Job Book uses for its pickers, instead
+              of a bare native <select> — the app's one dropdown style. "No
+              department"/"No position" are plain entries in the option list
+              (StrictSelect is selection-only, no separate clear affordance),
+              translated back to null on the way out. */}
+          <div className="flex flex-col gap-1.5 shrink-0 w-36 sm:w-40">
+            <StrictSelect
+              value={p.department || "No department"}
+              onChange={(v) => updateField(p.wrike_user_id, { department: v === "No department" ? null : v })}
+              options={["No department", ...departments]}
+            />
+            <StrictSelect
+              value={positions.find(pos => pos.id === p.position_id)?.title || "No position"}
+              onChange={(v) => {
+                if (v === "No position") { updateField(p.wrike_user_id, { position_id: null }); return; }
+                const pos = positions.find(pos => pos.title === v);
+                updateField(p.wrike_user_id, { position_id: pos?.id ?? null });
+              }}
+              options={["No position", ...positions.map(pos => pos.title)]}
+            />
+          </div>
         </div>
       </div>
     );
@@ -1703,13 +2523,28 @@ function PeopleSection() {
   return (
     <div className="space-y-1">
       {/* Toolbar */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
           {!loading && (
-            <span className="text-[10px] font-black text-[#768994]">
-              {people.length} people
+            <span className="text-[10px] font-black text-[#768994] shrink-0">
+              {search.trim() ? `${filteredPeople.length} of ${people.length}` : people.length} people
             </span>
           )}
+          {/* Search — same input treatment as SimpleListSection's list search */}
+          <div className="relative w-56">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#768994]" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search people…"
+              className="w-full pl-9 pr-8 py-2 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white"
+            />
+            {search && (
+              <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-3">
           {syncMsg && <span className="text-[11px] font-medium text-[#768994]">{syncMsg}</span>}
@@ -1729,25 +2564,55 @@ function PeopleSection() {
         <div className="py-16 text-center text-[#768994] text-sm">
           No people yet — click "Sync from Wrike" to pull everyone in the workspace.
         </div>
+      ) : filteredPeople.length === 0 ? (
+        <div className="py-16 text-center text-[#768994] text-sm">
+          No one matches "{search}".
+        </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-3">
+          {/* Same HubRow accordion as Administration's own hub, one level
+              down — a department header behaves exactly like a group row
+              (gradient sweep, chevron rotates open) instead of the small
+              colour-pill toggle this used to be. */}
           {DEPT_GROUPS.map(group => {
             const items = buckets[group.label] || [];
             if (items.length === 0) return null;
             const isOpen = !!expanded[group.label];
             return (
-              <div key={group.label}>
-                <div role="button" tabIndex={0} onClick={() => toggleGroup(group.label)}
-                  className={`flex items-center gap-2.5 mb-3 px-3 py-2 rounded-xl border cursor-pointer select-none ${group.color}`}>
-                  <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-                  <span className="text-[11px] font-black uppercase tracking-widest">{group.label}</span>
-                  <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-black/10">{items.length}</span>
+              // No overflow-hidden on this outer card — its rounded corners
+              // come from the two children below clipping themselves
+              // (header, body), so the body can go overflow-visible once
+              // settled without square-cornering the header along with it.
+              <div key={group.label} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm">
+                <div className={`overflow-hidden ${isOpen ? "rounded-t-2xl" : "rounded-2xl"}`}>
+                  <HubRow
+                    section={{
+                      label: group.label,
+                      desc: `${items.length} ${items.length === 1 ? "person" : "people"}`,
+                      icon: Users,
+                      gradient: group.gradient,
+                    }}
+                    onClick={() => toggleGroup(group.label)}
+                    open={isOpen}
+                  />
                 </div>
-                {isOpen && (
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
-                    {items.map(p => <PersonCard key={p.wrike_user_id} p={p} />)}
-                  </div>
-                )}
+                <AnimatePresence initial={false}>
+                  {isOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+                      onAnimationComplete={() => setSettled(prev => ({ ...prev, [group.label]: true }))}
+                      style={{ overflow: settled[group.label] ? "visible" : "hidden" }}
+                      className="bg-slate-50 border-t border-[#dce4ec] rounded-b-2xl"
+                    >
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5 p-3">
+                        {items.map(p => <PersonCard key={p.wrike_user_id} p={p} />)}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             );
           })}
@@ -1758,10 +2623,61 @@ function PeopleSection() {
 }
 
 // ── Main Management Page ───────────────────────────────────────────────────────
-export default function Management({ wrikeUserId }) {
-  const [activeTab, setActiveTab] = useState("overview");
+// Placeholder for report tabs whose data model isn't built yet, so the IA is
+// visible and honest about what's coming rather than silently missing.
+function ComingSoon({ icon: Icon, title, body, note }) {
+  return (
+    <div className="flex flex-col items-center text-center py-16 px-6">
+      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#122027] to-[#12a0e1] flex items-center justify-center shadow-lg mb-5">
+        {Icon && <Icon className="w-7 h-7 text-white" />}
+      </div>
+      <span className="text-[10px] font-black uppercase tracking-widest text-[#12a0e1] mb-1">Coming soon</span>
+      <h3 className="font-display text-2xl font-bold text-[#122027] tracking-tight">{title}</h3>
+      {body && <p className="text-sm text-[#768994] mt-2 max-w-md leading-relaxed">{body}</p>}
+      {note && (
+        <p className="text-xs text-[#768994] mt-4 max-w-md bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 leading-relaxed">
+          {note}
+        </p>
+      )}
+    </div>
+  );
+}
 
-  if (MANAGEMENT_IDS.length > 0 && !MANAGEMENT_IDS.includes(wrikeUserId)) {
+// Push/pop panel slide — drilling in slides the new panel in from the
+// right (direction 1), going back slides the previous panel in from the
+// left (direction -1). Same shape as the page-swap fade in App.jsx, just
+// with a horizontal offset since this is a nested navigation stack, not a
+// full page change.
+const HUB_SLIDE_VARIANTS = {
+  initial: (dir) => ({ x: dir > 0 ? 28 : -28, opacity: 0 }),
+  animate: { x: 0, opacity: 1, transition: { duration: 0.22, ease: [0.25, 0.1, 0.25, 1] } },
+  exit: (dir) => ({ x: dir > 0 ? -28 : 28, opacity: 0, transition: { duration: 0.16, ease: [0.25, 0.1, 0.25, 1] } }),
+};
+
+export default function Management({ wrikeUserId, department, wrikeData = [] }) {
+  // expandedGroup is purely a display toggle — which group's items are
+  // unfolded inline on the hub, an accordion, not a navigation state.
+  // activeTab is the real navigation: null means "still on the hub"
+  // (accordion open or not), a value means "showing that item's content".
+  const [expandedGroup, setExpandedGroup] = useState(null);
+  const [activeTab, setActiveTab] = useState(null);
+  // Tracks which way the content panel should slide: forward opening an
+  // item, backward returning to the hub.
+  const [navDirection, setNavDirection] = useState(1);
+
+  const toggleGroup = (id) => setExpandedGroup((g) => (g === id ? null : id));
+  const openItem = (id) => { setNavDirection(1); setActiveTab(id); };
+  // The accordion stays exactly as it was — going back doesn't collapse
+  // the group you were just looking at.
+  const backToHub = () => { setNavDirection(-1); setActiveTab(null); };
+
+  // Administration is a first-class page for PMs; the hardcoded allowlist
+  // remains as an admin override for everyone else.
+  const hasAccess =
+    department === "PM" ||
+    MANAGEMENT_IDS.length === 0 ||
+    MANAGEMENT_IDS.includes(wrikeUserId);
+  if (!hasAccess) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center">
         <div className="bg-white border border-[#dce4ec] rounded-3xl p-10 text-center max-w-sm shadow-xl">
@@ -1780,85 +2696,97 @@ export default function Management({ wrikeUserId }) {
     );
   }
 
-  const activeTabMeta = TABS.find(t => t.id === activeTab);
+  const nav = activeTab ? findNavItem(activeTab) : null;
 
   return (
     <div className="min-h-screen bg-slate-100 text-[#122027] font-sans pb-16">
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8 space-y-6">
-        {/* Header */}
-        <div className="bg-white border border-[#dce4ec] rounded-[2rem] overflow-hidden shadow-sm">
-          <div className="h-1.5 bg-gradient-to-r from-[#122027] to-[#12a0e1]" />
-          <div className="p-6 flex items-center gap-5">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#122027] to-[#12a0e1] flex items-center justify-center shadow-lg">
-              <Shield className="w-8 h-8 text-white" />
-            </div>
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-[#12a0e1]">Management</p>
-              <h1 className="text-3xl font-black tracking-tight text-[#122027]">Job Management</h1>
-              <p className="text-xs text-[#768994] mt-0.5">Job Book · Reference Data · Market Codes</p>
-            </div>
-            {MANAGEMENT_IDS.length === 0 && (
-              <div className="ml-auto flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                <p className="text-[10px] font-bold text-amber-700">
-                  Add your Wrike ID to <code className="font-mono">MANAGEMENT_IDS</code> in Management.jsx
-                </p>
+      {/* Full-bleed gradient header — same PageHeader treatment as every
+          other page, so the Home wash resolves into it (see pageGradients). */}
+      <PageHeader
+        pageId="management"
+        icon={Shield}
+        title="Administration"
+        subtitle="Reports · Staff Accounts · Supporting Content"
+      >
+        {MANAGEMENT_IDS.length === 0 && (
+          <div className="flex items-center gap-2 bg-white/15 border border-white/20 backdrop-blur-sm rounded-xl px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+            <p className="text-[10px] font-bold text-white/90">
+              Add your Wrike ID to <code className="font-mono">MANAGEMENT_IDS</code> in Management.jsx
+            </p>
+          </div>
+        )}
+      </PageHeader>
+
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-6 pb-6 overflow-hidden">
+        {/* The hub (with its accordion) and an open item's content are the
+            only two panels that ever swap — the accordion itself doesn't
+            trigger this, it's a height animation inside the hub panel.
+            overflow-hidden on the parent clips the 28px travel so nothing
+            peeks past the edge mid-transition. */}
+        <AnimatePresence mode="wait" custom={navDirection} initial={false}>
+          <motion.div
+            key={nav ? `item:${nav.item.id}` : "hub"}
+            custom={navDirection}
+            variants={HUB_SLIDE_VARIANTS}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+          >
+            {!nav && (
+              <AdminHub
+                expandedGroup={expandedGroup}
+                onToggleGroup={toggleGroup}
+                onOpenItem={openItem}
+              />
+            )}
+
+            {/* The item's actual content */}
+            {nav && (
+              <div>
+                <div className="flex items-center gap-3 mb-4">
+                  <button
+                    onClick={backToHub}
+                    className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-all"
+                  >
+                    <ChevronLeft className="w-4 h-4" /> Administration
+                  </button>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${nav.group.gradient} flex items-center justify-center text-white shadow-sm shrink-0`}>
+                      <nav.item.icon className="w-4 h-4" />
+                    </div>
+                    <h2 className="font-display text-xl font-bold text-[#122027] tracking-tight truncate">{nav.item.label}</h2>
+                  </div>
+                </div>
+
+                <div className="bg-white border border-[#dce4ec] rounded-2xl p-6 shadow-sm">
+                  {/* Project/Time is the logged-time-per-job feed — same
+                      component Job Book uses (JobsFeedSection), not a separate
+                      report. */}
+                  {activeTab === "project-time" && <JobsFeedSection />}
+                  {activeTab === "studio-analytics" && <StudioAnalytics wrikeData={wrikeData} />}
+                  {activeTab === "timesheet-completion" && (
+                    <ComingSoon
+                      icon={ClipboardList}
+                      title="Staff Timesheet Completion"
+                      body="A live list of which staff haven't submitted their timesheet for a given week, so it's obvious at a glance who still needs to."
+                      note="Buildable from submitted tasks vs the staff roster — flagged as the next report to build."
+                    />
+                  )}
+                  {activeTab === "people"     && <PeopleSection />}
+                  {activeTab === "films"      && <SimpleListSection table="films" labelField="title" label="Films" placeholder="Film title…" />}
+                  {activeTab === "clients"    && <SimpleListSection table="clients" labelField="name" label="Clients" quickFilters={STUDIO_GROUPS} quickFilterLabel="Filter by studio" />}
+                  {activeTab === "categories" && <SimpleListSection table="job_categories" labelField="name" label="Item Categories" groups={CATEGORY_GROUPS} />}
+                  {activeTab === "descs"      && <SimpleListSection table="project_descriptions" labelField="description" label="Project Type Descriptions" isLong quickFilters={DESC_QUICK_FILTERS} quickFilterLabel="Filter by territory" groups={DESCRIPTION_GROUPS} />}
+                  {activeTab === "positions"  && <SimpleListSection table="positions" labelField="title" label="Positions" placeholder="e.g. Creative Director…" />}
+                  {activeTab === "translations" && <SimpleListSection table="translation_countries" labelField="name" label="Translation Countries" placeholder="e.g. France…" />}
+                  {activeTab === "departments"  && <SimpleListSection table="job_departments" labelField="name" label="Departments" placeholder="e.g. Print…" />}
+                  {activeTab === "orgchart"     && <OrgChart />}
+                </div>
               </div>
             )}
-          </div>
-        </div>
-
-        {/* Tab navigation */}
-        <div className="flex items-center">
-          {TAB_GROUPS.map((group, gi) => {
-            const groupTabs = group.ids.map(id => TABS.find(t => t.id === id)).filter(Boolean);
-            const isReference = group.label === "Reference";
-            return (
-              <React.Fragment key={gi}>
-                {gi > 0 && (
-                  <div className="flex items-center mx-5">
-                    <div className="w-px h-4 bg-[#dce4ec]" />
-                  </div>
-                )}
-                <div className={`flex items-center gap-1 ${isReference ? "ml-auto" : ""}`}>
-                  {groupTabs.map(tab => {
-                    const Icon = tab.icon;
-                    const active = activeTab === tab.id;
-                    return (
-                      <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-                          active
-                            ? "bg-white border border-[#dce4ec] text-[#122027] shadow-sm"
-                            : "text-[#768994] hover:text-[#122027] hover:bg-white/50"
-                        }`}>
-                        <Icon className={`w-3.5 h-3.5 ${active ? "text-[#12a0e1]" : ""}`} />
-                        {tab.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </React.Fragment>
-            );
-          })}
-        </div>
-
-        {/* Content */}
-        <div className="bg-white border border-[#dce4ec] rounded-2xl p-6 shadow-sm">
-          <div className="flex items-center gap-2.5 mb-5 pb-4 border-b border-[#dce4ec]">
-            {activeTabMeta && <activeTabMeta.icon className="w-4 h-4 text-[#12a0e1]" />}
-            <h2 className="text-sm font-black uppercase tracking-widest text-[#122027]">{activeTabMeta?.label}</h2>
-          </div>
-
-          {activeTab === "overview"   && <OverviewSection setActiveTab={setActiveTab} />}
-          {activeTab === "jobs"       && <JobBookSection />}
-          {activeTab === "feed"       && <JobsFeedSection />}
-          {activeTab === "people"     && <PeopleSection />}
-          {activeTab === "films"      && <SimpleListSection table="films" labelField="title" label="Films" placeholder="Film title…" />}
-          {activeTab === "clients"    && <SimpleListSection table="clients" labelField="name" label="Clients" quickFilters={STUDIO_GROUPS} quickFilterLabel="Filter by studio" />}
-          {activeTab === "categories" && <SimpleListSection table="job_categories" labelField="name" label="Item Categories" groups={CATEGORY_GROUPS} />}
-          {activeTab === "descs"      && <SimpleListSection table="project_descriptions" labelField="description" label="Project Descriptions" isLong quickFilters={DESC_QUICK_FILTERS} quickFilterLabel="Filter by territory" groups={DESCRIPTION_GROUPS} />}
-          {activeTab === "positions"  && <SimpleListSection table="positions" labelField="title" label="Positions" placeholder="e.g. Creative Director…" />}
-        </div>
+          </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   );

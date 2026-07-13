@@ -10,9 +10,11 @@ import { useTrackerState } from "../../hooks/useTrackerState";
 import { useTaskActions } from "../../hooks/useTaskActions";
 import { useWrikeUser } from "../../hooks/useWrikeUser";
 import { useTasks } from "../../hooks/useTasks";
+import { useJobLookup } from "../../hooks/useJobLookup";
 import { getCurrentWeekStart } from "../../hooks/useLegacyRows";
 import { formatDurationText } from "../../utils/timeHelpers";
 import SearchableSelect from "../shared/SearchableSelect";
+import PageHeader, { pageHeaderActionClass } from "../shared/PageHeader";
 import TriageModal from "./TriageModal";
 import DeleteModal from "./DeleteModal";
 import ExportModal from "./ExportModal";
@@ -52,7 +54,11 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
   // Tasks are Supabase-backed via useTasks — scoped to this Wrike user + current week
   const { tasks, setTasks, loading: tasksLoading, addTask, addTasks, updateTask, updateTasks, deleteTasks, importTasks } = useTasks(triggerToast, null, wrikeUser?.id, getCurrentWeekStart());
 
-  const stateWithPull = { ...state, tasks, setTasks, addTask, addTasks, updateTask, updateTasks, deleteTasks, importTasks, isPullingTime, setIsPullingTime, wrikeUser };
+  // Job Book lookup — lets guessed job/film/client be overridden by admin-curated
+  // data, and self-populates Job Book from real usage the first time a job is seen.
+  const jobLookup = useJobLookup();
+
+  const stateWithPull = { ...state, tasks, setTasks, addTask, addTasks, updateTask, updateTasks, deleteTasks, importTasks, isPullingTime, setIsPullingTime, wrikeUser, jobLookup };
   const actions = useTaskActions(stateWithPull);
 
   // Lottie script loader
@@ -114,37 +120,24 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
         handlePasteImport={actions.handlePasteImport}
       />
 
-<div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8 space-y-6">
-        {/* Header */}
-        <header className="bg-white shadow-sm border border-[#dce4ec] rounded-[2rem] p-6 sm:px-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-5 relative overflow-hidden">
-          <div className="absolute top-0 right-0 -mr-20 -mt-20 w-64 h-64 bg-[#12a0e1]/10 rounded-full blur-3xl pointer-events-none" />
-          <div className="flex items-center gap-5 relative z-10">
-            <div className="bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] p-3.5 rounded-2xl text-white shadow-lg shadow-[#12a0e1]/20">
-              <Activity className="w-8 h-8" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-black tracking-tight text-[#122027]">XYi Timesheeter</h1>
-              <p className="text-[#768994] text-sm font-medium mt-0.5">Timesheet Tracker for the Motion Peeps</p>
-            </div>
-          </div>
-          <div className="flex gap-3 w-full md:w-auto relative z-10">
-            <button
-              onClick={() => actions.handlePullWrikeTime(wrikeData)}
-              disabled={isPullingTime}
-              className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-200 px-6 py-3 rounded-xl font-bold transition-all shadow-sm active:scale-95 disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${isPullingTime ? "animate-spin" : ""}`} />
-              {isPullingTime ? "Pulling..." : "Pull Wrike Time"}
-            </button>
-            <button
-              onClick={() => setShowExportModal(true)}
-              className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-[#122027] hover:bg-[#25373c] text-white px-6 py-3 rounded-xl font-bold transition-all shadow-md active:scale-95"
-            >
-              <Download className="w-4 h-4" /> Manage Data
-            </button>
-          </div>
-        </header>
+      <PageHeader pageId="timesheet" icon={Activity} title="XYi Timesheeter" subtitle="Timesheet Tracker for the Motion Peeps">
+        <button
+          onClick={() => actions.handlePullWrikeTime(wrikeData)}
+          disabled={isPullingTime}
+          className={pageHeaderActionClass}
+        >
+          <RefreshCw className={`w-4 h-4 ${isPullingTime ? "animate-spin" : ""}`} />
+          {isPullingTime ? "Pulling..." : "Pull Wrike Time"}
+        </button>
+        <button
+          onClick={() => setShowExportModal(true)}
+          className={pageHeaderActionClass}
+        >
+          <Download className="w-4 h-4" /> Manage Data
+        </button>
+      </PageHeader>
 
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8 space-y-6">
         {/* Day selector */}
         <div className="bg-white/60 backdrop-blur-xl shadow-sm border border-[#dce4ec] p-3 rounded-3xl">
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">

@@ -1,9 +1,19 @@
-import * as pdfjsLib from "pdfjs-dist";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url
-).toString();
+// pdfjs is ~170 kB gzipped — a static import here rode along with every page
+// chunk that can open the task detail modal. Load it on first actual parse
+// instead (opening a PDF spec is rare; the await below covers the fetch).
+let pdfjsPromise = null;
+function loadPdfjs() {
+  if (!pdfjsPromise) {
+    pdfjsPromise = import("pdfjs-dist").then((lib) => {
+      lib.GlobalWorkerOptions.workerSrc = new URL(
+        "pdfjs-dist/build/pdf.worker.min.mjs",
+        import.meta.url
+      ).toString();
+      return lib;
+    });
+  }
+  return pdfjsPromise;
+}
 
 const TARGET_COLS = [
   { key: "artworkType", match: /(dinth|foh|dooh)/i },
@@ -156,6 +166,7 @@ function assignCells(row, colMap, tol = 8) {
 // ─── public API ───────────────────────────────────────────────────────────────
 
 export async function parsePdfDeliverySpecs(blob) {
+  const pdfjsLib = await loadPdfjs();
   const arrayBuffer = await blob.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 

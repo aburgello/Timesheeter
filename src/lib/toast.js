@@ -1,15 +1,19 @@
-// Tiny global toast store so notify() can be called from anywhere (hooks,
-// utilities, components) and a single <ToastHost/> renders them top-right.
-let listeners = [];
-let counter = 0;
+// Global toast API — notify() can be called from anywhere (hooks, utilities,
+// components). Backed by Sonner for real: stacking, swipe-to-dismiss,
+// pause-on-hover, and exit animations, with our own ToastPill markup so the
+// brand pill look is unchanged. <ToastHost/> renders Sonner's <Toaster/>.
+import React from "react";
+import { toast } from "sonner";
+import ToastPill from "../components/shared/ToastPill";
 
 export function notify(message, type = "error") {
-  const toast = { id: ++counter, message, type };
-  listeners.forEach((fn) => fn(toast));
-  return toast.id;
-}
-
-export function subscribeToasts(fn) {
-  listeners.push(fn);
-  return () => { listeners = listeners.filter((l) => l !== fn); };
+  return toast.custom(
+    (t) =>
+      React.createElement(ToastPill, {
+        message,
+        type,
+        onDismiss: () => toast.dismiss(t),
+      }),
+    { duration: 4000 }
+  );
 }

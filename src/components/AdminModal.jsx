@@ -1,11 +1,28 @@
 import React, { useState, useEffect } from "react";
-import { X, Shield, Users, Clock, Key, RefreshCw, CheckCircle, AlertCircle } from "lucide-react";
+import { X, Shield, Users, Clock, Key, RefreshCw, CheckCircle, AlertCircle, Zap, Eye } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
+import { ALL_DEPARTMENTS } from "../lib/departments";
+import { useDepartmentPreviewState, setDepartmentPreview } from "../hooks/useDepartment";
+import { isServiceAccount } from "../lib/people";
 
 export default function AdminModal({ onClose }) {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [taskCounts, setTaskCounts] = useState({});
+  const [webhookState, setWebhookState] = useState({ status: "idle", message: "" });
+  const departmentPreview = useDepartmentPreviewState();
+
+  const registerWebhook = async () => {
+    setWebhookState({ status: "loading", message: "" });
+    try {
+      const res = await fetch("/api/wrike/webhook/register", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setWebhookState({ status: "success", message: `Live sync enabled (webhook ${data.webhookId})` });
+    } catch (e) {
+      setWebhookState({ status: "error", message: e.message });
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -17,10 +34,14 @@ export default function AdminModal({ onClose }) {
           .order("updated_at", { ascending: false });
 
         if (profileData) {
-          setProfiles(profileData);
+          // Wrike's own service accounts (AM Team, Magic Wrike, All
+          // proofreaders) sync into profiles like any real contact but
+          // aren't people — never count them toward team stats here.
+          const realProfiles = profileData.filter((p) => !isServiceAccount(p.wrike_user_id));
+          setProfiles(realProfiles);
 
           // Fetch task counts per user
-          const ids = profileData.map((p) => p.wrike_user_id);
+          const ids = realProfiles.map((p) => p.wrike_user_id);
           const counts = {};
           await Promise.all(
             ids.map(async (uid) => {
@@ -89,6 +110,63 @@ export default function AdminModal({ onClose }) {
               <div className="text-xl font-black text-[#122027]">{loading ? "—" : value}</div>
               <div className="text-[10px] font-black text-[#768994] uppercase tracking-wider mt-0.5">{label}</div>
             </div>
+          ))}
+        </div>
+
+        {/* Live sync setup */}
+        <div className="flex items-center gap-3 px-6 py-3 border-b border-[#dce4ec] bg-slate-50/50">
+          <button
+            onClick={registerWebhook}
+            disabled={webhookState.status === "loading"}
+            className="flex items-center gap-1.5 text-[11px] font-black text-[#122027] bg-white border border-[#dce4ec] hover:border-[#12a0e1] rounded-full px-3 py-1.5 transition-colors disabled:opacity-50"
+          >
+            <Zap className={`w-3 h-3 text-[#12a0e1] ${webhookState.status === "loading" ? "animate-pulse" : ""}`} />
+            {webhookState.status === "loading" ? "Enabling…" : "Enable live task sync"}
+          </button>
+          {webhookState.status === "success" && (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-[#1cc1a5]">
+              <CheckCircle className="w-3 h-3" /> {webhookState.message}
+            </span>
+          )}
+          {webhookState.status === "error" && (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-red-500">
+              <AlertCircle className="w-3 h-3" /> {webhookState.message}
+            </span>
+          )}
+        </div>
+
+        {/* Department preview — swaps Home/Rail/command-palette/the board to
+            show exactly what another department's page set looks like,
+            without touching your own real profiles.department row. Every
+            useDepartment() caller (App, Home, Rail) picks this up instantly
+            via the preview-change event; a persistent banner (mounted once
+            in App.jsx) reminds you it's active while you navigate around. */}
+        <div className="flex items-center gap-2 px-6 py-3 border-b border-[#dce4ec] bg-slate-50/50 flex-wrap">
+          <span className="flex items-center gap-1.5 text-[10px] font-black text-[#768994] uppercase tracking-wider mr-1">
+            <Eye className="w-3 h-3" /> Preview as
+          </span>
+          <button
+            onClick={() => setDepartmentPreview(null)}
+            className={`text-[11px] font-black rounded-full px-3 py-1.5 border transition-colors ${
+              !departmentPreview
+                ? "bg-[#122027] text-white border-[#122027]"
+                : "bg-white text-[#122027] border-[#dce4ec] hover:border-[#12a0e1]"
+            }`}
+          >
+            You
+          </button>
+          {ALL_DEPARTMENTS.map((dept) => (
+            <button
+              key={dept}
+              onClick={() => setDepartmentPreview(dept)}
+              className={`text-[11px] font-black rounded-full px-3 py-1.5 border transition-colors ${
+                departmentPreview === dept
+                  ? "bg-[#12a0e1] text-white border-[#12a0e1]"
+                  : "bg-white text-[#122027] border-[#dce4ec] hover:border-[#12a0e1]"
+              }`}
+            >
+              {dept}
+            </button>
           ))}
         </div>
 

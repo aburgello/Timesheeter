@@ -2,6 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabaseClient";
 import { getFilmName } from "../lib/wrikeEnrich";
+import MDEditor from "@uiw/react-md-editor";
+import "@uiw/react-md-editor/markdown-editor.css";
+import { useCreateBlockNote } from "@blocknote/react";
+import { BlockNoteView } from "@blocknote/mantine";
+import "@blocknote/core/fonts/inter.css";
+import "@blocknote/mantine/style.css";
+import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
 import { FILM_MAPPINGS } from "../constants.js";
 import {
   Layout,
@@ -106,6 +113,333 @@ function CountryFlag({ flag, imgClass = "w-11 h-[30px]", textClass = "text-3xl" 
         {code.toUpperCase()}
       </span>
     </span>
+  );
+}
+
+// --- Shared collapsible card shell for the two Reference note sections ---
+function CollapsibleCard({ icon, title, subtitle, isOpen, onToggle, children }) {
+  return (
+    <section className="rounded-3xl bg-white/60 border border-[#dce4ec] shadow-sm p-5 sm:p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onToggle(); }}
+        className="flex items-center gap-3 cursor-pointer select-none"
+      >
+        <div className="w-9 h-9 rounded-xl bg-[#12a0e1]/10 text-[#12a0e1] flex items-center justify-center shadow-sm shrink-0">
+          {icon}
+        </div>
+        <div className="mr-auto">
+          <h2 className="text-lg font-black text-[#122027] tracking-tight leading-none">{title}</h2>
+          <p className="text-[11px] font-bold text-[#768994] uppercase tracking-widest mt-1">{subtitle}</p>
+        </div>
+        <ChevronRight className={`w-4 h-4 text-[#768994] shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+      </div>
+      {isOpen && <div className="mt-4" onClick={(e) => e.stopPropagation()}>{children}</div>}
+    </section>
+  );
+}
+
+// --- Reference > End of Campaign Notes: pick a campaign, write markdown wrap-up notes ---
+function EndOfCampaignNotesCard({ isOpen, onToggle, campaigns }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [selectedCampaignId, setSelectedCampaignId] = useState(null);
+  const [content, setContent] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const skipNextSaveRef = useRef(false);
+
+  const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
+
+  useEffect(() => {
+    if (!selectedCampaignId) { setContent(""); setLoaded(false); return; }
+    setLoaded(false);
+    (async () => {
+      const { data } = await supabase
+        .from("campaign_eoc_notes")
+        .select("content")
+        .eq("campaign_id", selectedCampaignId)
+        .maybeSingle();
+      skipNextSaveRef.current = true;
+      setContent(data?.content || "");
+      setLoaded(true);
+    })();
+  }, [selectedCampaignId]);
+
+  useEffect(() => {
+    if (!selectedCampaignId || !loaded) return;
+    if (skipNextSaveRef.current) { skipNextSaveRef.current = false; return; }
+    const t = setTimeout(() => {
+      supabase.from("campaign_eoc_notes").upsert({
+        campaign_id: selectedCampaignId,
+        content,
+        updated_at: new Date().toISOString(),
+      });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [content, selectedCampaignId, loaded]);
+
+  const filteredCampaigns = campaigns.filter(
+    (c) => !search.trim() || c.title.toLowerCase().includes(search.trim().toLowerCase())
+  );
+
+  return (
+    <CollapsibleCard
+      icon={<FileText className="w-5 h-5" />}
+      title="End of Campaign Notes"
+      subtitle="Wrap-up learnings · per campaign"
+      isOpen={isOpen}
+      onToggle={onToggle}
+    >
+      <div className="space-y-3">
+        <div className="relative">
+          <button
+            onClick={() => setPickerOpen((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-[#dce4ec] bg-white text-sm font-bold text-[#122027] hover:border-[#12a0e1]/40"
+          >
+            <span className={selectedCampaign ? "" : "text-[#768994] font-semibold"}>
+              {selectedCampaign ? selectedCampaign.title : "Pick a campaign…"}
+            </span>
+            <ChevronRight className={`w-4 h-4 text-[#768994] shrink-0 transition-transform ${pickerOpen ? "rotate-90" : ""}`} />
+          </button>
+          {pickerOpen && (
+            <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-xl border border-[#dce4ec] bg-white shadow-lg">
+              <div className="p-2 sticky top-0 bg-white border-b border-[#dce4ec]">
+                <input
+                  autoFocus
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search campaigns…"
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-[#dce4ec] outline-none text-sm font-semibold"
+                />
+              </div>
+              {filteredCampaigns.length === 0 && (
+                <p className="p-3 text-xs font-bold text-[#768994]">No campaigns match.</p>
+              )}
+              {filteredCampaigns.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => { setSelectedCampaignId(c.id); setPickerOpen(false); setSearch(""); }}
+                  className={`w-full text-left px-3 py-2 text-sm font-bold hover:bg-[#f2f6f9] ${c.id === selectedCampaignId ? "text-[#12a0e1]" : "text-[#122027]"}`}
+                >
+                  {c.title}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {selectedCampaignId ? (
+          <div data-color-mode="light" className="rounded-xl overflow-hidden border border-[#dce4ec]">
+            <MDEditor value={content} onChange={(v) => setContent(v || "")} height={340} preview="live" />
+          </div>
+        ) : (
+          <p className="text-center text-sm font-bold text-[#768994] py-8">Pick a campaign above to write its wrap-up notes.</p>
+        )}
+      </div>
+    </CollapsibleCard>
+  );
+}
+
+// --- Reference > Notes Canvas: folders/topics of freeform BlockNote pages ---
+function NotesCanvasPageEditor({ page, onSave }) {
+  const editor = useCreateBlockNote({
+    initialContent: page.content && page.content.length ? page.content : undefined,
+  });
+  const saveTimerRef = useRef(null);
+  const handleChange = () => {
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => onSave(editor.document), 800);
+  };
+  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
+  return (
+    <div className="min-h-[420px] max-h-[600px] overflow-y-auto">
+      <BlockNoteView editor={editor} onChange={handleChange} theme="light" />
+    </div>
+  );
+}
+
+function NotesCanvasCard({ isOpen, onToggle }) {
+  const [folders, setFolders] = useState([]);
+  const [pages, setPages] = useState([]);
+  const [selectedFolderId, setSelectedFolderId] = useState(null);
+  const [selectedPageId, setSelectedPageId] = useState(null);
+  const [addingFolder, setAddingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+
+  useEffect(() => {
+    if (!isOpen) return;
+    (async () => {
+      const [{ data: f }, { data: p }] = await Promise.all([
+        supabase.from("canvas_notes_folders").select("*").order("created_at", { ascending: true }),
+        supabase.from("canvas_notes_pages").select("*").order("created_at", { ascending: true }),
+      ]);
+      setFolders(f || []);
+      setPages(p || []);
+    })();
+  }, [isOpen]);
+
+  const addFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name) { setAddingFolder(false); return; }
+    const { data } = await supabase.from("canvas_notes_folders").insert({ name }).select().single();
+    if (data) setFolders((prev) => [...prev, data]);
+    setNewFolderName("");
+    setAddingFolder(false);
+  };
+
+  const deleteFolder = async (folderId) => {
+    await supabase.from("canvas_notes_folders").delete().eq("id", folderId);
+    setFolders((prev) => prev.filter((f) => f.id !== folderId));
+    setPages((prev) => prev.filter((p) => p.folder_id !== folderId));
+    if (selectedFolderId === folderId) { setSelectedFolderId(null); setSelectedPageId(null); }
+  };
+
+  const addPage = async (folderId) => {
+    const { data } = await supabase
+      .from("canvas_notes_pages")
+      .insert({ folder_id: folderId, title: "Untitled", content: [] })
+      .select()
+      .single();
+    if (data) {
+      setPages((prev) => [...prev, data]);
+      setSelectedFolderId(folderId);
+      setSelectedPageId(data.id);
+    }
+  };
+
+  const deletePage = async (pageId) => {
+    await supabase.from("canvas_notes_pages").delete().eq("id", pageId);
+    setPages((prev) => prev.filter((p) => p.id !== pageId));
+    if (selectedPageId === pageId) setSelectedPageId(null);
+  };
+
+  const renamePage = async (pageId, title) => {
+    setPages((prev) => prev.map((p) => (p.id === pageId ? { ...p, title } : p)));
+    await supabase.from("canvas_notes_pages").update({ title }).eq("id", pageId);
+  };
+
+  const savePageContent = async (pageId, blocks) => {
+    setPages((prev) => prev.map((p) => (p.id === pageId ? { ...p, content: blocks } : p)));
+    await supabase.from("canvas_notes_pages").update({ content: blocks, updated_at: new Date().toISOString() }).eq("id", pageId);
+  };
+
+  const selectedPage = pages.find((p) => p.id === selectedPageId);
+
+  return (
+    <CollapsibleCard
+      icon={<Folder className="w-5 h-5" />}
+      title="Notes Canvas"
+      subtitle="Topics & pages · scratchpad"
+      isOpen={isOpen}
+      onToggle={onToggle}
+    >
+      <div className="flex flex-col sm:flex-row gap-4">
+        {/* Sidebar: folders/topics + pages */}
+        <div className="sm:w-56 shrink-0 space-y-3">
+          <button
+            onClick={() => setAddingFolder(true)}
+            className="w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#12a0e1]/10 text-[#12a0e1] text-[11px] font-black uppercase tracking-widest hover:bg-[#12a0e1]/20"
+          >
+            <FolderPlus className="w-3.5 h-3.5" /> New Topic
+          </button>
+          {addingFolder && (
+            <div className="flex items-center gap-1.5">
+              <input
+                autoFocus
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addFolder(); if (e.key === "Escape") { setAddingFolder(false); setNewFolderName(""); } }}
+                placeholder="Topic name…"
+                className="w-full px-2 py-1 rounded-lg border border-[#dce4ec] outline-none text-xs font-bold"
+              />
+              <button onClick={addFolder} className="p-1 rounded hover:bg-black/5"><Check className="w-3.5 h-3.5 text-[#12a0e1]" /></button>
+            </div>
+          )}
+          <div className="space-y-1 max-h-[520px] overflow-y-auto">
+            {folders.length === 0 && !addingFolder && (
+              <p className="text-xs font-semibold text-[#768994] px-1">No topics yet.</p>
+            )}
+            {folders.map((folder) => {
+              const folderPages = pages.filter((p) => p.folder_id === folder.id);
+              const isExpanded = selectedFolderId === folder.id;
+              return (
+                <div key={folder.id}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedFolderId(isExpanded ? null : folder.id)}
+                    className="group/folder flex items-center gap-1.5 px-1.5 py-1 rounded-lg cursor-pointer hover:bg-black/5"
+                  >
+                    <ChevronRight className={`w-3 h-3 shrink-0 text-[#768994] transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                    <span className="text-xs font-bold text-[#122027] truncate flex-1">{folder.name}</span>
+                    <span className="text-[10px] font-black text-[#768994]">{folderPages.length}</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteFolder(folder.id); }}
+                      className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                  {isExpanded && (
+                    <div className="ml-4 mt-0.5 space-y-0.5">
+                      {folderPages.map((page) => (
+                        <div
+                          key={page.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedPageId(page.id)}
+                          className={`group/page flex items-center gap-1.5 px-1.5 py-1 rounded-lg cursor-pointer ${page.id === selectedPageId ? "bg-[#12a0e1]/10 text-[#12a0e1]" : "hover:bg-black/5 text-[#122027]"}`}
+                        >
+                          <FileText className="w-3 h-3 shrink-0" />
+                          <span className="text-xs font-semibold truncate flex-1">{page.title || "Untitled"}</span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deletePage(page.id); }}
+                            className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => addPage(folder.id)}
+                        className="flex items-center gap-1 px-1.5 py-1 text-[11px] font-black text-[#12a0e1] hover:text-[#0f88c0]"
+                      >
+                        <Plus className="w-3 h-3" /> New page
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Main pane: selected page's BlockNote editor */}
+        <div className="flex-1 min-w-0 rounded-xl border border-[#dce4ec] bg-white overflow-hidden">
+          {selectedPage ? (
+            <>
+              <input
+                value={selectedPage.title}
+                onChange={(e) => renamePage(selectedPage.id, e.target.value)}
+                className="w-full px-4 py-2.5 border-b border-[#dce4ec] outline-none text-sm font-black text-[#122027]"
+                placeholder="Untitled"
+              />
+              <NotesCanvasPageEditor
+                key={selectedPage.id}
+                page={selectedPage}
+                onSave={(blocks) => savePageContent(selectedPage.id, blocks)}
+              />
+            </>
+          ) : (
+            <p className="text-center text-sm font-bold text-[#768994] py-16 px-4">
+              Pick or create a topic, then a page, to start scribbling.
+            </p>
+          )}
+        </div>
+      </div>
+    </CollapsibleCard>
   );
 }
 
@@ -227,6 +561,24 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   const [newCountryCode, setNewCountryCode] = useState("");
   const [countrySearch, setCountrySearch] = useState("");
   const [doohViewMode, setDoohViewMode] = useState(() => localStorage.getItem("dooh_view_mode") || "grid");
+
+  // --- REFERENCE SECTION: collapsible region groups + free-text note cards ---
+  const [expandedRegions, setExpandedRegions] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("canvas_reference_expanded") || "{}"); } catch { return {}; }
+  });
+  const toggleRegion = (key) => {
+    setExpandedRegions((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      localStorage.setItem("canvas_reference_expanded", JSON.stringify(next));
+      return next;
+    });
+  };
+  const setAllRegionsExpanded = (open) => {
+    const keys = ["Pinned", ...REGION_ORDER];
+    const next = Object.fromEntries(keys.map((k) => [k, open]));
+    setExpandedRegions(next);
+    localStorage.setItem("canvas_reference_expanded", JSON.stringify(next));
+  };
   const [uploadingCountry, setUploadingCountry] = useState(null);
   const [deletingAssetId, setDeletingAssetId] = useState(null);
   const [deletingCountryId, setDeletingCountryId] = useState(null);
@@ -427,7 +779,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
         wrikeGroupedCampaigns[campaignTitle] = {
           id: `wrike-${campaignTitle.toLowerCase().replace(/\s+/g, "-")}`,
           title: campaignTitle,
-          wrikeLink: task.permalink || "#",
+          wrikeLink: task.permalink || `https://www.wrike.com/open.htm?id=${task.id}`,
           notes: [],
           matrices: [],
           links: [],
@@ -1313,60 +1665,47 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
         );
       })()}
 
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8">
-        <header className="bg-white shadow-sm border border-[#dce4ec] rounded-[2rem] p-6 sm:px-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-5 relative overflow-hidden">
-          <div className="flex items-center gap-4">
-            <div className="bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] p-3.5 rounded-2xl text-white shadow-lg shadow-[#12a0e1]/20">
-              <Layout className="w-8 h-8" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-black text-[#122027] tracking-tight">
-                Campaign Canvas
-              </h1>
-              <div className="text-[#768994] text-sm font-medium mt-0.5 flex items-center gap-2">
-                Visual Command Centre for active campaigns
-                <span className="hidden md:flex items-center gap-1 bg-slate-50 px-2 py-0.5 rounded-md text-[10px] font-black tracking-widest border border-[#dce4ec] shadow-sm text-[#768994] ml-2">
-                  <Command className="w-3 h-3" /> Global Cmd + K Menu
-                </span>
-              </div>
-            </div>
-          </div>
-          {isAdmin && (
-            <div className="flex items-center gap-2">
+      <PageHeader pageId="canvas" icon={Layout} title="Campaign Canvas" subtitle="Visual Command Centre for active campaigns">
+        <span className="hidden md:flex items-center gap-1 bg-white/15 border border-white/20 px-2.5 py-1 rounded-md text-[10px] font-black tracking-widest text-white/85">
+          <Command className="w-3 h-3" /> Global Cmd + K Menu
+        </span>
+        {isAdmin && (
+          <>
+            <button
+              onClick={() => setShowMappingsPanel(true)}
+              title="View all film code mappings (admin only)"
+              className={pageHeaderActionClass}
+            >
+              <List className="w-3.5 h-3.5" />
+              {Object.keys(filmCodeMappings).length + Object.keys(FILM_MAPPINGS || {}).length} Codes
+            </button>
+            {scanFilmMappings && (
               <button
-                onClick={() => setShowMappingsPanel(true)}
-                title="View all film code mappings (admin only)"
-                className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-[#768994] hover:text-[#122027] border border-[#dce4ec] px-4 py-2.5 rounded-xl text-xs font-bold transition-all active:scale-95"
+                onClick={scanFilmMappings}
+                disabled={isScanning || isSyncing}
+                title="Scan all Wrike tasks to discover film code mappings (admin only)"
+                className={pageHeaderActionClass}
               >
-                <List className="w-3.5 h-3.5" />
-                {Object.keys(filmCodeMappings).length + Object.keys(FILM_MAPPINGS || {}).length} Codes
+                <Search className={`w-3.5 h-3.5 ${isScanning ? "animate-pulse" : ""}`} />
+                {isScanning ? "Scanning…" : "Map Films"}
               </button>
-              {scanFilmMappings && (
-                <button
-                  onClick={scanFilmMappings}
-                  disabled={isScanning || isSyncing}
-                  title="Scan all Wrike tasks to discover film code mappings (admin only)"
-                  className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-[#768994] hover:text-[#122027] border border-[#dce4ec] px-4 py-2.5 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95"
-                >
-                  <Search className={`w-3.5 h-3.5 ${isScanning ? "animate-pulse" : ""}`} />
-                  {isScanning ? "Scanning…" : "Map Films"}
-                </button>
-              )}
-              {syncNow && (
-                <button
-                  onClick={syncNow}
-                  disabled={isSyncing || isScanning}
-                  title="Force full Wrike sync (admin only)"
-                  className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-[#768994] hover:text-[#122027] border border-[#dce4ec] px-4 py-2.5 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin" : ""}`} />
-                  {isSyncing ? "Syncing…" : "Sync Wrike"}
-                </button>
-              )}
-            </div>
-          )}
-        </header>
+            )}
+            {syncNow && (
+              <button
+                onClick={syncNow}
+                disabled={isSyncing || isScanning}
+                title="Force full Wrike sync (admin only)"
+                className={pageHeaderActionClass}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin" : ""}`} />
+                {isSyncing ? "Syncing…" : "Sync Wrike"}
+              </button>
+            )}
+          </>
+        )}
+      </PageHeader>
 
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8">
         {/* --- PERFECTLY CENTERED ICON DOCK --- */}
         {isLoading && (
           <div className="flex items-center justify-center gap-2 py-3 text-xs font-bold text-[#768994]">
@@ -1825,7 +2164,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
 
           // ============ GALLERY VIEW (studio cards) ============
           return (
-            <div key="studio-gallery" className="mt-8 py-4 px-6 w-full">
+            <div key="studio-gallery" className="mt-2 py-4 px-6 w-full">
               <div className="flex items-center gap-2.5 mb-4 px-1">
                 <div className="w-9 h-9 rounded-xl bg-[#12a0e1]/10 text-[#12a0e1] flex items-center justify-center shadow-sm">
                   <Film className="w-5 h-5" />
@@ -1951,6 +2290,11 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   <button onClick={() => setIsAddCountryOpen(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#12a0e1] hover:bg-[#0f88c0] text-white text-xs font-black uppercase tracking-widest transition-colors active:scale-95">
                     <Plus className="w-4 h-4" /> Add
                   </button>
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    <button onClick={() => setAllRegionsExpanded(true)} className="text-[10px] font-black uppercase tracking-widest text-[#12a0e1] hover:text-[#0f88c0] px-1">Expand all</button>
+                    <span className="text-[#dce4ec]">·</span>
+                    <button onClick={() => setAllRegionsExpanded(false)} className="text-[10px] font-black uppercase tracking-widest text-[#768994] hover:text-[#122027] px-1">Collapse all</button>
+                  </div>
                 </div>
 
                 {(() => {
@@ -2005,19 +2349,35 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       {visible.length === 0 && (
                         <p className="text-center text-sm font-bold text-[#768994] py-10">No countries match “{countrySearch}”.</p>
                       )}
-                      {pinned.length > 0 && (
-                        <div>
-                          <h3 className="text-xs font-black text-amber-500 uppercase tracking-widest mb-2.5 flex items-center gap-1.5"><Star className="w-3.5 h-3.5 fill-current" /> Pinned</h3>
-                          {renderItems(pinned)}
-                        </div>
-                      )}
+                      {pinned.length > 0 && (() => {
+                        const isOpen = q ? true : !!expandedRegions["Pinned"];
+                        return (
+                          <div>
+                            <div role="button" tabIndex={0} onClick={() => toggleRegion("Pinned")}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleRegion("Pinned"); }}
+                              className="flex items-center gap-1.5 mb-2.5 cursor-pointer select-none w-fit">
+                              <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-amber-500 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                              <h3 className="text-xs font-black text-amber-500 uppercase tracking-widest flex items-center gap-1.5"><Star className="w-3.5 h-3.5 fill-current" /> Pinned</h3>
+                              <span className="text-[10px] font-black text-amber-500/70">{pinned.length}</span>
+                            </div>
+                            {isOpen && renderItems(pinned)}
+                          </div>
+                        );
+                      })()}
                       {REGION_ORDER.map((region) => {
                         const items = unpinned.filter((c) => regionOf(c.name) === region);
                         if (items.length === 0) return null;
+                        const isOpen = q ? true : !!expandedRegions[region];
                         return (
                           <div key={region}>
-                            <h3 className="text-xs font-black text-[#768994] uppercase tracking-widest mb-2.5">{region}</h3>
-                            {renderItems(items)}
+                            <div role="button" tabIndex={0} onClick={() => toggleRegion(region)}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleRegion(region); }}
+                              className="flex items-center gap-1.5 mb-2.5 cursor-pointer select-none w-fit">
+                              <ChevronRight className={`w-3.5 h-3.5 shrink-0 text-[#768994] transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                              <h3 className="text-xs font-black text-[#768994] uppercase tracking-widest">{region}</h3>
+                              <span className="text-[10px] font-black text-[#768994]/70">{items.length}</span>
+                            </div>
+                            {isOpen && renderItems(items)}
                           </div>
                         );
                       })}
@@ -2025,6 +2385,18 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   );
                 })()}
               </section>
+
+              <div className="mt-6 space-y-6">
+                <EndOfCampaignNotesCard
+                  isOpen={expandedRegions["eocNotes"] ?? true}
+                  onToggle={() => toggleRegion("eocNotes")}
+                  campaigns={campaigns}
+                />
+                <NotesCanvasCard
+                  isOpen={expandedRegions["notesCanvas"] ?? true}
+                  onToggle={() => toggleRegion("notesCanvas")}
+                />
+              </div>
             </div>
           );
         })()}

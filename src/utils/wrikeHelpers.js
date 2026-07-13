@@ -3,8 +3,14 @@ import { TERRITORIES, REGION_ALIASES } from "../constants";
 /**
  * Attempts to guess Job, Territory, and Notes from any raw Wrike task object.
  * Returns an object with { jobNumber, territory, category, notes }.
+ *
+ * @param getJob  Optional job_number -> Job Book record lookup (from
+ *                useJobLookup). When the guessed job number is already
+ *                registered there, its film_title/client win over anything
+ *                derived from Wrike below — Job Book is admin-curated and
+ *                takes priority over a fresh folder-climb/title guess.
  */
-export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "") => {
+export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "", getJob = null) => {
   if (!linkedTask)
     return { jobNumber: "", territory: "", category: "⚠️ Unassigned", notes: "" };
 
@@ -117,9 +123,10 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "")
   // user-maintained format, whereas the projectName/path-derived filmTitle above comes from
   // fragile Wrike folder tree-climbing that can misfire (e.g. picking a sibling campaign's
   // folder). Always prefer the job-number-derived title when the job number has this format.
-  if (guessedJob && guessedJob !== "⚠️ Unassigned") {
-    const jobColonMatch = guessedJob.match(/^([^:]+)\s*:/);
-    if (jobColonMatch) filmTitle = jobColonMatch[1].trim();
+  // Split on " : " (space-colon-space) specifically, not the first bare colon — film
+  // titles can contain their own colon (e.g. "Paw Patrol: The Dino Movie : XY025793, ...").
+  if (guessedJob && guessedJob !== "⚠️ Unassigned" && guessedJob.includes(" : ")) {
+    filmTitle = guessedJob.split(" : ")[0].trim();
   }
   if (!filmTitle) filmTitle = titleText.split(/[_|-]/)[0]?.trim() || "";
   // Normalize all-caps titles (e.g. server folder names "THE ODYSSEY" → "The Odyssey")
@@ -146,6 +153,21 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "")
   if (!filmTitle || titleUpper.includes("SHOWREEL") || titleUpper.includes("INTERNAL") || titleUpper.includes("PITCH")) {
     filmTitle = filmTitle || "XYi Unbilled";
     if (!client) client = "Internal";
+  }
+
+  // Job Book override — an admin-curated record for this job number beats any
+  // guess derived above, however it was derived.
+  if (getJob && guessedJob && guessedJob !== "⚠️ Unassigned") {
+    const known = getJob(guessedJob);
+    if (known?.film_title) filmTitle = known.film_title;
+    if (known?.client) client = known.client;
+    // Upgrade a bare "XY025716" to Job Book's canonical
+    // "Film : XY025716, Description" string so pulled rows read consistently
+    // with those that carried the full string from Wrike. This also lets the
+    // caller's comma-split derive a project description it otherwise couldn't.
+    if (known?.job_number?.includes(" : ") && !guessedJob.includes(" : ")) {
+      guessedJob = known.job_number;
+    }
   }
 
   return {

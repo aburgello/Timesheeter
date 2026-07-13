@@ -20,17 +20,13 @@ export default function RecentJobsModal({
   useEffect(() => {
     if (!showRecentJobsModal || !wrikeUser?.id) return;
 
-    const token = localStorage.getItem("wrike_personal_token");
-    if (!token) return;
-
     setIsFetching(true);
-    const headers = { Authorization: `Bearer ${token}` };
     const fields = encodeURIComponent("[description,superTaskIds]");
 
     Promise.all([
-      fetch(`https://www.wrike.com/api/v4/tasks?responsibles=[${wrikeUser.id}]&status=Active&fields=${fields}&pageSize=500`, { headers }),
-      fetch(`https://www.wrike.com/api/v4/tasks?responsibles=[${wrikeUser.id}]&fields=${fields}&pageSize=1000`, { headers }),
-      fetch(`https://www.wrike.com/api/v4/workflows`, { headers }),
+      fetch(`/api/wrike/tasks?responsibles=[${wrikeUser.id}]&status=Active&fields=${fields}&pageSize=500`),
+      fetch(`/api/wrike/tasks?responsibles=[${wrikeUser.id}]&fields=${fields}&pageSize=1000`),
+      fetch(`/api/wrike/workflows`),
     ])
       .then(([aRes, cRes, wRes]) => Promise.all([aRes.json(), cRes.json(), wRes.json()]))
       .then(([aJson, cJson, wJson]) => {

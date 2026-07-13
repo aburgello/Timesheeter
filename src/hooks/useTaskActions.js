@@ -1,6 +1,8 @@
 import { DAYS_OF_WEEK } from "../constants";
 import { guessFieldsFromTask } from "../utils/wrikeHelpers";
 import { fetchExistingTimelogIds } from "../lib/supabaseClient";
+import { roundToHalfHourSeconds } from "../utils/timeHelpers";
+import { logTimeToWrike } from "../lib/wrikeApi";
 
 /**
  * All task manipulation handlers: log, delete, edit group/task/time/note,
@@ -104,11 +106,8 @@ export function useTaskActions(state) {
   // wrikeData is optional — used as a cache if already loaded, otherwise
   // we fetch only the specific task IDs that appear in today's timelogs.
   const handlePullWrikeTime = async (wrikeData) => {
-    const token = localStorage.getItem("wrike_personal_token");
-    if (!token) return triggerToast("Please enter your Wrike token in the Wrike API tab first.");
-
     const wrikeUserId = state.wrikeUser?.id;
-    if (!wrikeUserId) return triggerToast("Loading your Wrike profile — please wait a moment.");
+    if (!wrikeUserId) return triggerToast("Please connect Wrike in your Profile → Settings first.");
 
     state.setIsPullingTime(true);
 
@@ -117,14 +116,13 @@ export function useTaskActions(state) {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
-      const headers = { Authorization: `Bearer ${token}` };
       const fieldsParam = encodeURIComponent("[customFields,description]");
 
       // Fetch timelogs (contacts-scoped = same endpoint as Legacy, more reliable)
       // and active timers in parallel
       const [timelogsRes, timersRes] = await Promise.all([
-        fetch(`https://www.wrike.com/api/v4/contacts/${wrikeUserId}/timelogs`, { headers }),
-        fetch("https://www.wrike.com/api/v4/timers", { headers }),
+        fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`),
+        fetch("/api/wrike/timers"),
       ]);
 
       const logs = (await timelogsRes.json()).data || [];
@@ -149,12 +147,9 @@ export function useTaskActions(state) {
         // handleOpenWrikeModal in Legacy (batch path-param can 403/404 silently)
         await Promise.all(neededIds.map(async (taskId) => {
           try {
-            let res = await fetch(
-              `https://www.wrike.com/api/v4/tasks/${taskId}?fields=${fieldsParam}`,
-              { headers }
-            );
+            let res = await fetch(`/api/wrike/tasks/${taskId}?fields=${fieldsParam}`);
             if (!res.ok) {
-              res = await fetch(`https://www.wrike.com/api/v4/tasks/${taskId}`, { headers });
+              res = await fetch(`/api/wrike/tasks/${taskId}`);
             }
             if (res.ok) {
               const json = await res.json();
@@ -170,7 +165,9 @@ export function useTaskActions(state) {
 
       const guessFields = (taskId, commentText, fallbackTitle) => {
         // Pass comment as extraText so territory aliases (e.g. UAE) in comments are resolved
-        const guessed = guessFieldsFromTask(taskMap[taskId], jobOptions, commentText || "");
+        const guessed = guessFieldsFromTask(taskMap[taskId], jobOptions, commentText || "", state.jobLookup?.getJob);
+        // Register this job number in Job Book the first time it's seen (no-op if already known)
+        state.jobLookup?.ensureJob(guessed.jobNumber, guessed);
         return { ...guessed, notes: commentText || guessed.notes || fallbackTitle };
       };
 
@@ -192,6 +189,7 @@ export function useTaskActions(state) {
         newTasks.push({
           id: Date.now() + Math.floor(Math.random() * 1000),
           wrikeTimelogId: log.id,
+          taskId: log.taskId,
           ...fields,
           projectDescription,
           dayOfWeek: DAYS_OF_WEEK.includes(logDayName) ? logDayName : "Monday",
@@ -212,6 +210,7 @@ export function useTaskActions(state) {
         newTasks.push({
           id: Date.now() + Math.floor(Math.random() * 1000),
           wrikeTimelogId: timerUniqueId,
+          taskId: timer.taskId,
           ...fields,
           notes: `${fields.notes} [Live Wrike Timer ⏱️]`,
           dayOfWeek: DAYS_OF_WEEK.includes(logDayName) ? logDayName : "Monday",
@@ -381,8 +380,12 @@ export function useTaskActions(state) {
         consolidated[key].notesArray.push(t.notes);
       }
     });
+    // Round to nearest 0.5h at export time only — the old timesheet website
+    // only accepts half-hour values. Supabase itself stores unrounded time.
     return Object.values(consolidated).map((c) => ({
       ...c,
+      rawSeconds: roundToHalfHourSeconds(c.rawSeconds),
+      additionalSeconds: c.additionalSeconds > 0 ? roundToHalfHourSeconds(c.additionalSeconds) : 0,
       notes: c.notesArray.filter(Boolean).join(" | "),
     }));
   };
@@ -428,7 +431,7 @@ export function useTaskActions(state) {
 
   // --- Recent jobs ---
   const handleExpandRecentJob = (task) => {
-    const guessed = guessFieldsFromTask(task, jobOptions);
+    const guessed = guessFieldsFromTask(task, jobOptions, "", state.jobLookup?.getJob);
     setRecentTaskDraft({
       taskId: task.id,
       jobNumber: guessed.jobNumber !== "⚠️ Unassigned" ? guessed.jobNumber : "",
@@ -468,6 +471,9 @@ export function useTaskActions(state) {
       timeLogged: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
     addTask(newTask);
+    logTimeToWrike(recentTaskDraft.taskId, finalSeconds).then((ok) => {
+      triggerToast(ok ? "Synced to Wrike task." : "Logged locally, but Wrike sync failed.", ok ? "success" : "info");
+    });
     triggerToast(`Insta-Logged successfully to ${selectedDay}!`, "success");
     setShowReward(true);
     setTimeout(() => setShowReward(false), 1200);

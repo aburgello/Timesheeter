@@ -32,11 +32,8 @@ export function useWrikeUser(wrikeData, triggerToast) {
   const hydratedRef = useRef(null);
 
   useEffect(() => {
-    const token = localStorage.getItem("wrike_personal_token");
-    if (token && !wrikeUser) {
-      fetch("https://www.wrike.com/api/v4/contacts?me=true", {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+    if (!wrikeUser) {
+      fetch("/api/wrike/contacts?me=true")
         .then((res) => {
           if (!res.ok) throw new Error(`Wrike API error ${res.status}`);
           return res.json();
@@ -65,8 +62,6 @@ export function useWrikeUser(wrikeData, triggerToast) {
     async (silent = false) => {
       const uid = wrikeUser?.id;
       if (!uid) return;
-      const token = localStorage.getItem("wrike_personal_token");
-      if (!token) return;
       setUserStats((prev) => ({ ...prev, loading: true }));
 
       try {
@@ -75,12 +70,10 @@ export function useWrikeUser(wrikeData, triggerToast) {
         let hasMore = true;
 
         while (hasMore) {
-          let url = `https://www.wrike.com/api/v4/tasks?responsibles=[${uid}]&status=Completed&pageSize=1000`;
+          let url = `/api/wrike/tasks?responsibles=[${uid}]&status=Completed&pageSize=1000`;
           if (nextPageToken) url += `&nextPageToken=${nextPageToken}`;
 
-          const response = await fetch(url, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
+          const response = await fetch(url);
           const json = await response.json();
           rawTasks = [...rawTasks, ...(json.data || [])];
           nextPageToken = json.nextPageToken;

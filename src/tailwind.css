@@ -9,6 +9,81 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
+
+  /* Reserve the vertical scrollbar's space permanently so a page whose
+     content grows past the viewport height (Timesheets' table, Motion
+     Board's lanes load async) doesn't reflow horizontally when the
+     scrollbar appears/disappears mid-transition — that reflow was the
+     scrollbar-flash + rightward jog on entering those two pages. */
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  /* App-wide 110% zoom — everything (icons, type, padding, the rail)
+     scaled up together, matching what a real 110% browser zoom looked
+     like when compared side by side against 100%. `zoom` (not
+     `transform: scale`) so layout actually reflows at the new effective
+     size — breakpoints, fixed positioning (the rail), and hover targets
+     all behave as if the viewport were genuinely 10% smaller, rather
+     than a blurry visual scale bolted on top of an unchanged layout.
+     Supported in Chrome/Edge/Safari and Firefox 126+; degrades to no-op
+     (100%, unchanged) on anything older rather than breaking. */
+  html {
+    zoom: 1.1;
+  }
+
+  /* Home opts out — it's deliberately built to own exactly one viewport
+     with no scroll (h-dvh + overflow-hidden, see Home.jsx's own comments),
+     and the 110% zoom shrinks the effective CSS-pixel viewport enough that
+     Home's fixed-px rows no longer fit inside it, producing a scrollbar on
+     a page that's specifically designed to never have one. Toggled by
+     App.jsx whenever activePage === "home". */
+  html.home-page {
+    zoom: 1;
+  }
+}
+
+/* Thin, quiet horizontal scrollbar for content tracks (Motion Board's lanes,
+   Riccardo's Slate, the Files panel) — the default OS scrollbar is a thick
+   grey bar that reads as a UI glitch sitting under a row of cards. Firefox
+   via scrollbar-width/-color, WebKit/Chromium via the pseudo-elements. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #c6d0da transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: #c6d0da;
+  border-radius: 9999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: #97a5b1;
+}
+/* Riccardo's Slate sits on dark ink — a light-grey thumb there reads as
+   correct only against white; give it its own tone in that context. */
+.scrollbar-thin-dark {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+.scrollbar-thin-dark::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.scrollbar-thin-dark::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin-dark::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.25);
+  border-radius: 9999px;
+}
+.scrollbar-thin-dark::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.4);
 }
 
 /* Film grain over the whole viewport for depth (sits above the page background

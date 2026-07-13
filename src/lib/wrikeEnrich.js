@@ -1,4 +1,16 @@
-import { FILM_MAPPINGS, MOTION_TEAM_NAME_MAP } from "../constants.js";
+import { FILM_MAPPINGS, MOTION_TEAM_NAME_MAP, TERRITORIES, REGION_ALIASES } from "../constants.js";
+
+// Every token the territory guesser can recognise (full names + aliases like
+// AE/AUS), uppercased — used below to decide which customFields values are
+// worth keeping in the cache. Mirrors guessFieldsFromTask's own sources so
+// the cache keeps exactly what that guesser could ever match on.
+const TERRITORY_TOKENS = new Set(
+  [...TERRITORIES, ...Object.keys(REGION_ALIASES)].map((t) => String(t).toUpperCase())
+);
+
+const isTerritoryValue = (v) =>
+  v.length <= 80 &&
+  v.split(/[,/;]+/).some((tok) => TERRITORY_TOKENS.has(tok.trim().toUpperCase()));
 
 // ---------------------------------------------------------------------------
 // Parse a Wrike task's HTML description into structured fields
@@ -234,11 +246,41 @@ export function filterToMotionTeam(tasks, folderDictionary, contactDictionary) {
 // ---------------------------------------------------------------------------
 export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statusDictionary, childToParent = {}, extraMappings = {}) {
   return rawTasks.map((task) => {
-    const parsed = parseWrikeData(task.description);
+    // Only MATRIX tasks need the parsed description — that's where the tableHtml
+    // the Canvas renders lives. For every other task the derived notes/path text
+    // (notesText + extractedPathData) was ~9 MB of retained cache we barely use:
+    // project/studio names come from the folder tree below (getFilmName tree-
+    // climbs first; getStudioName never touches the description), and the
+    // job/territory guessing that DOES read the description fetches it per-task
+    // on the fly (useTaskActions / LegacyTimesheets), not from this cache. So we
+    // skip parsing and don't retain those bytes for non-MATRIX tasks. Tradeoff:
+    // global search no longer matches on notes/path text for non-MATRIX tasks,
+    // and film detection loses its description fallback (folder-tree only).
+    const isMatrix = task.title?.toUpperCase().includes("MATRIX");
+    const parsed = isMatrix
+      ? parseWrikeData(task.description)
+      : { tableHtml: "", notesText: "", extractedPathData: "" };
     delete task.description;
+
+    // Wrike returns every populated custom field (~6.5/task, 35 distinct in
+    // this account, ~9 MB of cache). Cached tasks' customFields ARE read —
+    // TaskDetailModal's fullTask and the Tracker's taskMap both come from
+    // this cache — but their reader (guessFieldsFromTask) only ever pattern-
+    // matches three things in the values: the XY job code, /Volumes server
+    // paths, and territory names/aliases. Keep exactly those three shapes
+    // (verified against the live data: the one territory-bearing field held
+    // codes like AE/AUS; everything else dropped is rates, dates, Wrike user
+    // ids, statuses and comment HTML the app never reads).
+    const customFields = Array.isArray(task.customFields)
+      ? task.customFields.filter((cf) => {
+          const v = cf?.value || "";
+          return /XY\d{5,6}/i.test(v) || v.includes("/Volumes/") || isTerritoryValue(v);
+        })
+      : task.customFields;
 
     return {
       ...task,
+      customFields,
       extractedPathData: parsed.extractedPathData,
       tableHtml: parsed.tableHtml,
       notesText: parsed.notesText,
@@ -278,7 +320,7 @@ export function buildFilmCodeMappings(enrichedTasks) {
 // ---------------------------------------------------------------------------
 // Fetch missing parent folder IDs from Wrike API (archives, etc.)
 // ---------------------------------------------------------------------------
-export async function hydrateMissingFolders(tasks, folderDictionary, token) {
+export async function hydrateMissingFolders(tasks, folderDictionary) {
   let missing = new Set();
   tasks.forEach((t) => t.parentIds?.forEach((pid) => {
     if (!folderDictionary[pid]) missing.add(pid);
@@ -292,9 +334,7 @@ export async function hydrateMissingFolders(tasks, folderDictionary, token) {
     for (let i = 0; i < ids.length; i += 50) {
       const chunk = ids.slice(i, i + 50);
       try {
-        const res = await fetch(`https://www.wrike.com/api/v4/folders/${chunk.join(",")}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch(`/api/wrike/folders/${chunk.join(",")}`);
         if (res.ok) {
           (await res.json()).data?.forEach((f) => {
             folderDictionary[f.id] = f;

@@ -1,15 +1,19 @@
 import React, {
   useState,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
+  useCallback,
 } from "react";
-import { useLegacyRows, getCurrentWeekStart } from "../hooks/useLegacyRows";
+import { useLegacyRows, getCurrentWeekStart, hmToHours } from "../hooks/useLegacyRows";
+import { roundToHalfHourSeconds } from "../utils/timeHelpers";
+import { useJobLookup } from "../hooks/useJobLookup";
 import {
   setWrikeUserId as stampWrikeUserId,
   fetchExistingTimelogIds,
 } from "../lib/supabaseClient";
+import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
+import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import {
   RefreshCw,
   XCircle,
@@ -25,6 +29,7 @@ import {
   Plus,
   Layers,
   Calendar,
+  Database,
 } from "lucide-react";
 import {
   DEFAULT_JOBS,
@@ -34,387 +39,9 @@ import {
   REGION_ALIASES,
   FILM_MAPPINGS,
 } from "../constants.js";
-
-const COLUMNS = [
-  "Job Number",
-  "Client",
-  "Film Title",
-  "Project Description",
-  "Country",
-  "Category",
-  "Client Amends",
-  "Notes",
-  "3D",
-  "Time Spent",
-  "Additional Time",
-];
-
-const DAYS = [
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-  "Sunday",
-];
-
-const TIME_OPTIONS = [
-  "none",
-  ...Array.from({ length: 48 }, (_, i) => ((i + 1) * 0.5).toString()),
-];
-
-// --- HELPER: Dark Mode Dynamic Status Tags --
-const getDarkTagStyle = (tag) => {
-  const baseStyle =
-    "text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border whitespace-nowrap inline-flex items-center justify-center shadow-sm";
-
-  if (!tag)
-    return `${baseStyle} bg-slate-800/50 text-slate-400 border-slate-700/50`;
-
-  const lowerTag = String(tag).toLowerCase();
-
-  if (lowerTag.includes("to amend"))
-    return `${baseStyle} bg-rose-500/10 text-rose-400 border-rose-500/20`;
-  if (lowerTag.includes("render review"))
-    return `${baseStyle} bg-indigo-500/10 text-indigo-400 border-indigo-500/20`;
-  if (lowerTag.includes("revised"))
-    return `${baseStyle} bg-teal-500/10 text-teal-400 border-teal-500/20`;
-  if (lowerTag.includes("creative approved"))
-    return `${baseStyle} bg-blue-500/10 text-blue-400 border-blue-500/20`;
-  if (lowerTag.includes("content approved"))
-    return `${baseStyle} bg-purple-500/10 text-purple-400 border-purple-500/20`;
-  if (lowerTag.includes("client review") || lowerTag.includes("content review"))
-    return `${baseStyle} bg-yellow-500/10 text-yellow-400 border-yellow-500/20`;
-  if (lowerTag.includes("motion"))
-    return `${baseStyle} bg-emerald-500/10 text-emerald-400 border-emerald-500/20`;
-  if (lowerTag.includes("digital"))
-    return `${baseStyle} bg-cyan-500/10 text-cyan-400 border-cyan-500/20`;
-  if (lowerTag.includes("prep for delivery"))
-    return `${baseStyle} bg-orange-500/10 text-orange-400 border-orange-500/20`;
-  if (lowerTag === "delivering" || lowerTag === "delivery")
-    return `${baseStyle} bg-amber-500/10 text-amber-400 border-amber-500/20`;
-  if (lowerTag.includes("on hold"))
-    return `${baseStyle} bg-red-500/10 text-red-400 border-red-500/20`;
-  if (lowerTag.includes("pm"))
-    return `${baseStyle} bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20`;
-  if (lowerTag.includes("completed") || lowerTag.includes("delivered"))
-    return `${baseStyle} bg-emerald-500/10 text-emerald-400 border-emerald-500/20`;
-
-  return `${baseStyle} bg-slate-800/50 text-slate-300 border-slate-700/80`;
-};
-
-// --- MODERN SEARCHABLE SELECT FOR TABLE ROWS ---
-const TableSearchableSelect = ({
-  options,
-  value,
-  onChange,
-  placeholder,
-  getPrefix,
-  isGrouped = false,
-  dropdownId,
-  activeDropdown,
-  setActiveDropdown,
-  isCountry = false,
-  isTime = false,
-  isCategory = false,
-  isJob = false,
-  disabled = false,
-  isDarkModal = false,
-}) => {
-  const isOpen = activeDropdown === dropdownId && !disabled;
-  const [searchTerm, setSearchTerm] = useState(value || "");
-  const wrapperRef = useRef(null);
-  const [fixedStyle, setFixedStyle] = useState({});
-
-  useEffect(() => {
-    setSearchTerm(value || "");
-  }, [value]);
-
-  // Compute fixed position on open so the dropdown escapes any overflow container.
-  // useLayoutEffect fires before paint so the dropdown never renders at position 0,0.
-  useLayoutEffect(() => {
-    if (!isOpen || !wrapperRef.current) return;
-    const rect = wrapperRef.current.getBoundingClientRect();
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-
-    let w = 300;
-    if (isCountry) w = Math.min(800, vw - 16);
-    else if (isCategory) w = Math.min(750, vw - 16);
-    else if (isTime) w = 160;
-
-    const rightAlign = isTime || (isCategory && !isDarkModal);
-    let left = rightAlign ? rect.right - w : rect.left;
-    left = Math.max(4, Math.min(left, vw - w - 4));
-
-    const spaceBelow = vh - rect.bottom;
-    const flipUp = spaceBelow < 220 && rect.top > spaceBelow;
-    const vertical = flipUp
-      ? { bottom: vh - rect.top + 4 }
-      : { top: rect.bottom + 4 };
-
-    setFixedStyle({
-      position: "fixed",
-      zIndex: 999999,
-      left,
-      width: w,
-      ...vertical,
-    });
-  }, [isOpen, isTime, isCountry, isCategory, isDarkModal]);
-
-  const filteredOptions = options.filter((opt) => {
-    if (searchTerm === value) return true;
-    return opt.toLowerCase().includes(searchTerm.toLowerCase());
-  });
-
-  const groupedOptions = {};
-  if (isGrouped) {
-    filteredOptions.forEach((opt) => {
-      let group = "Misc / General";
-      if (opt.includes(" : ")) group = opt.split(" : ")[0];
-      else if (opt.includes(" - ")) group = opt.split(" - ")[0];
-      else if (opt.startsWith("XYi")) group = "XYi Internal";
-
-      if (!groupedOptions[group]) groupedOptions[group] = [];
-      groupedOptions[group].push(opt);
-    });
-  }
-
-  const getDisplayLabel = (opt) => {
-    if (isJob) return opt;
-    if (isGrouped && opt.includes(" : "))
-      return opt.split(" : ").slice(1).join(" : ");
-    if (isGrouped && opt.includes(" - "))
-      return opt.split(" - ").slice(1).join(" - ");
-    return opt;
-  };
-
-  let gridClass = "grid-cols-1";
-  if (isCountry) gridClass = "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4";
-  else if (isTime) gridClass = "grid-cols-2";
-
-  return (
-    <div
-      ref={wrapperRef}
-      className={`relative w-full ${isOpen ? "z-[999999]" : "z-50"}`}
-    >
-      {isOpen && (
-        <div
-          className="fixed inset-0 z-40"
-          onMouseDown={(e) => {
-            e.stopPropagation();
-            setActiveDropdown(null);
-            onChange(searchTerm);
-          }}
-        />
-      )}
-
-      <div
-        className={`relative flex items-center border rounded-xl z-50 transition-all ${
-          disabled
-            ? "opacity-45 cursor-not-allowed bg-transparent border-transparent"
-            : isOpen
-            ? `border-[#12a0e1] ring-4 ring-[#12a0e1]/10 ${
-                isDarkModal ? "bg-[#1e2530]" : "bg-white"
-              }`
-            : `border-transparent ${
-                isDarkModal
-                  ? "hover:border-[#384252] hover:bg-[#1e2530]"
-                  : "hover:border-slate-300 hover:bg-white/50 bg-transparent"
-              }`
-        }`}
-      >
-        {getPrefix && getPrefix(searchTerm) && (
-          <span
-            className={`pl-2.5 text-sm leading-none ${
-              disabled ? "opacity-50" : ""
-            }`}
-          >
-            {getPrefix(searchTerm)}
-          </span>
-        )}
-        <input
-          type="text"
-          value={searchTerm}
-          onChange={(e) => {
-            if (disabled) return;
-            setSearchTerm(e.target.value);
-            if (!isOpen) setActiveDropdown(dropdownId);
-          }}
-          onFocus={() => {
-            if (!disabled) setActiveDropdown(dropdownId);
-          }}
-          disabled={disabled}
-          placeholder={placeholder}
-          title={searchTerm}
-          className={`w-full py-2 px-2.5 bg-transparent text-[12px] font-semibold outline-none truncate ${
-            isDarkModal
-              ? "text-slate-100 placeholder:text-slate-600"
-              : "text-slate-800 placeholder:text-slate-400"
-          } ${isCountry && !isDarkModal ? "text-[#3b5998]" : ""} ${
-            isTime ? "text-center" : ""
-          } ${disabled ? "cursor-not-allowed" : ""}`}
-        />
-        <ChevronDown
-          className={`w-3.5 h-3.5 mr-2 shrink-0 transition-transform duration-200 ${
-            isOpen ? "rotate-180" : ""
-          } ${
-            disabled
-              ? "text-slate-300"
-              : isDarkModal
-              ? "text-slate-500 hover:text-slate-400 cursor-pointer"
-              : "text-slate-400 cursor-pointer"
-          }`}
-          onClick={() =>
-            !disabled && setActiveDropdown(isOpen ? null : dropdownId)
-          }
-        />
-      </div>
-
-      {isOpen && (
-        <div
-          style={fixedStyle}
-          className={`fixed border shadow-2xl max-h-[350px] overflow-y-auto custom-scrollbar animate-in fade-in slide-in-from-top-2 duration-200 rounded-2xl ${
-            isDarkModal
-              ? "bg-[#19202b] border-[#2d3748]"
-              : "bg-white border-slate-200"
-          }`}
-        >
-          {filteredOptions.length > 0 ? (
-            isGrouped ? (
-              Object.entries(groupedOptions)
-                .sort(([groupA], [groupB]) => {
-                  const aIsMatch = value && value.includes(groupA);
-                  const bIsMatch = value && value.includes(groupB);
-                  if (aIsMatch && !bIsMatch) return -1;
-                  if (!aIsMatch && bIsMatch) return 1;
-                  return 0;
-                })
-                .map(([groupName, items]) => (
-                  <div
-                    key={groupName}
-                    className={`border-b last:border-0 ${
-                      isDarkModal ? "border-[#263143]" : "border-slate-100"
-                    }`}
-                  >
-                    <div
-                      className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest sticky top-0 z-10 flex items-center justify-between ${
-                        isDarkModal
-                          ? "bg-[#202938] text-[#4ea8de]"
-                          : "bg-slate-50 text-[#12a0e1]"
-                      }`}
-                    >
-                      <span>{groupName}</span>
-                      {value && value.includes(groupName) && (
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-[9px] font-black tracking-normal ${
-                            isDarkModal
-                              ? "bg-[#4ea8de]/20 text-[#4ea8de]"
-                              : "bg-[#12a0e1]/10 text-[#12a0e1]"
-                          }`}
-                        >
-                          ACTIVE
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      className={`grid gap-x-4 gap-y-1 p-2.5 ${
-                        isCategory
-                          ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-                          : "grid-cols-1"
-                      }`}
-                    >
-                      {items.map((opt, i) => (
-                        <button
-                          type="button"
-                          key={i}
-                          onClick={() => {
-                            setSearchTerm(opt);
-                            onChange(opt);
-                            setActiveDropdown(null);
-                          }}
-                          className={`w-full text-left px-3 py-2 text-[11px] font-semibold transition-all rounded-xl flex items-start leading-tight ${
-                            value === opt
-                              ? isDarkModal
-                                ? "bg-[#12a0e1]/20 text-white font-bold"
-                                : "bg-[#12a0e1]/10 text-[#12a0e1]"
-                              : isDarkModal
-                              ? "text-slate-300 hover:bg-[#253042] hover:text-white"
-                              : "text-slate-700 hover:bg-[#12a0e1]/10 hover:text-[#12a0e1]"
-                          }`}
-                          title={opt}
-                        >
-                          <span
-                            className={
-                              isJob
-                                ? "whitespace-normal break-words"
-                                : "truncate"
-                            }
-                          >
-                            {getDisplayLabel(opt)}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))
-            ) : (
-              <div className={`grid gap-1 p-2 ${gridClass}`}>
-                {[...filteredOptions]
-                  .sort((a, b) => {
-                    if (a === value) return -1;
-                    if (b === value) return 1;
-                    return 0;
-                  })
-                  .map((opt, i) => (
-                    <button
-                      type="button"
-                      key={i}
-                      onClick={() => {
-                        setSearchTerm(opt);
-                        onChange(opt);
-                        setActiveDropdown(null);
-                      }}
-                      className={`w-full text-left py-2 text-[11px] font-semibold transition-all rounded-xl flex items-center ${
-                        isTime
-                          ? "justify-center font-mono font-bold px-1"
-                          : "px-3 truncate"
-                      } ${
-                        value === opt
-                          ? isDarkModal
-                            ? "bg-[#12a0e1]/20 text-white font-bold"
-                            : "bg-[#12a0e1]/10 text-[#12a0e1]"
-                          : isDarkModal
-                          ? "text-slate-300 hover:bg-[#253042] hover:text-white"
-                          : "text-slate-700 hover:bg-[#12a0e1]/10 hover:text-[#12a0e1]"
-                      }`}
-                      title={opt}
-                    >
-                      {getPrefix && getPrefix(opt) && (
-                        <span className="mr-2 text-base leading-none shrink-0">
-                          {getPrefix(opt)}
-                        </span>
-                      )}
-                      <span className={isTime ? "" : "truncate"}>{opt}</span>
-                    </button>
-                  ))}
-              </div>
-            )
-          ) : (
-            <div
-              className={`px-4 py-3 text-xs italic ${
-                isDarkModal ? "text-slate-500" : "text-slate-400"
-              }`}
-            >
-              No matches found. Press enter to keep custom text.
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
+import { COLUMNS, DAYS, TIME_OPTIONS, getDarkTagStyle } from "./legacy/legacyConstants";
+import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
+import TableSearchableSelect from "./legacy/TableSearchableSelect";
 
 export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const [activeDay, setActiveDay] = useState(() => {
@@ -438,12 +65,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     localStorage.setItem("xyi_legacy_frozenDays", JSON.stringify(frozenDays));
   }, [frozenDays]);
 
-  // Auto-detect new week on mount
+  // Auto-detect new week on mount. frozenDays is keyed by weekday name only
+  // ("Monday", not "the Monday of week X"), so it has to be cleared whenever
+  // the week rolls over — otherwise a day frozen last week (e.g. to lock a
+  // submitted timesheet) stays frozen for every future occurrence of that
+  // weekday, silently blocking pulls/edits for the new week too.
   useEffect(() => {
     const current = getCurrentWeekStart();
     const stored = localStorage.getItem("xyi_last_week_start");
     if (stored && stored !== current) {
       setNewWeekBanner(true);
+      setFrozenDays({});
     }
     localStorage.setItem("xyi_last_week_start", current);
   }, []);
@@ -486,7 +118,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     addRows,
     updateRow,
     deleteRow,
+    weekStart,
   } = useLegacyRows(showToast, wrikeUserId);
+
+  // "dd/mm/yyyy" -> "yyyy-mm-dd", for comparing against weekStart (ISO)
+  const toIsoDate = (d) => {
+    const m = typeof d === "string" && d.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+  };
+  // Job Book lookup — lets guessed job/film/client be overridden by admin-curated
+  // data, and self-populates Job Book from real usage the first time a job is seen.
+  const jobLookup = useJobLookup();
   useEffect(() => {
     if (!toast.show) return;
     const t = setTimeout(
@@ -524,14 +166,26 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     rows
       .filter((r) => r.dayOfWeek === day)
       .reduce((sum, r) => {
+        // hmToHours (not parseFloat) — timeSpent may be "H:MM" (Wrike pulls,
+        // unrounded) or a decimal string (manual TIME_OPTIONS picks)
         const t =
-          r.timeSpent === "none" || !r.timeSpent ? 0 : parseFloat(r.timeSpent);
+          r.timeSpent === "none" || !r.timeSpent ? 0 : hmToHours(r.timeSpent);
         const a =
           r.additionalTime === "none" || !r.additionalTime
             ? 0
-            : parseFloat(r.additionalTime);
+            : hmToHours(r.additionalTime);
         return sum + t + a;
       }, 0);
+
+  // Formats a decimal-hours total as "H:MM" — decimal hours (e.g. "4.17h" for
+  // 4h10m) read like hundredths to a human, so display the same H:MM shape
+  // used everywhere else in the app instead.
+  const formatDayTotal = (hours) => {
+    const mins = Math.round(hours * 60);
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return `${h}:${String(m).padStart(2, "0")}`;
+  };
 
   // --- Add blank row ---
   const handleAddRow = () => {
@@ -563,11 +217,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const [isFetchingModalData, setIsFetchingModalData] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("wrike_personal_token");
-    if (token && !wrikeFullName) {
-      fetch("https://www.wrike.com/api/v4/contacts?me=true", {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+    if (!wrikeFullName) {
+      fetch("/api/wrike/contacts?me=true")
         .then((res) => res.json())
         .then((json) => {
           if (json.data && json.data.length > 0) {
@@ -589,21 +240,90 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     }
   }, [wrikeUserId]);
 
+  // Extracted out of handleSyncMyJobs's map() so the webhook patch effect
+  // below can produce an identically-shaped task from a single incoming id,
+  // not just from a full batch sync. parseWrikeDescription is defined further
+  // down this component — safe to reference here since this callback only
+  // ever runs later (on sync or on a webhook event), by which point the
+  // whole component body (and parseWrikeDescription's const binding) has
+  // already executed for this render.
+  const enrichLegacyTask = useCallback(
+    (task, statusDict) => {
+      const parsed = parseWrikeDescription(task.description);
+      let projectName = task.title.split(/[_|-]/)[0].trim();
+      if (parsed.extractedPathData) {
+        const parts = parsed.extractedPathData.split("/");
+        const digIdx = parts.findIndex((p) => p === "DIGITAL");
+        if (digIdx > 0 && parts[digIdx - 1]) {
+          projectName = decodeURIComponent(parts[digIdx - 1])
+            .replace(/[_|-]/g, " ")
+            .trim();
+        }
+      }
+      return {
+        ...task,
+        extractedPathData: parsed.extractedPathData,
+        notesText: parsed.notesText,
+        projectName,
+        customStatusName: task.customStatusId
+          ? statusDict[task.customStatusId] || task.status
+          : task.status,
+        assignees: wrikeFullName.split(" ")[0],
+        dueDate: task.dates && task.dates.due ? task.dates.due : null,
+        createdDate: task.createdDate,
+      };
+    },
+    [wrikeFullName]
+  );
+
+  // Last-built status-id → name map, reused by the webhook patch below so an
+  // incoming single-task event doesn't need to refetch /api/wrike/workflows.
+  const statusDictRef = useRef({});
+
+  // Near-instant updates: a webhook event only carries a changed task's id,
+  // so batches of ids (debounced, see wrikeWebhookSubscription.js) get
+  // refetched and merged into localWrikeTasks here — cheap, one small
+  // request per edit rather than the bulk two-query sync "Sync My Jobs" does.
+  useEffect(() => {
+    if (!wrikeUserId) return;
+    // Share fetchTasksByIds with the other webhook subscribers rather than
+    // issuing a bespoke request: it collapses all of them onto one fetch per
+    // changed task, and it degrades fields per-task on Wrike's field-visibility
+    // 400s (which this handler used to just swallow, silently dropping the
+    // edit). Its field set is a superset of what enrichLegacyTask reads.
+    const handleWebhookTaskIds = async (ids) => {
+      if (!ids.length) return;
+      const changed = await fetchTasksByIds(ids);
+      if (!changed.length) return;
+
+      setLocalWrikeTasks((prev) => {
+        const map = new Map(prev.map((t) => [t.id, t]));
+        changed.forEach((t) => {
+          if (t.responsibleIds?.includes(wrikeUserId)) {
+            map.set(t.id, enrichLegacyTask(t, statusDictRef.current));
+          } else {
+            map.delete(t.id); // reassigned away from me
+          }
+        });
+        return [...map.values()];
+      });
+    };
+
+    return subscribeToWrikeTaskEvents(handleWebhookTaskIds);
+  }, [wrikeUserId, enrichLegacyTask]);
+
   const handleSyncMyJobs = async (silent = false) => {
-    const token = localStorage.getItem("wrike_personal_token");
-    if (!token || !wrikeUserId) {
+    if (!wrikeUserId) {
       if (!silent)
         showToast(
-          "Missing Wrike token or User ID. Please check your connection."
+          "Wrike not connected. Please connect it in Profile → Settings."
         );
       return null;
     }
 
     setIsSyncingJobs(true);
     try {
-      const wfRes = await fetch("https://www.wrike.com/api/v4/workflows", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const wfRes = await fetch("/api/wrike/workflows");
       const wfJson = await wfRes.json();
       const statusDict = {};
       if (wfJson.data) {
@@ -615,6 +335,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           }
         });
       }
+      statusDictRef.current = statusDict;
 
       const fieldsFilter = encodeURIComponent(
         "[customFields,parentIds,description]"
@@ -628,12 +349,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       // QUERY 1: Fetch ALL Active Tasks
       const activeStatusFilter = encodeURIComponent('["Active"]');
       while (hasMore) {
-        let url = `https://www.wrike.com/api/v4/tasks?responsibles=${responsiblesFilter}&status=${activeStatusFilter}&fields=${fieldsFilter}&pageSize=1000`;
+        let url = `/api/wrike/tasks?responsibles=${responsiblesFilter}&status=${activeStatusFilter}&fields=${fieldsFilter}&pageSize=1000`;
         if (nextPageToken) url += `&nextPageToken=${nextPageToken}`;
 
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch(url);
         if (!res.ok) throw new Error(`Wrike API Error: ${res.status}`);
 
         const json = await res.json();
@@ -652,12 +371,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       nextPageToken = null;
       hasMore = true;
       while (hasMore) {
-        let url = `https://www.wrike.com/api/v4/tasks?responsibles=${responsiblesFilter}&status=${completedStatusFilter}&fields=${fieldsFilter}&updatedDate=${dateFilter}&pageSize=1000`;
+        let url = `/api/wrike/tasks?responsibles=${responsiblesFilter}&status=${completedStatusFilter}&fields=${fieldsFilter}&updatedDate=${dateFilter}&pageSize=1000`;
         if (nextPageToken) url += `&nextPageToken=${nextPageToken}`;
 
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch(url);
         if (!res.ok) throw new Error(`Wrike API Error: ${res.status}`);
 
         const json = await res.json();
@@ -671,31 +388,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         hasMore = !!nextPageToken;
       }
 
-      const enrichedTasks = rawTasks.map((task) => {
-        const parsed = parseWrikeDescription(task.description);
-        let projectName = task.title.split(/[_|-]/)[0].trim();
-        if (parsed.extractedPathData) {
-          const parts = parsed.extractedPathData.split("/");
-          const digIdx = parts.findIndex((p) => p === "DIGITAL");
-          if (digIdx > 0 && parts[digIdx - 1]) {
-            projectName = decodeURIComponent(parts[digIdx - 1])
-              .replace(/[_|-]/g, " ")
-              .trim();
-          }
-        }
-        return {
-          ...task,
-          extractedPathData: parsed.extractedPathData,
-          notesText: parsed.notesText,
-          projectName,
-          customStatusName: task.customStatusId
-            ? statusDict[task.customStatusId] || task.status
-            : task.status,
-          assignees: wrikeFullName.split(" ")[0],
-          dueDate: task.dates && task.dates.due ? task.dates.due : null,
-          createdDate: task.createdDate,
-        };
-      });
+      const enrichedTasks = rawTasks.map((task) => enrichLegacyTask(task, statusDict));
 
       setLocalWrikeTasks(enrichedTasks);
       return enrichedTasks;
@@ -876,7 +569,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     setIsFetchingModalData(true);
 
     try {
-      const token = localStorage.getItem("wrike_personal_token");
       const now = new Date();
 
       const toLocalDateStr = (d) =>
@@ -897,10 +589,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       );
 
       // --- STEP 1: Fetch today's timelogs (source of truth for worked-on tasks) ---
-      const timelogRes = await fetch(
-        `https://www.wrike.com/api/v4/contacts/${wrikeUserId}/timelogs`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const timelogRes = await fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`);
       const timelogJson = await timelogRes.json();
       const logs = (timelogJson.data || []).filter((l) => {
         const d = l.trackedDate?.split("T")[0];
@@ -926,16 +615,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       for (const taskId of todayLoggedTaskIds) {
         try {
           // Attempt A: full fields
-          let res = await fetch(
-            `https://www.wrike.com/api/v4/tasks/${taskId}?fields=${fieldsFilter}`,
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
+          let res = await fetch(`/api/wrike/tasks/${taskId}?fields=${fieldsFilter}`);
 
           // Attempt B: bare fetch if fields caused a 400
           if (!res.ok) {
-            res = await fetch(`https://www.wrike.com/api/v4/tasks/${taskId}`, {
-              headers: { Authorization: `Bearer ${token}` },
-            });
+            res = await fetch(`/api/wrike/tasks/${taskId}`);
           }
 
           if (res.ok) {
@@ -1007,8 +691,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         // task.projectName, which comes from fragile Wrike folder tree-climbing and can
         // misfire on shared/multi-parent folder structures.
         let filmTitle = "";
-        const jobColonMatch2 = (fields.jobNumber || "").match(/^([^:]+)\s*:/);
-        if (jobColonMatch2) filmTitle = jobColonMatch2[1].trim();
+        // Split on " : " (space-colon-space) specifically, not the first bare colon — film
+        // titles can contain their own colon (e.g. "Paw Patrol: The Dino Movie : XY025793, ...").
+        if ((fields.jobNumber || "").includes(" : ")) {
+          filmTitle = fields.jobNumber.split(" : ")[0].trim();
+        }
         if (!filmTitle) filmTitle = task?.projectName || "";
         const searchTitle = (task?.title || "").toUpperCase();
         // Check FILM_MAPPINGS — match by value against jobNumber or filmTitle
@@ -1044,6 +731,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           filmTitle = "XYi Unbilled";
           if (!client) client = "Internal";
         }
+
+        // Job Book override — an admin-curated record beats any guess above
+        const known2 = jobLookup?.getJob?.(fields.jobNumber);
+        if (known2?.film_title) filmTitle = known2.film_title;
+        if (known2?.client) client = known2.client;
+        jobLookup?.ensureJob?.(fields.jobNumber, { filmTitle, client });
 
         if (!grouped[groupName]) {
           grouped[groupName] = [];
@@ -1260,7 +953,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Fetch task details for IDs missing from the local task list (e.g. user
   // logged time then was removed as a responsible). Returns an updated copy of
   // the task array with the recovered tasks appended.
-  const fetchMissingTasks = async (currentTasks, logEntries, token) => {
+  const fetchMissingTasks = async (currentTasks, logEntries) => {
     const existingIds = new Set(currentTasks.map((t) => t.id));
     const missingIds = [...new Set(logEntries.map((l) => l.taskId))].filter(
       (id) => !existingIds.has(id)
@@ -1275,12 +968,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     for (let i = 0; i < missingIds.length; i += 100) {
       const chunk = missingIds.slice(i, i + 100);
       try {
-        const res = await fetch(
-          `https://www.wrike.com/api/v4/tasks/${chunk.join(
-            ","
-          )}?fields=${fieldsFilter}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
+        const res = await fetch(`/api/wrike/tasks/${chunk.join(",")}?fields=${fieldsFilter}`);
         const json = await res.json();
         if (json.data) {
           recovered = [...recovered, ...json.data.map(enrichWrikeTask)];
@@ -1296,13 +984,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const dismissNewWeekBanner = () => setNewWeekBanner(false);
 
   const handlePullTimes = async (dateStr = null) => {
-    const token = localStorage.getItem("wrike_personal_token");
-    if (!token) {
-      showToast("Please set your Wrike token in the API tab first.");
-      return;
-    }
     if (!wrikeUserId) {
-      showToast("Loading your Wrike profile — please wait a moment.");
+      showToast("Please connect Wrike in Profile → Settings first.");
       return;
     }
 
@@ -1319,10 +1002,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       ).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
       const targetDateStr = (typeof dateStr === "string" && dateStr) ? dateStr : todayStr;
 
-      const res = await fetch(
-        `https://www.wrike.com/api/v4/contacts/${wrikeUserId}/timelogs`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const res = await fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`);
       const json = await res.json();
       const logs = (json.data || []).filter(
         (l) => l.trackedDate?.split("T")[0] === targetDateStr
@@ -1330,11 +1010,16 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
       // Recover any tasks where the user was removed as a responsible —
       // their timelogs still exist but the task won't appear in handleSyncMyJobs
-      currentTasks = await fetchMissingTasks(currentTasks, logs, token);
+      currentTasks = await fetchMissingTasks(currentTasks, logs);
 
       // Fetch existing timelog IDs across ALL sources so we don't duplicate
-      // entries that were already pulled in Tracker (or vice versa)
-      const existingTimelogIds = await fetchExistingTimelogIds(wrikeUserId, "legacy");
+      // entries that were already pulled in Tracker (or vice versa). Passing
+      // no source is deliberate: Tracker's own pull already scans all sources,
+      // so scoping Legacy to source="legacy" here was the asymmetry that let a
+      // timelog already pulled by Tracker get re-added as a duplicate Legacy
+      // row. The helper splits comma-joined ids, so Legacy's aggregated
+      // "id1,id2,id3" rows are matched at the individual-id level too.
+      const existingTimelogIds = await fetchExistingTimelogIds(wrikeUserId);
 
       const newRows = [];
       const dayNames = [
@@ -1379,8 +1064,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           // task.projectName, which comes from fragile Wrike folder tree-climbing and can
           // misfire on shared/multi-parent folder structures.
           let filmTitle = "";
-          const jobColonMatch1 = (guessed.jobNumber || "").match(/^([^:]+)\s*:/);
-          if (jobColonMatch1) filmTitle = jobColonMatch1[1].trim();
+          // Split on " : " (space-colon-space) specifically, not the first bare colon — film
+          // titles can contain their own colon (e.g. "Paw Patrol: The Dino Movie : XY025793, ...").
+          if ((guessed.jobNumber || "").includes(" : ")) {
+            filmTitle = guessed.jobNumber.split(" : ")[0].trim();
+          }
           if (!filmTitle) filmTitle = task?.projectName || "";
           if (
             filmTitle &&
@@ -1428,6 +1116,18 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             if (!client) client = "Internal";
           }
 
+          // Job Book override — an admin-curated record beats any guess above
+          const known1 = jobLookup?.getJob?.(guessed.jobNumber);
+          if (known1?.film_title) filmTitle = known1.film_title;
+          if (known1?.client) client = known1.client;
+          // Upgrade a bare "XY025716" to Job Book's canonical
+          // "Film : XY025716, Description" string so pulled rows read
+          // consistently with those that carried the full string from Wrike.
+          if (known1?.job_number?.includes(" : ") && !(guessed.jobNumber || "").includes(" : ")) {
+            guessed.jobNumber = known1.job_number;
+          }
+          jobLookup?.ensureJob?.(guessed.jobNumber, { filmTitle, client });
+
           newRows.push({
             id: Date.now() + Math.floor(Math.random() * 1000),
             wrikeTimelogId: allIds.join(","),
@@ -1451,10 +1151,16 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
       if (newRows.length > 0) {
         addRows(newRows);
+        // The grid only shows rows from the current week (weekStart) — a
+        // debug pull for an older date saves fine but won't appear here, so
+        // say so instead of implying it's now visible in the table below.
+        const pulledBeforeThisWeek = newRows.some(
+          (r) => (toIsoDate(r.date) || "") < weekStart
+        );
         showToast(
-          `Pulled ${newRows.length} row${
-            newRows.length !== 1 ? "s" : ""
-          } from Wrike.`,
+          pulledBeforeThisWeek
+            ? `Pulled ${newRows.length} row${newRows.length !== 1 ? "s" : ""} from Wrike — from a previous week, so it won't show in this grid. Check Jobs Feed to verify.`
+            : `Pulled ${newRows.length} row${newRows.length !== 1 ? "s" : ""} from Wrike.`,
           "success"
         );
       } else {
@@ -1510,9 +1216,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       return;
     }
 
-    // Round seconds to nearest 30 min (0.5h) — timesheet website only accepts half-hours
-    const roundTo30 = (s) => s > 0 ? Math.max(1800, Math.round(s / 1800) * 1800) : 0;
-
     try {
       const mappedTasks = rows.map((row) => {
         const rawSecs = row.rawSeconds ?? 0;
@@ -1565,8 +1268,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
         return Object.values(consolidated).map((c) => ({
           ...c,
-          rawSeconds: roundTo30(c.rawSeconds),
-          additionalSeconds: c.additionalSeconds > 0 ? roundTo30(c.additionalSeconds) : 0,
+          rawSeconds: roundToHalfHourSeconds(c.rawSeconds),
+          additionalSeconds: c.additionalSeconds > 0 ? roundToHalfHourSeconds(c.additionalSeconds) : 0,
           notes: c.notesArray.filter(Boolean).join(" | "),
         }));
       };
@@ -1694,7 +1397,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   }`;
 
   return (
-    <div className="min-h-screen bg-slate-100 px-4 pt-8 pb-4 font-sans selection:bg-[#12a0e1]/30">
+    <div className="min-h-screen bg-slate-100 font-sans selection:bg-[#12a0e1]/30">
       {/* Toast */}
       {toast.show && (
         <div
@@ -2169,68 +1872,47 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         </div>
       )}
 
-      {/* New week banner */}
-      {newWeekBanner && (
-        <div className="max-w-[1600px] mx-auto mb-3 flex items-center gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-2xl shadow-sm">
-          <span className="text-lg">🗓️</span>
-          <div className="flex-1">
-            <span className="font-black text-emerald-900 text-sm">New week!</span>
-            <span className="text-emerald-800 text-sm ml-1.5">Last week's entries are hidden here but still saved — they show up in the Jobs Feed.</span>
-          </div>
-          <button
-            onClick={dismissNewWeekBanner}
-            className="px-3 py-1.5 text-emerald-700 hover:text-emerald-900 text-sm font-bold rounded-xl transition-colors"
-          >
-            Got it
-          </button>
+      {/* --- HEADER --- */}
+      <PageHeader pageId="legacy" icon={Database} title="Weekly Timesheet" subtitle={weekDateRange}>
+        <div className="flex items-center gap-2 text-[13px] text-white/85 font-medium">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          Welcome Back, {wrikeFullName ? wrikeFullName : "Loading..."}
         </div>
-      )}
+        {wrikeUserId && (
+          <button
+            onClick={() => handleSyncMyJobs()}
+            disabled={isSyncingJobs}
+            className={pageHeaderActionClass}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingJobs ? "animate-spin" : ""}`} />
+            {isSyncingJobs ? "Syncing..." : "Sync My Jobs"}
+          </button>
+        )}
+      </PageHeader>
+
+      {/* Everything below the full-bleed header gets the page's horizontal
+          gutter + top/bottom spacing — the header itself must stay outside
+          any padded container to remain edge-to-edge. */}
+      <div className="px-4 sm:px-6 pt-3 pb-4">
+        {/* New week banner */}
+        {newWeekBanner && (
+          <div className="max-w-[1800px] mx-auto mb-3 flex items-center gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-2xl shadow-sm">
+            <span className="text-lg">🗓️</span>
+            <div className="flex-1">
+              <span className="font-black text-emerald-900 text-sm">New week!</span>
+              <span className="text-emerald-800 text-sm ml-1.5">Last week's entries are hidden here but still saved — they show up in the Jobs Feed.</span>
+            </div>
+            <button
+              onClick={dismissNewWeekBanner}
+              className="px-3 py-1.5 text-emerald-700 hover:text-emerald-900 text-sm font-bold rounded-xl transition-colors"
+            >
+              Got it
+            </button>
+          </div>
+        )}
 
       {/* --- STANDARD UI --- */}
-      <div className="max-w-[1600px] mx-auto bg-white shadow-2xl rounded-2xl relative min-h-[calc(100vh-10rem)] flex flex-col border border-slate-200">
-        {/* --- MODERN HEADER --- */}
-        <div className="bg-slate-900 text-white p-6 flex justify-between items-center border-b border-slate-800 rounded-t-2xl">
-          <div>
-            <div className="flex items-center gap-4 mb-1">
-              <h1 className="text-2xl font-black tracking-tight text-white">
-                Weekly Timesheet
-              </h1>
-              <span className="text-[13px] font-bold text-slate-400 bg-slate-800 px-3 py-1 rounded-full">
-                {weekDateRange}
-              </span>
-            </div>
-            <div className="text-[13px] text-slate-300 font-medium flex items-center gap-4 mt-2">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                Welcome Back, {wrikeFullName ? wrikeFullName : "Loading..."}
-              </div>
-
-              {wrikeUserId && (
-                <button
-                  onClick={() => handleSyncMyJobs()}
-                  disabled={isSyncingJobs}
-                  className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 px-3 py-1 rounded-lg text-[11px] font-bold transition-all border border-slate-700 active:scale-95 disabled:opacity-50"
-                >
-                  <RefreshCw
-                    className={`w-3.5 h-3.5 ${
-                      isSyncingJobs ? "animate-spin text-emerald-500" : ""
-                    }`}
-                  />
-                  {isSyncingJobs ? "Syncing..." : "Sync My Jobs"}
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="text-right">
-            <img
-              src="https://timesheet.xyi.com/img/xyi_logo_banner.png"
-              alt="XYi Design"
-              className="h-10 object-contain drop-shadow-md"
-            />
-          </div>
-        </div>
-
+      <div className="max-w-[1800px] mx-auto bg-white shadow-2xl rounded-2xl relative min-h-[calc(100vh-10rem)] flex flex-col border border-slate-200">
         {/* --- MODERN TABS --- */}
         <div className="flex px-4 pt-4 bg-slate-50 border-b border-slate-200 gap-2">
           {DAYS.map((day) => {
@@ -2286,7 +1968,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           : "text-slate-400"
                       }`}
                     >
-                      {getDayTotal(day)}h
+                      {formatDayTotal(getDayTotal(day))}h
                     </span>
                   )}
                 </div>
@@ -2773,6 +2455,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             </button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

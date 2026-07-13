@@ -32,6 +32,11 @@ html.dark-theme body {
 .dark-theme .bg-rose-50,
 .dark-theme .bg-fuchsia-50 { background-color: #1e293b !important; }
 
+/* Motion Board overdue-card tint — kept distinct from plain bg-white cards
+   (a faint red-shifted slate) instead of collapsing to the same flat navy,
+   so "overdue" is still visually distinguishable in dark mode. */
+.dark-theme .bg-rose-50\/40 { background-color: #2a1e24 !important; }
+
 /* Weekday bar / nav overrides */
 .dark-theme .bg-white\/60  { background-color: rgba(30, 41, 59, 0.8) !important; }
 .dark-theme .bg-slate-100\/50 { background-color: rgba(15, 23, 42, 0.8) !important; color: #94a3b8 !important; }
@@ -81,10 +86,25 @@ html.dark-theme body {
 .dark-theme .text-indigo-600   { color: #818cf8 !important; }
 .dark-theme .hover\:text-\[\#122027\]:hover { color: #ffffff !important; }
 
+/* Motion Board task-card status text (getTagTextColorClass) — same hues as
+   the mappings above, filled in for the 500/600 shades that weren't used
+   anywhere else yet. */
+.dark-theme .text-rose-500     { color: #fb7185 !important; }
+.dark-theme .text-indigo-500   { color: #818cf8 !important; }
+.dark-theme .text-teal-600     { color: #2dd4bf !important; }
+.dark-theme .text-blue-500     { color: #60a5fa !important; }
+.dark-theme .text-purple-500   { color: #c084fc !important; }
+.dark-theme .text-yellow-600   { color: #fbbf24 !important; }
+.dark-theme .text-emerald-600  { color: #34d399 !important; }
+.dark-theme .text-orange-500   { color: #fb923c !important; }
+.dark-theme .text-red-500      { color: #f87171 !important; }
+.dark-theme .text-fuchsia-500  { color: #e879f9 !important; }
+
 /* ── BORDERS ────────────────────────────────────────────────── */
 .dark-theme .border-\[\#dce4ec\],
 .dark-theme .border-slate-100,
 .dark-theme .border-slate-200,
+.dark-theme .border-slate-200\/70,
 .dark-theme .border-slate-200\/80,
 .dark-theme .border-black\/5,
 .dark-theme .border-indigo-100 { border-color: #334155 !important; }
@@ -189,3 +209,7 @@ html.dark-theme body {
 .dark-theme .wrike-matrix-render tr:nth-child(even) { background-color: #1e293b !important; }
 .dark-theme .wrike-matrix-render tr:nth-child(odd)  { background-color: #0f172a !important; }
 .dark-theme .wrike-matrix-render tr:hover           { background-color: rgba(51,65,85,0.8) !important; }
+
+/* HOME BLOB NAV shape-morph keyframes moved to a <style> tag inside
+   Home.jsx itself — this global stylesheet wasn't hot-reloading reliably
+   during dev, while the component file consistently did. */

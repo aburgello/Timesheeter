@@ -2,13 +2,24 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "timesheeter",
   "compatibility_date": "2026-07-02",
+  "main": "worker/index.js",
   "observability": {
     "enabled": true
   },
   "assets": {
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Run the Worker before the static-assets/SPA layer for API routes.
+    // Without this, navigation requests (Sec-Fetch-Mode: navigate) to
+    // /api/wrike/oauth/* get served index.html instead of hitting the Worker,
+    // which breaks the OAuth redirect + callback.
+    "run_worker_first": ["/api/*"]
   },
   "compatibility_flags": [
     "nodejs_compat"
-  ]
+  ],
+  "vars": {
+    "WRIKE_CLIENT_ID": "EzRrr1FJ",
+    "SUPABASE_URL": "https://oozopadfrupwujsagagn.supabase.co"
+  }
 }

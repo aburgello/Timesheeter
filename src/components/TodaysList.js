@@ -1,30 +1,106 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { motion } from "framer-motion";
 import {
-  Plus,
-  X,
-  ArrowRight,
   LayoutList,
   Film,
-  RefreshCw,
-  CalendarDays,
   Paperclip,
   ChevronDown,
+  Star,
+  Sparkle,
 } from "lucide-react";
+import gsap from "gsap";
+import { useGSAP } from "@gsap/react";
 import { TERRITORY_FLAGS, MOTION_TEAM_NAME_MAP } from "../constants";
 import { supabase } from "../lib/supabaseClient";
+import { fullName as cleanFullName } from "../lib/formatName";
+import { useMotionBoardTasks } from "../hooks/useMotionBoardTasks";
+import PageHeader from "./shared/PageHeader";
 import TaskDetailModal, { FilePreviewLightbox } from "./TaskDetailModal";
+
+gsap.registerPlugin(useGSAP);
 
 const TEAM_MEMBERS = ["Antonio", "Aaron", "Jacqui", "Maria", "Nicholas", "Luke", "Turk"];
 
-const TEAM_COLORS = {
-  Antonio: { light: "bg-blue-50 text-blue-700 border-blue-100",     solid: "bg-blue-500 hover:bg-blue-600 text-white" },
-  Aaron:   { light: "bg-emerald-50 text-emerald-700 border-emerald-100", solid: "bg-emerald-500 hover:bg-emerald-600 text-white" },
-  Jacqui:  { light: "bg-pink-50 text-pink-700 border-pink-100",     solid: "bg-pink-500 hover:bg-pink-600 text-white" },
-  Maria:   { light: "bg-yellow-50 text-yellow-800 border-yellow-100", solid: "bg-yellow-500 hover:bg-yellow-600 text-yellow-900" },
-  Nicholas:{ light: "bg-purple-50 text-purple-700 border-purple-100", solid: "bg-purple-500 hover:bg-purple-600 text-white" },
-  Luke:    { light: "bg-orange-50 text-orange-700 border-orange-100", solid: "bg-orange-500 hover:bg-orange-600 text-white" },
-  Turk:    { light: "bg-cyan-50 text-cyan-700 border-cyan-100",     solid: "bg-cyan-500 hover:bg-cyan-600 text-white" },
+// Each artist owns a lane ("track") and an identity gradient — the same
+// colour-as-identity system Home's rows use for pages, applied to people.
+// Gradients are tuned so white display-size type holds ≥3:1 on the left
+// edge; any lane whose gradient can't carry white flips to dark ink
+// (ink: "dark") — the same rule Home applies to its amber row.
+const MEMBER_LANES = {
+  Antonio: { gradient: "from-blue-500 to-indigo-600",   ink: "light", dot: "bg-blue-500" },
+  Aaron:   { gradient: "from-purple-500 to-violet-600", ink: "light", dot: "bg-purple-500" },
+  Jacqui:  { gradient: "from-fuchsia-500 to-pink-600",  ink: "light", dot: "bg-fuchsia-500" },
+  Maria:   { gradient: "from-emerald-600 to-teal-600",  ink: "light", dot: "bg-emerald-600" },
+  Nicholas:{ gradient: "from-cyan-600 to-sky-600",      ink: "light", dot: "bg-cyan-600" },
+  Luke:    { gradient: "from-orange-600 to-red-600",    ink: "light", dot: "bg-orange-600" },
+  Turk:    { gradient: "from-red-600 to-rose-600",      ink: "light", dot: "bg-red-600" },
 };
+
+// Palette for department boards whose roster comes from profiles (Print and
+// any future department) — assigned by lane index. Reuses the Motion lanes'
+// tuned gradients + the same white/dark ink contrast rule.
+const LANE_PALETTE = [
+  { gradient: "from-blue-500 to-indigo-600",    ink: "light", dot: "bg-blue-500" },
+  { gradient: "from-emerald-600 to-teal-600",   ink: "light", dot: "bg-emerald-600" },
+  { gradient: "from-pink-600 to-rose-600",      ink: "light", dot: "bg-pink-600" },
+  { gradient: "from-amber-300 to-yellow-400",   ink: "dark",  dot: "bg-amber-400" },
+  { gradient: "from-purple-500 to-violet-600",  ink: "light", dot: "bg-purple-500" },
+  { gradient: "from-orange-600 to-red-600",     ink: "light", dot: "bg-orange-600" },
+  { gradient: "from-cyan-600 to-sky-600",       ink: "light", dot: "bg-cyan-600" },
+  { gradient: "from-fuchsia-600 to-pink-600",   ink: "light", dot: "bg-fuchsia-600" },
+  { gradient: "from-lime-400 to-green-500",     ink: "dark",  dot: "bg-lime-500" },
+  { gradient: "from-slate-500 to-slate-700",    ink: "light", dot: "bg-slate-500" },
+];
+
+// Derive a board team from profiles tagged with `department` (Print, and any
+// department that later gets its own board). Members, lane colours, the
+// Wrike-id→member map (for id-based task assignment) and the id list for the
+// task fetch all come straight from the profiles rows. Disabled → empty, so
+// the Motion board (which passes enabled=false) never triggers the query.
+function useDepartmentTeam(department, enabled) {
+  const empty = { members: [], lanes: {}, wrikeIdToMember: {}, teamWrikeIds: [] };
+  const [team, setTeam] = useState({ ...empty, loading: enabled });
+
+  useEffect(() => {
+    if (!enabled) { setTeam({ ...empty, loading: false }); return; }
+    let cancelled = false;
+    setTeam((t) => ({ ...t, loading: true }));
+    supabase
+      .from("profiles")
+      .select("wrike_user_id, first_name, last_name")
+      .eq("department", department)
+      .order("first_name")
+      .then(({ data }) => {
+        if (cancelled) return;
+        const rows = (data || []).filter((p) => p.wrike_user_id);
+        const members = [], lanes = {}, wrikeIdToMember = {}, teamWrikeIds = [];
+        const seen = new Set();
+        rows.forEach((p, i) => {
+          const base = cleanFullName(p.first_name, p.last_name, p.wrike_user_id);
+          // Keep lane keys unique even if two people share a display name.
+          let label = base, n = 2;
+          while (seen.has(label)) label = `${base} (${n++})`;
+          seen.add(label);
+          members.push(label);
+          lanes[label] = LANE_PALETTE[i % LANE_PALETTE.length];
+          wrikeIdToMember[p.wrike_user_id] = label;
+          teamWrikeIds.push(p.wrike_user_id);
+        });
+        setTeam({ members, lanes, wrikeIdToMember, teamWrikeIds, loading: false });
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [department, enabled]);
+
+  return team;
+}
+
+// Play the full lane entrance once per app session; later visits get the
+// shortened rise — same pacing contract as Home's menu.
+let boardEntrancePlayed = false;
+
+const prefersReducedMotion = () =>
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const INITIAL_CAMPAIGNS = [];
 
@@ -91,6 +167,47 @@ const getBorderColorClass = (tag) => {
   if (t.includes("on hold"))           return "border-l-red-400";
   if (t.includes("pm"))                return "border-l-fuchsia-400";
   return "border-l-transparent";
+};
+
+// Same hue as getBorderColorClass, as text — lets the status word in the
+// card's meta line carry the accent instead of a full chip.
+const getTagTextColorClass = (tag) => {
+  if (!tag) return "text-slate-400";
+  const t = String(tag).toLowerCase();
+  if (t.includes("to amend"))          return "text-rose-500";
+  if (t.includes("render review"))     return "text-indigo-500";
+  if (t.includes("revised"))           return "text-teal-600";
+  if (t.includes("creative approved")) return "text-blue-500";
+  if (t.includes("content approved"))  return "text-purple-500";
+  if (t.includes("client review") || t.includes("content review")) return "text-yellow-600";
+  if (t.includes("motion"))            return "text-emerald-600";
+  if (t.includes("digital"))           return "text-cyan-600";
+  if (t.includes("prep for delivery")) return "text-orange-500";
+  if (t === "delivering" || t === "delivery") return "text-yellow-700";
+  if (t.includes("on hold"))           return "text-red-500";
+  if (t.includes("pm"))                return "text-fuchsia-500";
+  return "text-slate-500";
+};
+
+// Status as a small dot — used on the dark slate where the light chip
+// palette of getTagStyle would not survive. Same semantic hues as
+// getBorderColorClass (literal classes so Tailwind's scanner sees them).
+const getStatusDotClass = (tag) => {
+  if (!tag) return "bg-slate-400";
+  const t = String(tag).toLowerCase();
+  if (t.includes("to amend"))          return "bg-rose-400";
+  if (t.includes("render review"))     return "bg-indigo-400";
+  if (t.includes("revised"))           return "bg-teal-400";
+  if (t.includes("creative approved")) return "bg-blue-400";
+  if (t.includes("content approved"))  return "bg-purple-400";
+  if (t.includes("client review") || t.includes("content review")) return "bg-yellow-400";
+  if (t.includes("motion"))            return "bg-emerald-400";
+  if (t.includes("digital"))           return "bg-cyan-400";
+  if (t.includes("prep for delivery")) return "bg-orange-400";
+  if (t === "delivering" || t === "delivery") return "bg-yellow-500";
+  if (t.includes("on hold"))           return "bg-red-400";
+  if (t.includes("pm"))                return "bg-fuchsia-400";
+  return "bg-slate-400";
 };
 
 const sortTasksByStatus = (tasks) => {
@@ -164,17 +281,15 @@ function AttachmentThumb({ attachment, large = false, onPreview }) {
 
   // The /tasks/{id}/attachments objects don't carry a usable `url`; build the
   // documented download endpoint from the attachment id instead.
-  const downloadUrl = `https://www.wrike.com/api/v4/attachments/${attachment.id}/download`;
+  const downloadUrl = `/api/wrike/attachments/${attachment.id}/download`;
 
   const handleOpen = async (e) => {
     e.preventDefault();
     e.stopPropagation();
     if (loading) return;
-    const token = localStorage.getItem("wrike_personal_token");
-    if (!token) return;
     setLoading(true);
     try {
-      const res = await fetch(downloadUrl, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(downloadUrl);
       if (!res.ok) throw new Error("HTTP " + res.status);
       const raw = await res.blob();
       // Re-type the blob so the browser knows how to render it
@@ -208,19 +323,100 @@ function AttachmentThumb({ attachment, large = false, onPreview }) {
   );
 }
 
-export default function TodaysList({ wrikeData, triggerToast: _triggerToast, lastSynced, isSyncing: isGlobalSyncing }) {
+export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isActive = true, department }) {
   const triggerToast = _triggerToast ?? ((msg) => console.warn("Toast:", msg));
+
+  // Every non-Motion department (Print, AM, Digital, ...) drives the board
+  // off its own profiles-tagged roster; Motion keeps its hardcoded team +
+  // Riccardo slate exactly as before. `board` is the single config the rest
+  // of the component reads — members, lane colours, how tasks map to people,
+  // and the slate.
+  const usesDeptRoster = !!department && department !== "Motion";
+  const deptTeam = useDepartmentTeam(department, usesDeptRoster);
+  const board = useMemo(() => (
+    usesDeptRoster
+      ? {
+          members: deptTeam.members,
+          lanes: deptTeam.lanes,
+          subtitle: `${department} Tasks Allocation`,
+          matchBy: "id",
+          wrikeIdToMember: deptTeam.wrikeIdToMember,
+          slateLead: null,
+          slateName: null,
+        }
+      : {
+          members: TEAM_MEMBERS,
+          lanes: MEMBER_LANES,
+          subtitle: "Motioners Tasks Allocation",
+          matchBy: "name",
+          nameMap: MOTION_TEAM_NAME_MAP,
+          slateLead: "Riccardo",
+          slateName: "Riccardo's Slate",
+        }
+  ), [usesDeptRoster, department, deptTeam]);
+
+  // Each non-Motion department scopes its board state cache under its own
+  // key so saved assignments never collide across departments or with
+  // Motion's.
+  const storageKey = usesDeptRoster
+    ? `${department.toLowerCase()}_board_state_v1`
+    : "motion_board_state_v1";
+
+  // Motion resolves its team internally (undefined); every other department
+  // feeds its roster's Wrike ids so the fetch only pulls that team's tasks.
+  const { boardTasks } = useMotionBoardTasks(usesDeptRoster ? deptTeam.teamWrikeIds : undefined);
+  const boardRef = useRef(null);
+  const wasActiveRef = useRef(false);
 
   const [campaigns, setCampaigns] = useState(INITIAL_CAMPAIGNS);
   const [assignments, setAssignments] = useState(
     TEAM_MEMBERS.reduce((acc, name) => ({ ...acc, [name]: [] }), {})
   );
-  const [activeTaskId, setActiveTaskId] = useState(null);
   const [timeframe, setTimeframe] = useState("Today");
-  const [isSyncing, setIsSyncing] = useState(false);
   const [focusedPerson, setFocusedPerson] = useState(null);
-  const [lastSaved, setLastSaved] = useState(null);
   const saveTimeout = useRef(null);
+
+  // --- Jacqui/Maria lane-cap hover flourish: stars + glitter, re-rolled
+  // fresh on every hover rather than a single fixed layout. A bump counter
+  // per person (rather than storing the particle arrays directly) keeps the
+  // random draw itself inside the memo below, deterministic per render.
+  const GLITTER_PEOPLE = ["Jacqui", "Maria"];
+  const [glitterNonce, setGlitterNonce] = useState({ Jacqui: 0, Maria: 0 });
+  const rollGlitter = (person) => {
+    if (!GLITTER_PEOPLE.includes(person)) return;
+    setGlitterNonce((n) => ({ ...n, [person]: n[person] + 1 }));
+  };
+  const glitterParticles = useMemo(() => {
+    // Small seeded PRNG (mulberry32) — deterministic per (person, nonce) pair
+    // so a re-render mid-hover doesn't reshuffle particles under the cursor.
+    const mulberry32 = (seed) => () => {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+      t = (t + Math.imul(t ^ (t >>> 7), t | 61)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const build = (baseSeed) => {
+      const next = mulberry32(baseSeed);
+      const particle = (kind) => ({
+        kind,
+        left: `${Math.round(next() * 94) + 2}%`,
+        size: kind === "star" ? 7 + Math.round(next() * 8) : 4 + Math.round(next() * 5),
+        delay: Math.round(next() * 500),
+        duration: kind === "star" ? 900 + Math.round(next() * 700) : 700 + Math.round(next() * 600),
+        drift: Math.round((next() - 0.5) * 40),
+        rotMid: Math.round(next() * 90 - 20),
+        rotEnd: Math.round(next() * 260 + 60),
+        hue: Math.round(next() * 360),
+      });
+      const stars = Array.from({ length: 5 + Math.floor(next() * 3) }, () => particle("star"));
+      const glitter = Array.from({ length: 7 + Math.floor(next() * 5) }, () => particle("glitter"));
+      return [...stars, ...glitter];
+    };
+    return {
+      Jacqui: build(1000 + glitterNonce.Jacqui * 977),
+      Maria: build(5000 + glitterNonce.Maria * 977),
+    };
+  }, [glitterNonce]);
 
   const [taskAttachments, setTaskAttachments] = useState({});
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
@@ -238,28 +434,89 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
 
   const TIMEFRAMES = ["Today", "Tomorrow", "Next Week"];
 
+  // ── Entrance choreography ─────────────────────────────────────────────────
+  // The board stays mounted while hidden, so the entrance runs when the tab
+  // becomes active rather than on mount. Same vocabulary as Home: lane-cap
+  // names masked-rise inside their overflow-hidden caps (no opacity on type),
+  // cards drift up with a light fade. Full ceremony once per session, the
+  // shortened rise on every visit after. Also replays (lane + card layer
+  // only, not the outer page fade) whenever the timeframe filter changes,
+  // since that swaps out the board's contents same as a fresh activation
+  // would.
+  useGSAP(
+    () => {
+      if (!isActive || prefersReducedMotion()) {
+        wasActiveRef.current = isActive;
+        return;
+      }
+      const q = gsap.utils.selector(boardRef);
+      const rises = q("[data-lane-rise]");
+      const cards = q("[data-card-rise]");
+      if (!rises.length) { wasActiveRef.current = isActive; return; }
+
+      const justActivated = !wasActiveRef.current;
+      wasActiveRef.current = true;
+
+      const first = !boardEntrancePlayed;
+      boardEntrancePlayed = true;
+
+      const tl = gsap.timeline();
+
+      // The board stays mounted across nav (see App.jsx) instead of going
+      // through the other pages' AnimatePresence/PAGE_VARIANTS swap, so it
+      // never got their y:12->0 fade-up on the outer container — it just
+      // popped in via the display:none/block toggle. Replicate that same
+      // page-swap motion here, only on a real tab activation (not on a
+      // timeframe switch, where the page is already sitting in view).
+      if (justActivated) {
+        gsap.set(boardRef.current, { y: 12, opacity: 0 });
+        tl.to(boardRef.current, { y: 0, opacity: 1, duration: 0.25, ease: "power2.out" }, 0);
+      }
+
+      // Cards scatter in — random landing offset + rotation per card — rather
+      // than a uniform y-drift in DOM order, so the kanban chips and lane
+      // cards read as settling into place instead of marching in one by one.
+      gsap.set(cards, {
+        x: () => gsap.utils.random(-16, 16),
+        y: () => gsap.utils.random(-10, 24),
+        rotation: () => gsap.utils.random(-4, 4),
+        opacity: 0,
+      });
+      tl
+        .set(rises, { yPercent: first ? 120 : 45 }, 0)
+        .to(rises, {
+          yPercent: 0,
+          duration: first ? 0.7 : 0.35,
+          ease: "expo.out",
+          stagger: first ? 0.05 : 0.02,
+        }, 0.05)
+        // Position and opacity run on separate eases so the card doesn't
+        // read fully-visible-but-still-sliding: power3.out front-loads the
+        // landing motion, while opacity ramps in on power1.in — slow at
+        // first, catching up to finish alongside the settle instead of
+        // racing ahead of it.
+        .to(cards, {
+          x: 0,
+          y: 0,
+          rotation: 0,
+          duration: 0.45,
+          ease: "power3.out",
+          stagger: 0.015,
+        }, 0.05)
+        .to(cards, {
+          opacity: 1,
+          duration: 0.45,
+          ease: "power1.in",
+          stagger: 0.015,
+        }, 0.05);
+    },
+    { dependencies: [isActive, timeframe], scope: boardRef }
+  );
+
   // ── Board persistence ─────────────────────────────────────────────────────
   // Load saved board state from Supabase on mount
   useEffect(() => {
-    supabase.from("canvas_pinned_campaigns")
-      .select("campaign_id, pinned_at")
-      .order("pinned_at", { ascending: true })
-      .then(({ data }) => {
-        if (!data || data.length === 0) return;
-        const key = "motion_board_state_v1";
-        const local = localStorage.getItem(key);
-        if (local) {
-          try {
-            const parsed = JSON.parse(local);
-            if (parsed.campaigns) setCampaigns(parsed.campaigns);
-            if (parsed.assignments) setAssignments(parsed.assignments);
-            if (parsed.timeframe) setTimeframe(parsed.timeframe);
-          } catch (e) { /* ignore parse errors */ }
-        }
-      });
-    // Also try localStorage directly as fast path
-    const key = "motion_board_state_v1";
-    const local = localStorage.getItem(key);
+    const local = localStorage.getItem(storageKey);
     if (local) {
       try {
         const parsed = JSON.parse(local);
@@ -268,18 +525,17 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
         if (parsed.timeframe) setTimeframe(parsed.timeframe);
       } catch (e) { /* ignore */ }
     }
-  }, []);
+  }, [storageKey]);
 
   // Fetch attachments for all tasks currently on the board.
   // Scoped to assigned tasks (~30) so we can fire one request per task without
   // worrying about rate limits — no reliance on unreliable hasAttachments field.
   useEffect(() => {
-    const token = localStorage.getItem("wrike_personal_token");
-    if (!token) return;
+    if (!localStorage.getItem("wrike_user_id")) return;
 
-    const boardTasks = Object.values(assignments).flat();
+    const assignedTasks = Object.values(assignments).flat();
     const seen = new Set();
-    const unique = boardTasks.filter(t => {
+    const unique = assignedTasks.filter(t => {
       if (seen.has(t.id)) return false;
       seen.add(t.id);
       return true;
@@ -290,14 +546,12 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
     setAttachmentsLoading(true);
     Promise.all(
       unique.map(boardTask => {
-        const fullTask = wrikeData?.find(t => t.id === boardTask.id) || boardTask;
-        return fetch(
-          `https://www.wrike.com/api/v4/tasks/${boardTask.id}/attachments`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        )
+        return fetch(`/api/wrike/tasks/${boardTask.id}/attachments`)
           .then(r => r.json())
-          .then(data => ({ task: fullTask, attachments: data.data || [] }))
-          .catch(() => ({ task: fullTask, attachments: [] }));
+          // Only PDFs matter here (delivery specs) — images/docs/etc. are
+          // dropped before they ever reach state or render a thumbnail.
+          .then(data => ({ task: boardTask, attachments: (data.data || []).filter(a => attachmentKind(a) === "pdf") }))
+          .catch(() => ({ task: boardTask, attachments: [] }));
       })
     ).then(results => {
       const map = {};
@@ -307,110 +561,23 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
       setTaskAttachments(map);
       setAttachmentsLoading(false);
     });
-  }, [assignments, wrikeData]);
+  }, [assignments]);
 
   // Debounced save whenever board state changes
   const saveBoardState = (newCampaigns, newAssignments, newTimeframe) => {
     const state = { campaigns: newCampaigns, assignments: newAssignments, timeframe: newTimeframe, savedAt: new Date().toISOString() };
-    localStorage.setItem("motion_board_state_v1", JSON.stringify(state));
-    setLastSaved(new Date());
+    localStorage.setItem(storageKey, JSON.stringify(state));
     // Clear pending save
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
   };
 
-  const handleAssign = (campaignId, taskId, personName) => {
-    let taskToMove;
-    const newCampaigns = campaigns.map((camp) => {
-      if (camp.id === campaignId) {
-        taskToMove = camp.subtasks.find((t) => t.id === taskId);
-        return { ...camp, subtasks: camp.subtasks.filter((t) => t.id !== taskId) };
-      }
-      return camp;
-    });
-    if (!taskToMove) return;
-    const campaignName = campaigns.find((c) => c.id === campaignId)?.name || "";
-    const newAssignments = { ...assignments, [personName]: sortTasksByStatus([...assignments[personName], { ...taskToMove, campaignId, campaignName }]) };
-    setCampaigns(newCampaigns);
-    setAssignments(newAssignments);
-    setActiveTaskId(null);
-    saveBoardState(newCampaigns, newAssignments, timeframe);
-  };
-
-  const handleUnassign = (taskId, personName, campaignId) => {
-    const taskToMove = assignments[personName].find((t) => t.id === taskId);
-    if (!taskToMove) return;
-    const newAssignments = { ...assignments, [personName]: assignments[personName].filter((t) => t.id !== taskId) };
-    const subtaskToReturn = { id: taskToMove.id, title: taskToMove.title, tag: taskToMove.tag, customStatusId: taskToMove.customStatusId, permalink: taskToMove.permalink };
-    const exists = campaigns.find((c) => c.id === campaignId);
-    const newCampaigns = exists
-      ? campaigns.map((camp) => camp.id === campaignId ? { ...camp, subtasks: [...camp.subtasks, subtaskToReturn] } : camp)
-      : [...campaigns, { id: campaignId, name: taskToMove.campaignName, subtasks: [subtaskToReturn] }];
-    setAssignments(newAssignments);
-    setCampaigns(newCampaigns);
-    saveBoardState(newCampaigns, newAssignments, timeframe);
-  };
-
-  const handleLiteSync = async () => {
-    const token = localStorage.getItem("wrike_personal_token");
-    if (!token) { triggerToast("No Wrike token found."); return; }
-    let taskIds = [];
-    campaigns.forEach((camp) => camp.subtasks.forEach((t) => {
-      if (t.id && !String(t.id).startsWith("task-")) taskIds.push(t.id);
-    }));
-    Object.values(assignments).forEach((list) => list.forEach((t) => {
-      if (t.id && !String(t.id).startsWith("task-")) taskIds.push(t.id);
-    }));
-    if (taskIds.length === 0) { triggerToast("No Wrike tasks on the board to sync."); return; }
-    setIsSyncing(true);
-    try {
-      const chunks = [];
-      for (let i = 0; i < taskIds.length; i += 100) chunks.push(taskIds.slice(i, i + 100));
-      let fresh = [];
-      for (const chunk of chunks) {
-        const res = await fetch(`https://www.wrike.com/api/v4/tasks/${chunk.join(",")}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const json = await res.json();
-        if (json.data) fresh = [...fresh, ...json.data];
-      }
-      const getStatus = (customStatusId, fallback) => {
-        if (!customStatusId) return fallback;
-        const match = wrikeData?.find((t) => t.customStatusId === customStatusId);
-        return match?.customStatusName || fallback;
-      };
-      setCampaigns((prev) =>
-        prev.map((camp) => ({
-          ...camp,
-          subtasks: camp.subtasks.map((task) => {
-            const fw = fresh.find((w) => w.id === task.id);
-            return fw ? { ...task, tag: getStatus(fw.customStatusId, fw.status), customStatusId: fw.customStatusId } : task;
-          }),
-        }))
-      );
-      setAssignments((prev) => {
-        const next = {};
-        for (const [person, tasks] of Object.entries(prev)) {
-          next[person] = tasks.map((task) => {
-            const fw = fresh.find((w) => w.id === task.id);
-            return fw ? { ...task, tag: getStatus(fw.customStatusId, fw.status), customStatusId: fw.customStatusId } : task;
-          });
-        }
-        return next;
-      });
-      triggerToast("Board synced with live Wrike statuses!", "success");
-    } catch (err) {
-      triggerToast("Lite Sync failed: " + err.message);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const handleAutoAssign = (targetTimeframe = timeframe) => {
-    if (!wrikeData || wrikeData.length === 0) {
-      triggerToast("No Wrike data available. Fetch data first.");
+    if (!boardTasks || boardTasks.length === 0) {
+      triggerToast("No Wrike data available yet.");
       return;
     }
-    const freshAssignments = TEAM_MEMBERS.reduce((acc, name) => ({ ...acc, [name]: [] }), {});
+    const freshAssignments = board.members.reduce((acc, name) => ({ ...acc, [name]: [] }), {});
     const freshBacklog = {};
     const now = new Date(); now.setHours(0, 0, 0, 0);
     let minDate, maxDate;
@@ -421,17 +588,46 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
       minDate = new Date(now); minDate.setDate(now.getDate() + 1);
       maxDate = new Date(minDate); maxDate.setHours(23, 59, 59, 999);
     } else {
-      minDate = new Date(now); minDate.setDate(now.getDate() + 2);
-      maxDate = new Date(now); maxDate.setDate(now.getDate() + 8); maxDate.setHours(23, 59, 59, 999);
+      // Snap to the actual next Mon–Fri work week (matching the Timesheeter
+      // tab's own Mon–Fri convention), not a rolling 7-day window — a fixed
+      // +2..+8 offset drifts off the real calendar week depending on which
+      // weekday "today" is, sometimes grabbing days still in *this* week
+      // and cutting off days that are genuinely part of next week.
+      const dayOfWeek = now.getDay(); // 0 = Sunday .. 6 = Saturday
+      const daysUntilNextMonday = ((8 - dayOfWeek) % 7) || 7;
+      minDate = new Date(now); minDate.setDate(now.getDate() + daysUntilNextMonday);
+      maxDate = new Date(minDate); maxDate.setDate(minDate.getDate() + 4); maxDate.setHours(23, 59, 59, 999);
     }
-    wrikeData.forEach((task) => {
+    boardTasks.forEach((task) => {
       if (task.status !== "Active") return;
       if (!task.dueDate || task.dueDate === "No Due Date") return;
       const taskDate = new Date(task.dueDate);
       if (isNaN(taskDate.getTime()) || taskDate < minDate || taskDate > maxDate) return;
       const wrikeLink = task.permalink || `https://www.wrike.com/open.htm?id=${task.id}`;
+      const card = {
+        id: task.id, title: task.title,
+        campaignId: task.parentIds?.[0] || "unknown",
+        campaignName: task.projectName || "Wrike Import",
+        tag: task.customStatusName || "Wrike",
+        customStatusId: task.customStatusId,
+        permalink: wrikeLink,
+        dueDate: task.dueDate || null,
+      };
+
+      if (board.matchBy === "id") {
+        // Print (profiles-derived): assign by Wrike responsibleId → member,
+        // no slate. responsibleIds survive enrichment via the task spread.
+        const targets = [...new Set((task.responsibleIds || []).map((id) => board.wrikeIdToMember[id]).filter(Boolean))];
+        targets.forEach((boardName) => {
+          if (freshAssignments[boardName]) freshAssignments[boardName].push(card);
+        });
+        return;
+      }
+
+      // Motion (name-based): the lead's tasks form the slate, everyone else's
+      // land in their lane via the hardcoded name map.
       if (!task.assignees) return;
-      if (task.assignees.includes("Riccardo")) {
+      if (board.slateLead && task.assignees.includes(board.slateLead)) {
         const campId = task.parentIds?.[0] || "camp-misc";
         const campName = task.projectName || "Misc / Uncategorized";
         if (!freshBacklog[campId]) freshBacklog[campId] = { id: campId, name: campName, subtasks: [] };
@@ -442,20 +638,10 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
           permalink: wrikeLink,
         });
       } else {
-        Object.keys(MOTION_TEAM_NAME_MAP).forEach((wrikeName) => {
+        Object.keys(board.nameMap).forEach((wrikeName) => {
           if (task.assignees.includes(wrikeName)) {
-            const boardName = MOTION_TEAM_NAME_MAP[wrikeName];
-            if (freshAssignments[boardName]) {
-              freshAssignments[boardName].push({
-                id: task.id, title: task.title,
-                campaignId: task.parentIds?.[0] || "unknown",
-                campaignName: task.projectName || "Wrike Import",
-                tag: task.customStatusName || "Wrike",
-                customStatusId: task.customStatusId,
-                permalink: wrikeLink,
-                dueDate: task.dueDate || null,
-              });
-            }
+            const boardName = board.nameMap[wrikeName];
+            if (freshAssignments[boardName]) freshAssignments[boardName].push(card);
           }
         });
       }
@@ -467,177 +653,123 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
     saveBoardState(freshCampaigns, freshAssignments, targetTimeframe);
   };
 
+  // Rebuild the board from scratch whenever boardTasks gets a new reference —
+  // the initial narrow fetch on mount, or a webhook-triggered update
+  // (useMotionBoardTasks.js). No periodic polling involved on either side.
+  useEffect(() => {
+    if (!boardTasks || boardTasks.length === 0) return;
+    handleAutoAssign(timeframe);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boardTasks]);
+
   // Stats
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const isOverdue = (d) => d && d !== "No Due Date" && new Date(d) < today;
   const allAssigned = Object.values(assignments).flat();
+  const backlogCount = campaigns.reduce((s, c) => s + c.subtasks.length, 0);
+  const motionCount = allAssigned.filter((t) => (t.tag || "").toLowerCase().includes("motion")).length;
   const overdueCount = allAssigned.filter((t) => isOverdue(t.dueDate)).length;
-  const statusCounts = allAssigned.reduce((acc, t) => {
-    const k = t.tag || "Unknown"; acc[k] = (acc[k] || 0) + 1; return acc;
-  }, {});
-  const topStatuses = Object.entries(statusCounts).sort((a, b) => b[1] - a[1]).slice(0, 4);
 
   return (
-    <div className="min-h-screen bg-slate-100 text-[#122027] font-sans selection:bg-[#12a0e1]/30 selection:text-[#122027]">
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8">
-
-        {/* Header */}
-        <header className="bg-white shadow-sm border border-[#dce4ec] rounded-[2rem] p-6 sm:px-8 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-5 relative overflow-hidden">
-          <div className="flex items-center gap-4">
-            <div className="bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] p-3.5 rounded-2xl text-white shadow-lg shadow-[#12a0e1]/20">
-              <CalendarDays className="w-8 h-8" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-black text-[#122027] tracking-tight">{timeframe}'s List</h1>
-              <p className="text-[#768994] text-sm font-medium mt-0.5">Motioners Tasks Allocation</p>
-            </div>
+    <div ref={boardRef} className="min-h-screen bg-slate-100 text-[#122027] font-sans selection:bg-[#12a0e1]/30 selection:text-[#122027]">
+      <PageHeader pageId="todayslist" icon={LayoutList} title={`${timeframe}'s List`} subtitle={board.subtitle}>
+        {/* The day's summary lives in the header, like a call sheet's totals —
+            white figures on the page gradient instead of a floating card row */}
+        <div className="flex items-center gap-6 mr-2">
+          <div className="text-right">
+            <div className="font-display text-2xl font-bold text-white leading-none">{allAssigned.length}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/70">on the board</div>
           </div>
-          <div className="flex flex-col lg:flex-row gap-4 lg:items-center w-full xl:w-auto">
-            <div className="flex bg-slate-100/50 p-1.5 rounded-xl border border-[#dce4ec]">
-              {TIMEFRAMES.map((tf) => (
-                <button
-                  key={tf}
-                  onClick={() => { setTimeframe(tf); handleAutoAssign(tf); }}
-                  className={`px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all ${
-                    timeframe === tf
-                      ? "bg-white text-[#12a0e1] shadow-sm ring-1 ring-black/5"
-                      : "text-[#768994] hover:text-[#122027] hover:bg-white/40"
-                  }`}
-                >
-                  {tf}
-                </button>
-              ))}
-            </div>
-            <div className="h-6 w-px bg-[#dce4ec] hidden lg:block" />
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                onClick={handleLiteSync}
-                disabled={isSyncing}
-                className="flex items-center gap-2 px-4 py-2 bg-white border border-[#dce4ec] text-[#768994] hover:text-[#12a0e1] hover:border-[#12a0e1]/30 rounded-xl transition-all shadow-sm font-bold text-sm disabled:opacity-50"
-              >
-                <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin text-[#12a0e1]" : ""}`} />
-                {isSyncing ? "Syncing..." : "Sync Statuses"}
-              </button>
-              {/* Last synced indicator */}
-              {(lastSaved || lastSynced) && (() => {
-                const t = lastSaved || lastSynced;
-                const mins = Math.floor((Date.now() - new Date(t).getTime()) / 60000);
-                const label = mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : `${Math.floor(mins/60)}h ago`;
-                return (
-                  <span className="text-[10px] font-bold text-[#768994] flex items-center gap-1">
-                    <span className={`w-1.5 h-1.5 rounded-full ${mins < 5 ? "bg-[#1cc1a5]" : mins < 30 ? "bg-amber-400" : "bg-slate-300"}`} />
-                    Saved {label}
-                  </span>
-                );
-              })()}
-              <button
-                onClick={() => handleAutoAssign(timeframe)}
-                className="flex items-center justify-center gap-2 bg-[#122027] hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-sm active:scale-95"
-              >
-                <LayoutList className="w-4 h-4" />
-                Auto-Assign {timeframe}
-              </button>
-            </div>
-          </div>
-        </header>
-
-        {/* Stats bar */}
-        <div className="mt-4 flex gap-3 flex-wrap">
-          <div className="bg-white border border-[#dce4ec] rounded-2xl px-4 py-3 flex items-center gap-3 shadow-sm min-w-[110px]">
-            <div className="text-2xl font-black text-[#122027]">{allAssigned.length}</div>
-            <div className="text-[10px] font-black uppercase tracking-widest text-[#768994]">Total<br />Tasks</div>
-          </div>
-          {overdueCount > 0 && (
-            <div className="bg-rose-50 border border-rose-200 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-sm min-w-[110px]">
-              <div className="text-2xl font-black text-rose-600">{overdueCount}</div>
-              <div className="text-[10px] font-black uppercase tracking-widest text-rose-400">Over<br />due</div>
+          {board.slateLead && (
+            <div className="text-right">
+              <div className="font-display text-2xl font-bold text-white leading-none">{backlogCount}</div>
+              <div className="text-[9px] font-black uppercase tracking-widest text-white/70">backlog</div>
             </div>
           )}
-          {topStatuses.map(([status, count]) => (
-            <div key={status} className="bg-white border border-[#dce4ec] rounded-2xl px-4 py-3 flex items-center gap-3 shadow-sm min-w-[110px]">
-              <div className="text-2xl font-black text-[#122027]">{count}</div>
-              <div className="text-[10px] font-black uppercase tracking-widest text-[#768994] max-w-[80px] leading-tight">{status}</div>
-            </div>
+          <div className="text-right">
+            <div className="font-display text-2xl font-bold text-white leading-none">{usesDeptRoster ? overdueCount : motionCount}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/70">{usesDeptRoster ? "overdue" : "motion"}</div>
+          </div>
+        </div>
+        <div className="hidden sm:block w-px h-8 bg-white/20 mr-1" />
+        <div className="flex bg-white/15 border border-white/20 backdrop-blur-sm p-1.5 rounded-xl">
+          {TIMEFRAMES.map((tf) => (
+            <button
+              key={tf}
+              onClick={() => { setTimeframe(tf); handleAutoAssign(tf); }}
+              className={`relative isolate px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-colors ${
+                timeframe === tf
+                  ? "text-[#122027]"
+                  : "text-white/80 hover:text-white hover:bg-white/10"
+              }`}
+            >
+              {/* Shared layoutId — the pill slides between buttons instead
+                  of popping on the newly-active one. */}
+              {timeframe === tf && (
+                <motion.span
+                  layoutId="timeframe-pill"
+                  className="absolute inset-0 bg-white rounded-lg shadow-sm"
+                  transition={{ type: "spring", stiffness: 500, damping: 32 }}
+                />
+              )}
+              <span className="relative z-10">{tf}</span>
+            </button>
           ))}
         </div>
+      </PageHeader>
 
-        {/* Main board */}
-        <div className="mt-4 flex flex-col gap-3" style={{ height: "calc(100vh - 310px)" }}>
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-6 flex flex-col gap-4">
 
-          {/* Riccardo's Playground */}
-          <div className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden shrink-0">
-            <div className="flex items-center gap-2 px-4 py-2 border-b border-[#dce4ec] bg-slate-50/50">
-              <LayoutList className="w-3.5 h-3.5 text-[#12a0e1]" />
-              <h2 className="text-sm font-black text-[#122027] tracking-tight">Riccardo's Playground</h2>
-              <span className="text-[10px] text-[#768994] font-bold ml-1">
-                {campaigns.reduce((s, c) => s + c.subtasks.length, 0)} tasks
-              </span>
-            </div>
-            <div className="flex gap-3 p-3 overflow-x-auto">
-              {campaigns.length === 0 ? (
-                <p className="text-xs text-slate-400 italic py-3 px-2">No tasks — hit Auto-Assign to populate.</p>
-              ) : campaigns.map((campaign) => (
-                <div key={campaign.id} className="shrink-0 w-52 bg-slate-50 rounded-xl border border-[#dce4ec] overflow-hidden flex flex-col">
-                  <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-[#dce4ec] bg-white shrink-0">
-                    <Film className="w-3 h-3 text-[#12a0e1] shrink-0" />
-                    <h3 className="text-[10px] font-black text-[#122027] uppercase tracking-wide truncate flex-1">{campaign.name}</h3>
-                    <span className="text-[9px] font-black text-[#768994] shrink-0">{campaign.subtasks.length}</span>
-                  </div>
-                  <div className="p-1.5 space-y-1 min-h-[36px] max-h-[130px] overflow-y-auto flex-1">
-                    {campaign.subtasks.map((task) => {
-                      const terr = getTerritoryData(task.title);
-                      const isAssigning = activeTaskId === task.id;
-                      return (
-                        <div
-                          key={task.id}
-                          className={`rounded-lg border border-slate-100 border-l-2 ${getBorderColorClass(task.tag)} bg-white`}
-                        >
-                          {isAssigning ? (
-                            <div className="p-1.5">
-                              <p className="text-[9px] font-bold text-slate-500 mb-1.5 truncate">{task.title}</p>
-                              <div className="flex flex-wrap gap-1">
-                                {TEAM_MEMBERS.map((person) => (
-                                  <div key={person} className="relative group/tip">
-                                    <button
-                                      onClick={() => handleAssign(campaign.id, task.id, person)}
-                                      className={`w-6 h-6 rounded-full text-[9px] font-black text-white flex items-center justify-center ${TEAM_COLORS[person].solid.split(" ")[0]}`}
-                                    >
-                                      {person[0]}
-                                    </button>
-                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-1.5 py-0.5 bg-[#122027] text-white text-[9px] font-bold rounded whitespace-nowrap opacity-0 group-hover/tip:opacity-100 pointer-events-none transition-opacity z-10">
-                                      {person}
-                                    </div>
-                                  </div>
-                                ))}
-                                <button
-                                  onClick={() => setActiveTaskId(null)}
-                                  className="w-6 h-6 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1.5 p-1.5 group">
-                              <span className="text-sm leading-none shrink-0">{terr.flag}</span>
-                              <span className="text-[10px] font-bold text-[#122027] truncate flex-1">{task.title}</span>
-                              <button
-                                onClick={() => setActiveTaskId(task.id)}
-                                className="shrink-0 opacity-0 group-hover:opacity-100 text-[#12a0e1] transition-opacity"
-                                title="Assign to team"
-                              >
-                                <ArrowRight className="w-3 h-3" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+        {/* ── The lead's Slate ─────────────────────────────────────────────
+            The lead's triage pile as a film slate: one dark strip of ink,
+            white type, campaign-grouped chips. The only dark block on the
+            page — everything below it stays quiet so it reads as "not yet
+            allocated" at a glance. Motion-only (Riccardo); department boards
+            with no configured lead skip it. */}
+        {board.slateLead && (
+        <div className="bg-[#122027] rounded-2xl overflow-hidden shrink-0">
+          <div className="flex items-center gap-4 px-5 pt-4 pb-3">
+            <div className="overflow-hidden">
+              <div data-lane-rise className="flex items-baseline gap-3">
+                <h2 className="font-display text-lg font-bold text-white tracking-tight leading-none">{board.slateName}</h2>
+                <span className="text-[10px] font-black uppercase tracking-widest text-white/50">
+                  {campaigns.reduce((s, c) => s + c.subtasks.length, 0)} unallocated
+                </span>
+              </div>
             </div>
           </div>
+          <div className="flex gap-6 px-5 pb-4 overflow-x-auto scrollbar-thin-dark">
+            {campaigns.length === 0 ? (
+              <p className="text-xs text-white/40 italic pb-1">Nothing on the slate for {timeframe.toLowerCase()}.</p>
+            ) : campaigns.map((campaign) => (
+              <div key={campaign.id} data-card-rise className="shrink-0 max-w-[340px]">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Film className="w-3 h-3 text-white/40 shrink-0" />
+                  <h3 className="text-[10px] font-black text-white/60 uppercase tracking-widest truncate">{campaign.name}</h3>
+                  <span className="text-[10px] font-bold text-white/35 shrink-0">{campaign.subtasks.length}</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {campaign.subtasks.map((task) => {
+                    const terr = getTerritoryData(task.title);
+                    return (
+                      <button
+                        key={task.id}
+                        onClick={() => setSelectedTask(task)}
+                        title={`${task.title} — ${task.tag || ""}`}
+                        className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg px-2 py-1 transition-colors"
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDotClass(task.tag)}`} />
+                        <span className="text-xs leading-none shrink-0">{terr.flag}</span>
+                        <span className="text-[10px] font-bold text-white/90 truncate max-w-[180px]">{task.title}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        )}
 
           {/* Files panel */}
           {(attachmentsLoading || Object.keys(taskAttachments).length > 0) && (
@@ -658,7 +790,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
                 />
               </button>
               {showFilesPanel && !attachmentsLoading && (
-                <div className="flex gap-6 px-4 pb-3 pt-0.5 overflow-x-auto">
+                <div className="flex gap-6 px-4 pb-3 pt-0.5 overflow-x-auto scrollbar-thin">
                   {Object.values(taskAttachments).map(({ task, attachments }) => (
                     <div key={task.id} className="shrink-0 flex flex-col gap-1.5">
                       <div>
@@ -689,105 +821,206 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, las
             </div>
           )}
 
-          {/* 7 Team columns */}
-          <div className="flex-1 min-h-0 flex gap-3 overflow-hidden">
-            <div className="flex gap-3 w-full h-full">
-              {TEAM_MEMBERS.map((person) => {
-                const tasks = assignments[person];
-                const isFocused = focusedPerson === person;
-                const isCollapsed = focusedPerson !== null && !isFocused;
-                const personOverdue = tasks.filter((t) => isOverdue(t.dueDate)).length;
+        {/* ── The tracks ───────────────────────────────────────────────────
+            One lane per artist, stacked like an edit timeline. The lane cap
+            speaks Home's row language: display-type name, identity gradient
+            that sweeps in on hover (origin left, ink flips), and stays
+            washed while the lane is focused. Clicking a cap expands the
+            lane; the others compress to slivers. */}
+        <div className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
+          {board.members.length === 0 && (
+            <p className="text-sm text-slate-400 italic px-6 py-8 text-center">
+              {usesDeptRoster
+                ? `No ${department} team members yet — tag people's department as “${department}” in Administration › People.`
+                : "No team members."}
+            </p>
+          )}
+          {board.members.map((person, laneIdx) => {
+            const tasks = assignments[person] || [];
+            const lane = board.lanes[person];
+            const isFocused = focusedPerson === person;
+            const isCollapsed = focusedPerson !== null && !isFocused;
+            const personOverdue = tasks.filter((t) => isOverdue(t.dueDate)).length;
+            const inkHover = lane.ink === "dark" ? "group-hover:text-[#122027]" : "group-hover:text-white";
+            const inkFocus = lane.ink === "dark" ? "text-[#122027]" : "text-white";
 
-                return (
+            return (
+              <div
+                key={person}
+                className={`flex items-stretch transition-all duration-300 ease-in-out ${
+                  laneIdx > 0 ? "border-t border-[#dce4ec]" : ""
+                  // +8px over the "natural" 6.5rem/72 heights — the thin
+                  // scrollbar's own height comes out of a fixed-height flex
+                  // row's content box, so without this the cards lose that
+                  // space and their titles clip instead of the scrollbar
+                  // just sitting in a bit of slack underneath them.
+                } ${isCollapsed ? "h-12" : isFocused ? "h-[18.5rem]" : "h-[7rem]"}`}
+              >
+                {/* Lane cap */}
+                <button
+                  onClick={() => setFocusedPerson((p) => (p === person ? null : person))}
+                  onMouseEnter={() => rollGlitter(person)}
+                  className="group relative w-44 sm:w-52 shrink-0 text-left px-5 border-r border-[#dce4ec] overflow-hidden"
+                >
                   <div
-                    key={person}
-                    className="flex flex-col h-full transition-all duration-300 ease-in-out min-w-0"
-                    style={{ flex: isCollapsed ? "0 0 52px" : isFocused ? "3 1 0" : "1 1 0" }}
-                  >
-                    <button
-                      onClick={() => setFocusedPerson((p) => (p === person ? null : person))}
-                      className={`w-full rounded-2xl mb-2 border transition-all duration-200 shrink-0 ${TEAM_COLORS[person].light} ${isFocused ? "ring-2 ring-[#12a0e1]" : "hover:brightness-95"}`}
-                    >
-                      {isCollapsed ? (
-                        <div className="flex flex-col items-center py-3 gap-1.5">
-                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black text-white ${TEAM_COLORS[person].solid.split(" ")[0]}`}>
-                            {person[0]}
-                          </div>
-                          <span className="text-[10px] font-bold opacity-60">{tasks.length}</span>
-                          {personOverdue > 0 && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2.5 px-3.5 py-2.5">
-                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black text-white shrink-0 ${TEAM_COLORS[person].solid.split(" ")[0]}`}>
-                            {person[0]}
-                          </div>
-                          <span className="font-black text-sm tracking-tight flex-1 text-left">{person}</span>
-                          {personOverdue > 0 && (
-                            <span className="text-[9px] font-black bg-rose-500 text-white px-1.5 py-0.5 rounded-full">
-                              {personOverdue} late
-                            </span>
-                          )}
-                          <span className="text-[10px] font-black opacity-50">{tasks.length}</span>
-                        </div>
-                      )}
-                    </button>
-
-                    <div className={`flex-1 overflow-y-auto rounded-2xl border bg-white border-[#dce4ec] ${isCollapsed ? "p-1" : "p-2.5 space-y-2"}`}>
-                      {!isCollapsed && tasks.length === 0 && (
-                        <div className="flex items-center justify-center h-full text-slate-300">
-                          <p className="text-xs italic">No active jobs</p>
-                        </div>
-                      )}
-                      {!isCollapsed && tasks.map((task) => {
-                        const terr = getTerritoryData(task.title);
-                        const overdue = isOverdue(task.dueDate);
+                    className={`absolute inset-0 bg-gradient-to-r ${lane.gradient} origin-left transition-transform duration-300 ease-out ${
+                      isFocused ? "scale-x-100" : "scale-x-0 group-hover:scale-x-100"
+                    }`}
+                  />
+                  {/* Hover flourish, Jacqui & Maria only — a randomized
+                      cascade of stars + glitter falling within this lane
+                      cap's own bounding box (the button's overflow-hidden
+                      clips them). onMouseEnter re-rolls the particle set
+                      (glitterParticles memo above) so it's a fresh scatter
+                      every hover, not one fixed layout; each particle's own
+                      keyframe animation only exists while :hover applies via
+                      group-hover:, so it restarts clean each time too. */}
+                  {(person === "Jacqui" || person === "Maria") && (
+                    <div className="absolute inset-0 z-[5] pointer-events-none overflow-hidden">
+                      {glitterParticles[person].map((p, i) => {
+                        const vars = {
+                          left: `${p.left}`,
+                          width: p.size,
+                          height: p.size,
+                          animationDelay: `${p.delay}ms`,
+                          animationDuration: `${p.duration}ms`,
+                          "--drift": `${p.drift}px`,
+                          "--rot-mid": `${p.rotMid}deg`,
+                          "--rot-end": `${p.rotEnd}deg`,
+                        };
+                        if (p.kind === "star") {
+                          return (
+                            <Star
+                              key={i}
+                              style={vars}
+                              className={`absolute top-0 opacity-0 fill-current group-hover:animate-star-fall ${
+                                lane.ink === "dark" ? "text-[#122027]/70" : "text-white/90"
+                              }`}
+                            />
+                          );
+                        }
                         return (
-                          <div
-                            key={task.id}
-                            onClick={() => setSelectedTask(task)}
-                            className={`group relative rounded-xl border border-slate-200/80 border-l-4 ${getBorderColorClass(task.tag)} ${
-                              overdue ? "bg-rose-50/40" : "bg-slate-50/60 hover:bg-white"
-                            } hover:shadow-md transition-all p-3 cursor-pointer`}
-                          >
-                            <div className="flex-1 min-w-0">
-                              <p className="text-[9px] font-black uppercase text-[#12a0e1] tracking-widest mb-1 truncate pr-6">
-                                {task.campaignName}
-                              </p>
-                              <div className="flex items-start gap-1 mb-2">
-                                <span className="text-sm leading-none shrink-0 mt-0.5" title={terr.name}>{terr.flag}</span>
-                                <p className="text-xs font-bold text-[#122027] leading-snug break-words">{task.title}</p>
-                              </div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className={getTagStyle(task.tag)}>{task.tag}</span>
-                                {overdue && (
-                                  <span className="text-[9px] font-black bg-rose-500 text-white px-1.5 py-0.5 rounded-full">OVERDUE</span>
-                                )}
-                                {taskAttachments[task.id] && (
-                                  <span className="text-[9px] font-black text-slate-400 flex items-center gap-0.5">
-                                    <Paperclip className="w-2.5 h-2.5" />
-                                    {taskAttachments[task.id].attachments.length}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <button
-                              onClick={e => { e.stopPropagation(); handleUnassign(task.id, person, task.campaignId); }}
-                              className="absolute top-2 right-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                              title="Unassign"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
+                          <Sparkle
+                            key={i}
+                            style={{ ...vars, color: `hsl(${p.hue}, 85%, 80%)` }}
+                            className="absolute top-0 opacity-0 fill-current group-hover:animate-glitter-twinkle"
+                          />
                         );
                       })}
                     </div>
+                  )}
+                  <div className="relative z-10 h-full flex flex-col justify-center overflow-hidden">
+                    <div data-lane-rise className="flex items-baseline justify-between gap-2">
+                      <span
+                        className={`font-display font-bold tracking-tight leading-none transition-all duration-300 ${
+                          isCollapsed ? "text-sm" : "text-xl sm:text-2xl"
+                        } ${isFocused ? inkFocus : `text-[#122027] ${inkHover}`}`}
+                      >
+                        {person}
+                      </span>
+                      <span
+                        className={`font-display font-bold leading-none transition-colors duration-300 ${
+                          isCollapsed ? "text-sm" : "text-xl"
+                        } ${
+                          isFocused
+                            ? lane.ink === "dark" ? "text-[#122027]/60" : "text-white/60"
+                            : `text-[#c6d0da] ${lane.ink === "dark" ? "group-hover:text-[#122027]/60" : "group-hover:text-white/60"}`
+                        }`}
+                      >
+                        {tasks.length}
+                      </span>
+                    </div>
+                    {!isCollapsed && personOverdue > 0 && (
+                      <span
+                        className={`mt-1.5 self-start text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded transition-colors duration-300 ${
+                          isFocused || lane.ink === "dark"
+                            ? "bg-[#122027]/15"
+                            : "bg-rose-50 text-rose-600 group-hover:bg-white/20"
+                        } ${isFocused ? (lane.ink === "dark" ? "text-[#122027]" : "text-white") : lane.ink === "dark" ? "text-rose-600" : "group-hover:text-white"}`}
+                      >
+                        {personOverdue} overdue
+                      </span>
+                    )}
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                </button>
 
+                {/* Lane body — tasks flow horizontally like clips on a track */}
+                <div className={`flex-1 min-w-0 flex items-stretch gap-2 overflow-x-auto overflow-y-hidden scrollbar-thin ${isCollapsed ? "px-3 py-1.5" : "p-3"}`}>
+                  {isCollapsed ? (
+                    <div className="flex items-center gap-1.5">
+                      {tasks.slice(0, 12).map((t) => (
+                        <span key={t.id} title={t.title} className={`w-2 h-2 rounded-full shrink-0 ${getStatusDotClass(t.tag)}`} />
+                      ))}
+                      {tasks.length > 12 && <span className="text-[10px] font-bold text-[#768994]">+{tasks.length - 12}</span>}
+                    </div>
+                  ) : tasks.length === 0 ? (
+                    <p className="self-center text-xs italic text-slate-300">Clear — nothing due</p>
+                  ) : (
+                    tasks.map((task) => {
+                      const terr = getTerritoryData(task.title);
+                      const overdue = isOverdue(task.dueDate);
+                      return (
+                        // A clip, not a dashboard widget: the left bar is the
+                        // single colour statement (status), the title is the
+                        // single loud element, and everything else — campaign,
+                        // status word, files — recedes to muted plain text.
+                        // No chips inside cards inside lanes.
+                        <div
+                          key={task.id}
+                          data-card-rise
+                          onClick={() => setSelectedTask(task)}
+                          className={`shrink-0 cursor-pointer rounded-lg border-l-[3px] ${getBorderColorClass(task.tag)} border-y border-r border-slate-200/70 ${
+                            overdue ? "bg-rose-50/40" : "bg-white"
+                          } hover:shadow-md hover:-translate-y-0.5 transition-all ${
+                            isFocused ? "w-72 p-3.5" : "w-60 px-3 py-2.5"
+                          } flex flex-col min-h-0 overflow-hidden`}
+                        >
+                          <div className="flex items-center justify-between gap-2 min-w-0">
+                            <p className="text-[9px] font-bold uppercase text-[#768994] tracking-widest truncate">
+                              {task.campaignName}
+                            </p>
+                            <span className="text-xs leading-none shrink-0" title={terr.name}>{terr.flag}</span>
+                          </div>
+                          <p className={`text-xs font-bold text-[#122027] leading-snug mt-1 ${isFocused ? "line-clamp-3" : "line-clamp-2"}`}>
+                            {task.title}
+                          </p>
+                          <div className="mt-auto pt-1.5 flex items-center gap-1 text-[10px] font-medium text-[#768994] min-w-0">
+                            {task.tag && (
+                              <span className={`truncate font-bold ${getTagTextColorClass(task.tag)}`}>
+                                {task.tag.toLowerCase()}
+                              </span>
+                            )}
+                            {overdue && (
+                              <>
+                                <span className="shrink-0">·</span>
+                                <span className="text-rose-500 font-bold shrink-0">overdue</span>
+                              </>
+                            )}
+                            {isFocused && !overdue && task.dueDate && (
+                              <>
+                                <span className="shrink-0">·</span>
+                                <span className="shrink-0">
+                                  due {new Date(task.dueDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
+                                </span>
+                              </>
+                            )}
+                            {taskAttachments[task.id] && (
+                              <span className="flex items-center gap-0.5 shrink-0 ml-auto">
+                                <Paperclip className="w-2.5 h-2.5" />
+                                {taskAttachments[task.id].attachments.length}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
+
       </div>
 
       {/* Task detail modal (shared component — same as Profile Hub) */}
