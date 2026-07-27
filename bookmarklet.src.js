@@ -39,10 +39,24 @@
     btn.style.background = "#94A3B8";
     btn.disabled = true;
 
+    // Re-enabling is only safe before any row has been added — nothing has been
+    // written to the page yet, so retrying after fixing the JSON or the day tab
+    // is harmless.
     function reset(label) {
       btn.innerText = label || "Populate Rows";
       btn.style.background = "#4f46e5";
       btn.disabled = false;
+    }
+
+    // Once rows exist on the page a second run would duplicate every one of
+    // them, so the run button is removed outright rather than left looking
+    // clickable. Close is then the only action.
+    function finish() {
+      btn.remove();
+      var close = document.getElementById("xyi-btn-cancel");
+      close.textContent = "Close";
+      close.style.background = "#4f46e5";
+      close.style.color = "#fff";
     }
 
     try {
@@ -148,6 +162,7 @@
       // and abandoned the row on a miss, leaving a blank row behind.
       var $anySelect = $("select[name='jobSelector']").first();
       var addedProbe = false;
+      var populated = false; // any row written to the page yet?
       if (!$anySelect.length) {
         RowAdd();
         await new Promise(function (r) {
@@ -155,6 +170,7 @@
         });
         $anySelect = $("select[name='jobSelector']").first();
         addedProbe = true;
+        populated = true;
       }
       if (!$anySelect.length) {
         show("Could not find a job dropdown on this page. Are you on the timesheet Day tab?");
@@ -219,7 +235,7 @@
 
       if (!planned.length) {
         showReport(0, dailyTasks.length, skipped, []);
-        reset("Populate Rows");
+        if (populated) finish(); else reset("Populate Rows");
         return;
       }
 
@@ -233,6 +249,7 @@
           addedProbe = false; // reuse the probe row for the first entry
         } else {
           RowAdd();
+          populated = true;
           await new Promise(function (r) { setTimeout(r, 150); });
         }
 
@@ -284,10 +301,13 @@
       }
 
       showReport(planned.length, dailyTasks.length, skipped, warnings);
-      reset("Done — close me");
+      finish();
     } catch (e) {
       show("Error: " + e.message);
-      reset();
+      // A failure partway through still leaves real rows on the page, so only
+      // offer a retry if nothing was written yet.
+      if (populated) finish();
+      else reset();
     }
   };
 })();
