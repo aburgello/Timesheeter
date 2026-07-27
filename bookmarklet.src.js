@@ -9,12 +9,12 @@
     "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:99999;display:flex;justify-content:center;align-items:center;font-family:sans-serif;";
   var modal = document.createElement("div");
   modal.style.cssText =
-    "background:#fff;padding:30px;border-radius:12px;width:560px;max-width:90%;box-shadow:0 10px 25px rgba(0,0,0,0.5);";
+    "background:#fff;padding:30px;border-radius:12px;width:680px;max-width:92%;box-shadow:0 10px 25px rgba(0,0,0,0.5);";
   modal.innerHTML =
     '<h2 style="margin:0 0 10px;color:#1e293b;">Automate Timesheet</h2>' +
     '<p style="margin:0 0 20px;color:#64748b;font-size:14px;">Paste the JSON backup exported from your XYi Tracker below. Ensure you are on the correct Day tab first.</p>' +
     '<textarea id="xyi-json-input" style="width:100%;height:150px;margin-bottom:20px;padding:10px;border:1px solid #CBD5E1;border-radius:8px;font-family:monospace;font-size:12px;" placeholder=\'{"tasks": [...]}\'></textarea>' +
-    '<div id="xyi-report" style="display:none;max-height:200px;overflow:auto;margin-bottom:16px;padding:12px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;font-size:12px;color:#7f1d1d;white-space:pre-wrap;font-family:monospace;"></div>' +
+    '<div id="xyi-report" style="display:none;max-height:340px;overflow:auto;margin-bottom:16px;padding:12px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;font-size:12px;color:#7f1d1d;white-space:pre-wrap;font-family:monospace;"></div>' +
     '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
     '<button id="xyi-btn-cancel" style="padding:10px 16px;background:#f1f5f9;border:none;border-radius:8px;cursor:pointer;color:#475569;font-weight:bold;">Close</button>' +
     '<button id="xyi-btn-run" style="padding:10px 16px;background:#4f46e5;border:none;border-radius:8px;cursor:pointer;color:#fff;font-weight:bold;">Populate Rows</button>' +
@@ -25,6 +25,7 @@
   var report = document.getElementById("xyi-report");
   function show(msg) {
     report.style.display = "block";
+    report.style.whiteSpace = "pre-wrap";
     report.textContent = msg;
   }
 
@@ -66,6 +67,80 @@
         if (r === 0 && secs > 0) r = 0.5;
         return r === 0 ? "" : r.toFixed(1);
       }
+      function esc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+        });
+      }
+      function hrs(secs) {
+        var v = getVal(secs);
+        return v ? v + "h" : "—";
+      }
+      function describe(t) {
+        return [t.filmTitle, t.client, t.projectDescription, t.notes]
+          .filter(Boolean).join(" · ");
+      }
+
+      // Anything that couldn't be placed still has to be logged by hand, so the
+      // report has to carry enough detail to retype the row without going back
+      // to the Tracker — job, what it was, time, territory.
+      function showReport(filled, total, skipped, warnings) {
+        var h = "";
+        h += '<div style="font-size:14px;font-weight:bold;color:#1e293b;margin-bottom:12px;">' +
+             "Filled " + filled + " of " + total + " rows for " + esc(activeDay) + ".</div>";
+
+        if (skipped.length) {
+          h += '<div style="font-size:13px;font-weight:bold;color:#7f1d1d;margin:0 0 6px;">' +
+               "NOT LOGGED — " + skipped.length + " row" + (skipped.length > 1 ? "s" : "") +
+               " you must enter another way</div>";
+          h += '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;">';
+          h += '<tr style="text-align:left;color:#7f1d1d;"><th style="padding:4px 6px;">Job</th>' +
+               '<th style="padding:4px 6px;">Details</th><th style="padding:4px 6px;">Time</th>' +
+               '<th style="padding:4px 6px;">Territory</th></tr>';
+          skipped.forEach(function (s) {
+            var t = s.task;
+            var extra = hrs(t.additionalSeconds);
+            h += '<tr style="border-top:1px solid #fecaca;">' +
+                 '<td style="padding:6px;font-family:monospace;white-space:nowrap;">' + esc(t.jobNumber || "(blank)") + "</td>" +
+                 '<td style="padding:6px;">' + esc(describe(t) || t.category || "—") + "</td>" +
+                 '<td style="padding:6px;white-space:nowrap;">' + hrs(t.rawSeconds) +
+                   (extra !== "—" ? " +" + extra : "") + "</td>" +
+                 '<td style="padding:6px;">' + esc(t.territory || "—") + "</td></tr>";
+            h += '<tr><td colspan="4" style="padding:0 6px 6px;color:#b91c1c;">↳ ' + esc(s.why) + "</td></tr>";
+          });
+          h += "</table>";
+        }
+
+        if (warnings.length) {
+          h += '<div style="font-size:13px;font-weight:bold;color:#92400e;margin:0 0 6px;">' +
+               "ADDED BUT INCOMPLETE — check these rows</div><ul style=\"margin:0 0 12px;padding-left:18px;color:#92400e;\">";
+          warnings.forEach(function (w) { h += "<li>" + esc(w) + "</li>"; });
+          h += "</ul>";
+        }
+
+        if (skipped.length) {
+          h += '<button id="xyi-copy" style="padding:6px 12px;background:#fff;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;color:#7f1d1d;font-size:12px;">Copy unlogged rows</button>';
+        }
+
+        report.style.display = "block";
+        report.style.whiteSpace = "normal";
+        report.innerHTML = h;
+
+        var copy = document.getElementById("xyi-copy");
+        if (copy) {
+          copy.onclick = function () {
+            var txt = activeDay + " — rows not logged:\n" + skipped.map(function (s) {
+              var t = s.task;
+              return "• " + (t.jobNumber || "(blank)") + "  " + hrs(t.rawSeconds) +
+                     (t.territory ? "  [" + t.territory + "]" : "") +
+                     (describe(t) ? "  " + describe(t) : "") + "\n    " + s.why;
+            }).join("\n");
+            navigator.clipboard.writeText(txt).then(function () {
+              copy.textContent = "Copied ✓";
+            });
+          };
+        }
+      }
 
       // The job dropdown is identical on every row, so resolve every task
       // against one option list up front. Nothing is added to the page until we
@@ -106,14 +181,19 @@
         var m = want.match(/XY\d{5,6}(?:_[A-Z0-9]+)*/);
         var base = m ? (m[0].match(/XY\d{5,6}/) || [])[0] : null;
         if (!base) {
-          return { err: "no XY##### code found in \"" + jobNumber + "\"" };
+          return { err: "No XY##### code in this job number, so it can't be matched." };
         }
 
         var candidates = options.filter(function (o) {
           return norm(o.text).indexOf(base) !== -1;
         });
         if (!candidates.length) {
-          return { err: base + " is not in your job dropdown (no access, or not assigned)" };
+          // The usual cause: the job is still live in Wrike (so the Tracker
+          // imported it happily) but has since been retired from the Job Book
+          // on this site, so there is no column to put it in.
+          return {
+            err: base + " is no longer in the Job Book on this site — it can't be logged here.",
+          };
         }
 
         var suffix = (m[0].slice(base.length).match(/[A-Z0-9]+/g) || []);
@@ -134,14 +214,11 @@
       dailyTasks.forEach(function (task) {
         var r = resolve(task.jobNumber);
         if (r.val !== undefined) planned.push({ task: task, val: r.val });
-        else skipped.push({ job: task.jobNumber || "(blank)", why: r.err });
+        else skipped.push({ task: task, why: r.err });
       });
 
       if (!planned.length) {
-        show(
-          "Nothing could be filled for " + activeDay + ".\n\n" +
-            skipped.map(function (s) { return "• " + s.job + "\n    " + s.why; }).join("\n")
-        );
+        showReport(0, dailyTasks.length, skipped, []);
         reset("Populate Rows");
         return;
       }
@@ -202,19 +279,11 @@
 
       if (!skipped.length && !warnings.length) {
         document.body.removeChild(overlay);
-        alert("Filled " + planned.length + " of " + dailyTasks.length + " rows for " + activeDay + ".");
+        alert("Filled all " + planned.length + " rows for " + activeDay + ".");
         return;
       }
 
-      var msg = "Filled " + planned.length + " of " + dailyTasks.length + " rows for " + activeDay + ".\n";
-      if (skipped.length) {
-        msg += "\nSKIPPED (no row added):\n" +
-          skipped.map(function (s) { return "• " + s.job + "\n    " + s.why; }).join("\n") + "\n";
-      }
-      if (warnings.length) {
-        msg += "\nFILLED BUT INCOMPLETE:\n" + warnings.map(function (w) { return "• " + w; }).join("\n");
-      }
-      show(msg);
+      showReport(planned.length, dailyTasks.length, skipped, warnings);
       reset("Done — close me");
     } catch (e) {
       show("Error: " + e.message);
