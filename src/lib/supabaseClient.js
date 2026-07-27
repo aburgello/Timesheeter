@@ -70,6 +70,17 @@ export async function setWrikeUserId(id, profile = {}) {
   return identityReady;
 }
 
+/** Reads the user_metadata claim out of an access token without verifying it. */
+function claimFromToken(accessToken) {
+  try {
+    const payload = accessToken.split(".")[1];
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(json)?.user_metadata?.wrike_user_id ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function stampIdentity(id, profile) {
   // The anonymous sign-in may still be in flight on a first-ever visit;
   // updateUser() against a missing session is a silent no-op that leaves the
@@ -78,18 +89,35 @@ async function stampIdentity(id, profile) {
 
   try {
     const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user && user.user_metadata?.wrike_user_id !== id) {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    // The check MUST be against the access token, not getUser(): getUser()
+    // returns the server-side user record, which can already carry the right
+    // wrike_user_id while the token in hand does not. That is exactly the state
+    // any user left in by the earlier bug — updateUser() had written the
+    // metadata server-side but never re-minted the token — so comparing against
+    // the record would skip the refresh and strand them on a stale token.
+    if (session && claimFromToken(session.access_token) !== id) {
+      // Cheap and idempotent; only a no-op when the record already matches.
       await supabase.auth.updateUser({ data: { wrike_user_id: id } });
-      // updateUser() writes the new metadata to the user record and updates the
-      // cached user object, but it does NOT mint a new access token — the JWT
-      // still carries the old (empty) user_metadata. RLS reads auth.jwt(), so
-      // without this refresh the token stays stale until its next hourly
-      // rotation and all profiles/tasks writes fail with 42501 until then.
+      // updateUser() does NOT mint a new access token (auth-js reassigns
+      // session.user and re-saves the same access_token). RLS reads auth.jwt(),
+      // so without this refresh the claim stays missing until the token's next
+      // hourly rotation and every profiles/tasks write fails with 42501.
       const { error } = await supabase.auth.refreshSession();
       if (error) {
         console.warn("Could not refresh session after stamping identity:", error.message);
+      } else {
+        const {
+          data: { session: fresh },
+        } = await supabase.auth.getSession();
+        if (fresh && claimFromToken(fresh.access_token) !== id) {
+          console.error(
+            "wrike_user_id still missing from the access token after refresh — " +
+              "RLS-scoped writes will fail."
+          );
+        }
       }
     }
   } catch (err) {
