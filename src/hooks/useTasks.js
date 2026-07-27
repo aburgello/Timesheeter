@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { supabase } from "../lib/supabaseClient";
+import { supabase, whenIdentityReady } from "../lib/supabaseClient";
 
 // --- Translators ---
 
@@ -107,6 +107,9 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
   useEffect(() => {
     const fetchTasks = async () => {
       setLoading(true);
+      // On a first login the anon session / identity stamp may still be in
+      // flight; querying before then returns an empty set under RLS.
+      await whenIdentityReady();
       // Note: "date" is a text column with mixed historical formats (ISO and
       // dd/mm/yyyy), so filtering it with .gte() at the DB level is unreliable
       // (lexicographic string comparison, not a real date compare). Instead we
@@ -150,6 +153,7 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
   const addTask = useCallback(async (task) => {
     const t = { ...task, wrikeUserId: task.wrikeUserId ?? uidRef.current };
     setTasks((prev) => [t, ...prev]);
+    await whenIdentityReady();
     const { error } = await supabase.from("tasks").insert(toDb(t));
     if (error) {
       console.error("Failed to save task:", error);
@@ -161,6 +165,7 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
   const addTasks = useCallback(async (newTasks) => {
     const stamped = newTasks.map((t) => ({ ...t, wrikeUserId: t.wrikeUserId ?? uidRef.current }));
     setTasks((prev) => [...stamped, ...prev]);
+    await whenIdentityReady();
     const { error } = await supabase.from("tasks").insert(stamped.map(toDb));
     if (error) {
       console.error("Failed to save tasks:", error);
@@ -237,6 +242,7 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
       .map((t) => ({ ...t, wrikeUserId: t.wrikeUserId ?? uidRef.current }));
     if (stamped.length === 0) { triggerToast?.("No new tasks found."); return 0; }
     setTasks((prev) => [...stamped, ...prev]);
+    await whenIdentityReady();
     const { error } = await supabase.from("tasks").insert(stamped.map(toDb));
     if (error) {
       triggerToast?.("Import failed to sync.");

@@ -14,6 +14,7 @@ import {
   supabase,
   setWrikeUserId as stampWrikeUserId,
   fetchExistingTimelogIds,
+  whenIdentityReady,
 } from "../lib/supabaseClient";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
@@ -1493,6 +1494,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     let alive = true;
     (async () => {
       const codeKey = (j) => (j.match(/XY\d{5,6}/i)?.[0] || j).trim().toUpperCase();
+      // All three tables are RLS-gated to `authenticated` (tasks additionally by
+      // wrike_user_id), so this must wait for the session + identity stamp or it
+      // returns empty on a first login.
+      await whenIdentityReady();
+      if (!alive) return;
       const [booksRes, tasksRes, filmsRes] = await Promise.all([
         supabase.from("jobs").select("job_number"),
         supabase.from("tasks").select("job_number, date").eq("source", "legacy").not("job_number", "is", null),
