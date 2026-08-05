@@ -182,6 +182,36 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
     }
   }, []);
 
+  // Which rows have just been written to Supabase successfully, as id → nonce.
+  //
+  // Edits here are optimistic: the cell shows the new value the instant you
+  // leave it, whether or not the write landed. A failure toasts, but a success
+  // said nothing at all, so "did that actually save?" had no answer — on a
+  // timesheet, of all things. Consumers use this to confirm the write.
+  //
+  // A nonce rather than a boolean, so a second save to the same row inside the
+  // display window is distinguishable from the first (the grid keys its flash on
+  // it, which restarts the animation instead of leaving it mid-flight).
+  const [justSaved, setJustSaved] = useState({});
+  const savedTimers = useRef({});
+  const flagSaved = useCallback((id) => {
+    setJustSaved((prev) => ({ ...prev, [id]: (prev[id] || 0) + 1 }));
+    clearTimeout(savedTimers.current[id]);
+    savedTimers.current[id] = setTimeout(() => {
+      setJustSaved((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }, 1000);
+  }, []);
+  // Timers outlive the write, so a page swap mid-save would otherwise set state
+  // on an unmounted hook.
+  useEffect(() => () => {
+    for (const t of Object.values(savedTimers.current)) clearTimeout(t);
+  }, []);
+
   const updateTask = useCallback(async (id, changes) => {
     // A task carries time twice — seconds in memory, "H:MM" for the DB — and a
     // caller only ever sets one of them: the grid's dropdown writes timeSpent,
@@ -224,8 +254,10 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
     if (error) {
       console.error("Failed to update task:", error);
       triggerToast?.("Update failed to sync.");
+    } else {
+      flagSaved(id);
     }
-  }, []);
+  }, [flagSaved]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateTasks = useCallback(async (ids, changes) => {
     setTasks((prev) => prev.map((t) => (ids.includes(t.id) ? { ...t, ...changes } : t)));
@@ -273,5 +305,6 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
   return {
     tasks, setTasks, loading,
     addTask, addTasks, updateTask, updateTasks, deleteTasks, importTasks,
+    justSaved,
   };
 }

@@ -119,6 +119,14 @@ function findNavItem(id) {
   return null;
 }
 
+// The open item as read from `#management/<section>`. Validated against
+// NAV_GROUPS, so a stale or hand-edited link lands on the hub rather than on a
+// panel that renders nothing.
+const sectionFromHash = () => {
+  const [page, section] = window.location.hash.slice(1).split("/");
+  return page === "management" && section && findNavItem(section) ? section : null;
+};
+
 // ── Project Description quick-filter chips ────────────────────────────────────
 // keyword uses "<CODE> " (with trailing space) so "UK Something" matches but
 // hypothetical "BULK" wouldn't. Gradients mirror DESCRIPTION_GROUPS.
@@ -612,7 +620,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
             value={search}
             onChange={e => { setSearch(e.target.value); setLetter(null); }}
             placeholder={`Search ${label.toLowerCase()}…`}
-            className="w-full pl-9 pr-8 py-2 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white"
+            className="w-full pl-9 pr-8 py-2.5 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white placeholder-[#b0bec5] transition-colors"
           />
           {search && (
             <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
@@ -624,7 +632,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {/* Sort toggle */}
         <button
           onClick={() => setSort(s => s === "asc" ? "desc" : "asc")}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-[#768994] bg-white border border-[#dce4ec] rounded-xl hover:border-slate-300 hover:text-[#122027] transition-all shrink-0"
+          className="flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-[#768994] bg-white border border-[#dce4ec] rounded-xl hover:border-slate-300 hover:text-[#122027] transition-all shrink-0"
           title={sort === "asc" ? "Sorted A → Z" : "Sorted Z → A"}
         >
           {sort === "asc"
@@ -636,7 +644,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {/* Seed button (only when table is empty) */}
         {seedArr && items.length === 0 && !loading && (
           <button onClick={() => seedData(seedArr)} disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition-all shrink-0 disabled:opacity-50">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition-all shrink-0 disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${saving ? "animate-spin" : ""}`} />
             Seed ({seedArr.length})
           </button>
@@ -646,17 +654,25 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {wrikeFilmSync && (
           <button onClick={() => setShowFilmSync(true)}
             title="Pull film projects from a studio folder in Wrike into this list"
-            className="flex items-center gap-1.5 px-3 py-2 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-xs font-bold rounded-xl transition-all shrink-0">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-xs font-bold rounded-xl transition-all shrink-0">
             <Download className="w-3.5 h-3.5" /> Sync from Wrike
           </button>
         )}
 
-        {/* Add */}
+        {/* Add — the primary action on every one of these lists, so it carries
+            real weight: wider, a size up, and the only control here that lifts
+            on hover. It previously sat at the same px-3 py-2 text-xs as the
+            sort toggle, leaving colour to do all the work of signalling
+            "this is the thing you came to do" (and nothing at all for anyone
+            who can't separate the blue from the grey). */}
         <button onClick={() => setAdding(a => !a)}
-          className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl transition-all shrink-0 ${
-            adding ? "bg-slate-100 text-[#768994] border border-[#dce4ec]" : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white"
+          className={`flex items-center gap-1.5 px-5 py-2.5 text-sm font-bold rounded-xl shrink-0
+                      transition-[transform,box-shadow,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            adding
+              ? "bg-slate-100 text-[#768994] border border-[#dce4ec]"
+              : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-sm hover:shadow-[0_6px_16px_-6px_rgba(18,160,225,0.7)] hover:-translate-y-px"
           }`}>
-          <Plus className="w-3.5 h-3.5" /> Add
+          <Plus className="w-4 h-4" /> Add
         </button>
       </div>
 
@@ -778,13 +794,15 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
 
       {/* ── Item rendering ── */}
       {loading ? (
-        <div className="flex items-center justify-center py-16 gap-2 text-[#768994]">
-          <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
+        <div className="flex items-center justify-center py-20 gap-2.5 text-[#768994]">
+          <RefreshCw className="w-4 h-4 animate-spin text-[#12a0e1]" />
+          <span className="text-sm font-bold">Loading…</span>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-2 text-[#768994]">
-          <Search className="w-8 h-8 opacity-20" />
-          <p className="text-sm font-medium">No {label.toLowerCase()} found</p>
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-[#768994]">
+          <Search className="w-9 h-9 opacity-20" />
+          <p className="font-display text-base font-bold text-[#122027]">No {label.toLowerCase()} found</p>
+          <p className="text-xs">Try a different search, or clear the filters above.</p>
         </div>
       ) : groups.length > 0 ? (
         /* ── Grouped mode (first-match-wins) ── */
@@ -811,7 +829,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                     {/* Editable, collapsible group header */}
                     <div role="button" tabIndex={0} onClick={() => toggleGroup(group.label)}
                       onKeyDown={e => { if (e.key === "Enter" || e.key === " ") toggleGroup(group.label); }}
-                      className={`flex items-center gap-2.5 mb-3 px-3 py-2 rounded-xl border cursor-pointer select-none ${group.color}`}>
+                      className={`flex items-center gap-2.5 mb-3 px-3.5 py-2.5 rounded-xl border cursor-pointer select-none transition-colors ${group.color}`}>
                       {editingGrp === group.label ? (
                         <>
                           <input autoFocus value={editingGrpVal} onClick={e => e.stopPropagation()}
@@ -828,8 +846,8 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                       ) : (
                         <>
                           <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-                          <span className="text-[11px] font-black uppercase tracking-widest">{displayLabel}</span>
-                          <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-black/10">{groupItems.length}</span>
+                          <span className="text-xs font-black uppercase tracking-[0.14em]">{displayLabel}</span>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-black/10 tabular-nums">{groupItems.length}</span>
                           <button onClick={e => { e.stopPropagation(); setEditingGrp(group.label); setEditingGrpVal(displayLabel); }}
                             className="ml-auto p-1 rounded hover:bg-black/10 opacity-40 hover:opacity-100 transition-opacity">
                             <Pencil className="w-2.5 h-2.5" />
@@ -838,15 +856,18 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                       )}
                     </div>
                     {!isOpen ? null : (<>
-                    <div className={isLong ? "space-y-1.5" : "grid grid-cols-2 xl:grid-cols-3 gap-2"}>
+                    <div className={isLong ? "space-y-2" : "grid grid-cols-2 xl:grid-cols-3 gap-2.5"}>
                       {visibleItems.map(item => {
                         const text        = item[labelField] || "";
                         const displayText = group.stripPrefix ? text.replace(group.stripPrefix, "") : text;
                         const isEditing   = editId === item.id;
                         return (
                           <div key={item.id}
-                            className={`group/item flex items-center gap-2.5 px-3 py-2.5 bg-white border rounded-xl hover:shadow-sm transition-all ${
-                              isEditing ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15" : "border-[#dce4ec] hover:border-slate-300"
+                            className={`group/item flex items-center gap-2.5 px-3.5 py-3 bg-white border rounded-xl
+                                        transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                              isEditing
+                                ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15"
+                                : "border-[#dce4ec] hover:border-slate-300 hover:-translate-y-px hover:shadow-[0_6px_18px_-8px_rgba(18,32,39,0.18)]"
                             }`}>
                             {isEditing ? (
                               <>
@@ -864,7 +885,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                               </>
                             ) : (
                               <>
-                                <span className={`flex-1 min-w-0 text-xs font-medium text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>{displayText}</span>
+                                <span className={`flex-1 min-w-0 text-sm font-semibold text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>{displayText}</span>
                                 <div className="flex items-center gap-0.5 opacity-0 group-hover/item:opacity-100 transition-opacity shrink-0">
                                   <button onClick={() => { setEditId(item.id); setEditVal(text); }}
                                     className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-[#122027]">
@@ -896,7 +917,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         })()
       ) : (
         /* ── Flat mode ── */
-        <div className={isLong ? "space-y-1.5" : "grid grid-cols-2 xl:grid-cols-3 gap-2"}>
+        <div className={isLong ? "space-y-2" : "grid grid-cols-2 xl:grid-cols-3 gap-2.5"}>
           {paginated.map(item => {
             const text   = item[labelField] || "";
             const first  = text.charAt(0).toUpperCase() || "?";
@@ -904,11 +925,14 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
             const isEditing = editId === item.id;
             return (
               <div key={item.id}
-                className={`group flex items-center gap-3 p-3 bg-white border rounded-2xl hover:shadow-sm transition-all ${
-                  isEditing ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15" : "border-[#dce4ec] hover:border-slate-300"
+                className={`group flex items-center gap-3 p-3.5 bg-white border rounded-2xl
+                            transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  isEditing
+                    ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15"
+                    : "border-[#dce4ec] hover:border-slate-300 hover:-translate-y-px hover:shadow-[0_6px_18px_-8px_rgba(18,32,39,0.18)]"
                 }`}>
                 {!isEditing && (
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-[11px] font-black border ${avatarCls} ${borderCls}`}>
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-display text-xs font-black border ${avatarCls} ${borderCls}`}>
                     {first}
                   </div>
                 )}
@@ -932,12 +956,12 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                       <button
                         onClick={() => onItemClick(text)}
                         title={`Open “${text}”`}
-                        className={`flex-1 min-w-0 text-left text-sm font-medium text-[#122027] hover:text-[#12a0e1] transition-colors ${isLong ? "leading-snug" : "truncate"}`}
+                        className={`flex-1 min-w-0 text-left text-[15px] font-semibold text-[#122027] hover:text-[#12a0e1] transition-colors ${isLong ? "leading-snug" : "truncate"}`}
                       >
                         {text}
                       </button>
                     ) : (
-                      <span className={`flex-1 min-w-0 text-sm font-medium text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>
+                      <span className={`flex-1 min-w-0 text-[15px] font-semibold text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>
                         {text}
                       </span>
                     )}
@@ -4835,7 +4859,10 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
           treatment PeopleSection's department cards already use, so a
           manager sees three distinct destinations, not one dense block
           that happens to have three rows. */}
-      <div className="space-y-4">
+      {/* Card gap tightens while a group is open, for the same reason its
+          siblings condense: every pixel above the open group pushes its
+          children further down the page. */}
+      <div className={`transition-[gap] duration-300 ease-out flex flex-col ${expandedGroup ? "gap-2.5" : "gap-4"}`}>
         {NAV_GROUPS.map((group) => {
           const isOpen = expandedGroup === group.id;
           // A group with exactly one destination has nothing to unfold —
@@ -4843,12 +4870,20 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
           // pure friction. Go straight there, and read as navigation (no
           // `open` prop) rather than as an expand/collapse toggle.
           const singleItem = group.items.length === 1;
+          // Once any group is open, every other top-level row shrinks and
+          // drops its description. Supporting Content alone has seven
+          // children, and at full height the siblings above/below it pushed
+          // those off the bottom of the viewport — the html{zoom:1.1} in
+          // tailwind.css makes the effective viewport ~10% shorter again, so
+          // there was less room than a 1080p screen suggests.
+          const isCondensed = !!expandedGroup && !isOpen;
           return (
             <div key={group.id} className="bg-white rounded-3xl border border-[#dce4ec] shadow-sm overflow-hidden">
               <HubRow
                 section={group}
                 onClick={() => (singleItem ? onOpenItem(group.items[0].id) : onToggleGroup(group.id))}
                 open={singleItem ? undefined : isOpen}
+                condensed={isCondensed}
                 first
               />
               <AnimatePresence initial={false}>
@@ -4898,6 +4933,11 @@ function RateInput({ value, onCommit }) {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const shown = editing ? draft : (value == null ? String(DEFAULT_HOURLY_RATE) : String(Number(value)));
+  // Presentation only, derived from the prop that already drives `shown`: a
+  // position with no rate of its own bills at the studio default, and until now
+  // looked identical to one deliberately set to that same number. Dashed and
+  // muted reads as "inherited", solid as "set here".
+  const isDefault = value == null;
 
   const commit = () => {
     setEditing(false);
@@ -4908,7 +4948,9 @@ function RateInput({ value, onCommit }) {
 
   return (
     <div className="relative">
-      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#768994] text-xs font-bold select-none pointer-events-none">$</span>
+      <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold select-none pointer-events-none transition-colors ${
+        isDefault ? "text-[#cbd5e1]" : "text-[#b0bec5]"
+      }`}>$</span>
       <input
         type="number" min="0" step="0.01"
         value={shown}
@@ -4916,8 +4958,12 @@ function RateInput({ value, onCommit }) {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-        title="Hourly rate"
-        className="w-full pl-6 pr-2 py-1.5 border border-[#dce4ec] rounded-xl text-xs font-bold text-[#122027] outline-none focus:border-[#12a0e1] bg-white"
+        title={isDefault ? `No rate set — bills at the studio default of $${DEFAULT_HOURLY_RATE}/hr` : "Hourly rate"}
+        className={`w-full pl-7 pr-2 py-2 rounded-xl border bg-white outline-none
+                    font-display text-[15px] font-bold tabular-nums tracking-tight
+                    transition-colors focus:border-[#12a0e1] ${
+          isDefault ? "border-dashed border-[#dce4ec] text-[#9aa8b4]" : "border-[#dce4ec] text-[#122027]"
+        }`}
       />
     </div>
   );
@@ -4938,18 +4984,16 @@ function PositionsAndRatesSection() {
   return (
     <div className="space-y-10">
       <div>
-        <p className="text-xs text-[#768994] mb-3">
-          What an hour of each position's time bills at. Everyone holding the
-          position bills at this rate — it follows the position, not the person,
-          so someone changing role changes what their time costs on its own.
-        </p>
+        {/* No explainer paragraph here: this page is used by colleagues who
+            already know how rates work. The dashed-vs-solid rate convention
+            lives in RateInput's own tooltip instead of a standing legend. */}
         <SimpleListSection
           table="positions"
           labelField="title"
           label="Positions"
           placeholder="e.g. Creative Director…"
           renderRowExtra={(item, patchItem) => (
-            <div className="w-28 shrink-0">
+            <div className="w-32 shrink-0">
               <RateInput
                 value={item.hourly_rate}
                 onCommit={async (v) => {
@@ -5006,7 +5050,7 @@ function ItemCategoryOverrides() {
     [positions]
   );
 
-  if (loading) return <p className="text-sm text-[#768994] py-8 text-center">Loading…</p>;
+  if (loading) return <p className="text-sm font-bold text-[#768994] py-10 text-center">Loading…</p>;
 
   return (
     <div>
@@ -5015,7 +5059,7 @@ function ItemCategoryOverrides() {
           <div className="flex items-center gap-2">
             <button type="button"
               onClick={() => { setShowAllCategories(s => !s); setSearch(""); }}
-              className={`shrink-0 px-3 py-2 rounded-xl border text-[11px] font-bold transition-all ${
+              className={`shrink-0 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
                 showAllCategories && !search.trim()
                   ? "bg-[#12a0e1]/10 border-[#12a0e1] text-[#12a0e1]"
                   : "bg-white border-[#dce4ec] text-[#768994] hover:border-slate-300"
@@ -5026,7 +5070,7 @@ function ItemCategoryOverrides() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#b0bec5]" />
               <input value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Search item categories…"
-                className="w-full pl-9 pr-3 py-2 border border-[#dce4ec] rounded-xl text-xs text-[#122027] outline-none focus:border-[#1cc1a5] bg-white" />
+                className="w-full pl-9 pr-3 py-2.5 border border-[#dce4ec] rounded-xl text-sm text-[#122027] placeholder-[#b0bec5] outline-none focus:border-[#1cc1a5] bg-white transition-colors" />
             </div>
           </div>
         </div>
@@ -5036,19 +5080,28 @@ function ItemCategoryOverrides() {
             : "Categories that don't bill at the logger's own position rate. Show all or search to add another."}
         </p>
         {visibleCategories.length === 0 ? (
-          <p className="text-sm text-[#768994]">
+          <p className="text-sm text-[#768994] bg-slate-50 border border-dashed border-[#dce4ec] rounded-2xl px-4 py-8 text-center">
             {search.trim() ? "No item category matches that." : "No overrides set."}
           </p>
         ) : (
           <div className="space-y-1.5">
             {visibleCategories.map(c => (
-              <div key={c.id} className="flex items-center gap-3 p-3 bg-white border border-[#dce4ec] rounded-2xl">
-                <span className="flex-1 min-w-0 text-sm font-medium text-[#122027] truncate">{c.name}</span>
+              <div key={c.id}
+                className={`flex items-center gap-3 p-3.5 bg-white border rounded-2xl
+                            transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]
+                            hover:-translate-y-px hover:shadow-[0_6px_18px_-8px_rgba(18,32,39,0.18)] ${
+                  c.unbilled ? "border-[#f4b740]/40" : "border-[#dce4ec] hover:border-slate-300"
+                }`}>
+                <span className="flex-1 min-w-0 text-[15px] font-semibold text-[#122027] truncate">{c.name}</span>
+                {/* The comment below has always said the select goes muted when
+                    a category is unbilled, but nothing ever applied it — the
+                    override sat at full strength next to the badge overriding
+                    it. Now it actually dims. */}
                 <FeedSelect
                   value={c.rate_position_id ? String(c.rate_position_id) : ""}
                   onChange={(v) => patchCategory(c.id, { rate_position_id: v ? Number(v) : null })}
                   allLabel="Logger's own position"
-                  className="w-[220px] shrink-0"
+                  className={`w-[220px] shrink-0 transition-opacity duration-300 ${c.unbilled ? "opacity-40" : ""}`}
                   options={positionOptions}
                 />
                 {/* Unbilled wins over any rate override, so the select goes
@@ -5250,7 +5303,9 @@ function PeopleSection() {
     const initials = `${cleanFirst[0] || ""}${cleanLast[0] || ""}`.toUpperCase() || "?";
     const fullName = [cleanFirst, cleanLast].filter(Boolean).join(" ") || "Unknown";
     return (
-      <div className="flex items-stretch bg-white border border-[#dce4ec] rounded-2xl overflow-hidden hover:border-slate-300 hover:shadow-sm transition-all">
+      <div className="flex items-stretch bg-white border border-[#dce4ec] rounded-2xl overflow-hidden
+                      hover:border-slate-300 hover:-translate-y-px hover:shadow-[0_8px_22px_-10px_rgba(18,32,39,0.22)]
+                      transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]">
         {/* Flush to the card's own edges (top/bottom/left), full height —
             clipped to the card's rounded-2xl by the parent's overflow-hidden
             rather than rounding the image itself, so it reads as one card
@@ -5259,7 +5314,7 @@ function PeopleSection() {
         {p.avatar_url ? (
           <img src={p.avatar_url} alt={fullName} className="w-28 sm:w-32 shrink-0 object-cover" />
         ) : (
-          <div className="w-28 sm:w-32 shrink-0 bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center font-display font-bold text-lg">
+          <div className="w-28 sm:w-32 shrink-0 bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center font-display font-bold text-2xl tracking-tight">
             {initials}
           </div>
         )}
@@ -5304,7 +5359,7 @@ function PeopleSection() {
                 title="Rename"
                 className="group/name flex items-center gap-1.5 max-w-full text-left"
               >
-                <span className="font-display text-base font-bold text-[#122027] tracking-tight truncate">{fullName}</span>
+                <span className="font-display text-[17px] font-bold text-[#122027] tracking-tight truncate">{fullName}</span>
                 <Pencil className="w-3 h-3 shrink-0 text-slate-300 opacity-0 group-hover/name:opacity-100 transition-opacity" />
               </button>
             )}
@@ -5342,7 +5397,7 @@ function PeopleSection() {
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           {!loading && (
-            <span className="text-[10px] font-black text-[#768994] shrink-0">
+            <span className="text-[10px] font-black text-[#768994] uppercase tracking-widest shrink-0 tabular-nums">
               {search.trim() ? `${filteredPeople.length} of ${people.length}` : people.length} people
             </span>
           )}
@@ -5353,7 +5408,7 @@ function PeopleSection() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search people…"
-              className="w-full pl-9 pr-8 py-2 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white"
+              className="w-full pl-9 pr-8 py-2.5 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white placeholder-[#b0bec5] transition-colors"
             />
             {search && (
               <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
@@ -5363,9 +5418,9 @@ function PeopleSection() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {syncMsg && <span className="text-[11px] font-medium text-[#768994]">{syncMsg}</span>}
+          {syncMsg && <span className="text-[11px] font-medium text-[#768994] bg-slate-50 border border-[#dce4ec] rounded-lg px-2.5 py-1.5 max-w-md">{syncMsg}</span>}
           <button onClick={syncFromWrike} disabled={syncing}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-all disabled:opacity-50">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-all disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Syncing…" : "Sync from Wrike"}
           </button>
@@ -5373,16 +5428,21 @@ function PeopleSection() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-16 gap-2 text-[#768994]">
-          <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
+        <div className="flex items-center justify-center py-20 gap-2.5 text-[#768994]">
+          <RefreshCw className="w-4 h-4 animate-spin text-[#12a0e1]" />
+          <span className="text-sm font-bold">Loading…</span>
         </div>
       ) : people.length === 0 ? (
-        <div className="py-16 text-center text-[#768994] text-sm">
-          No people yet — click "Sync from Wrike" to pull everyone in the workspace.
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-[#768994]">
+          <Users className="w-9 h-9 opacity-20" />
+          <p className="font-display text-base font-bold text-[#122027]">No people yet</p>
+          <p className="text-xs">Use “Sync from Wrike” above to pull everyone in the workspace.</p>
         </div>
       ) : filteredPeople.length === 0 ? (
-        <div className="py-16 text-center text-[#768994] text-sm">
-          No one matches "{search}".
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-[#768994]">
+          <Search className="w-9 h-9 opacity-20" />
+          <p className="font-display text-base font-bold text-[#122027]">No one matches “{search}”</p>
+          <p className="text-xs">Try a shorter search, or clear it to see everyone.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -5423,7 +5483,7 @@ function PeopleSection() {
                       style={{ overflow: settled[group.label] ? "visible" : "hidden" }}
                       className="bg-slate-50 border-t border-[#dce4ec] rounded-b-2xl"
                     >
-                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5 p-3">
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 p-3.5">
                         {items.map(p => <PersonCard key={p.wrike_user_id} p={p} />)}
                       </div>
                     </motion.div>
@@ -5562,7 +5622,9 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
   // activeTab is the real navigation: null means "still on the hub"
   // (accordion open or not), a value means "showing that item's content".
   const [expandedGroup, setExpandedGroup] = useState(null);
-  const [activeTab, setActiveTab] = useState(null);
+  // Seeded from the hash so a refresh or a shared link opens straight onto the
+  // section instead of dropping you back on the hub.
+  const [activeTab, setActiveTab] = useState(sectionFromHash);
   // Film whose bulk campaign is open in a modal (from the Films tab).
   const [campaignFilm, setCampaignFilm] = useState(null);
   // Tracks which way the content panel should slide: forward opening an
@@ -5570,17 +5632,85 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
   const [navDirection, setNavDirection] = useState(1);
 
   const toggleGroup = (id) => setExpandedGroup((g) => (g === id ? null : id));
-  const openItem = (id) => { setNavDirection(1); setActiveTab(id); };
+
+  // The open item lives in the hash's second segment (`#management/films`), so
+  // it's a history entry of its own: back leaves an item for the hub instead of
+  // leaving Administration altogether, and a section can be linked to. App.jsx
+  // reads only the first segment, so it stays on "management" throughout.
+  const setSectionHash = (id, replace) => {
+    const hash = id ? `#management/${id}` : "#management";
+    if (window.location.hash === hash) return;
+    if (replace) window.history.replaceState({}, "", hash);
+    else window.history.pushState({}, "", hash);
+  };
+
+  const openItem = (id) => { setNavDirection(1); setActiveTab(id); setSectionHash(id); };
   // The accordion stays exactly as it was — going back doesn't collapse
   // the group you were just looking at.
-  const backToHub = () => { setNavDirection(-1); setActiveTab(null); };
+  const backToHub = () => { setNavDirection(-1); setActiveTab(null); setSectionHash(null); };
+  // Same, but guarantees the group is open on arrival. Identical to backToHub
+  // when you drilled in through the accordion; the difference shows on a deep
+  // link (sessionStorage openAdminSection), where no group was ever expanded.
+  const backToGroup = (groupId) => { setNavDirection(-1); setExpandedGroup(groupId); setActiveTab(null); setSectionHash(null); };
+
+  // Back/forward between sections. The browser has already changed the hash by
+  // the time this fires, so it only mirrors — never writes history back.
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = sectionFromHash();
+      setNavDirection(next ? 1 : -1);
+      setActiveTab(next);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  // Escape goes up one level — an open item back to the hub, the same as the
+  // breadcrumb (so it pushes history and Forward returns).
+  //
+  // It defers to anything with a stronger claim on the key. Modals, the command
+  // palette and StrictSelect's click-catcher are all high-z layers that cover
+  // the viewport, and while one is up Escape belongs to it, not to navigation —
+  // closing a half-filled import or job form by unmounting the whole section
+  // would throw away typed input. Likewise a focused field, where Escape means
+  // "cancel this edit".
+  //
+  // Both halves of the test matter. z alone isn't enough: QuickActions' bubble
+  // is a permanent fixed z-[100], so height alone would mean Escape never
+  // fired. Coverage alone isn't enough either, since the page itself is
+  // full-height. An overlay is both.
+  useEffect(() => {
+    if (!activeTab) return;
+    const overlayOnScreen = () => {
+      for (const el of document.querySelectorAll('[class*="z-["]')) {
+        const z = /z-\[(\d+)\]/.exec(el.getAttribute("class") || "");
+        if (!z || Number(z[1]) < 50) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width >= window.innerWidth * 0.8 && r.height >= window.innerHeight * 0.8) return true;
+      }
+      return false;
+    };
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const t = e.target;
+      if (t?.isContentEditable) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(t?.tagName)) return;
+      if (overlayOnScreen()) return;
+      backToHub();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // One-shot deep link: another page (e.g. Jobs Setup's "Manage films") can stash
   // a section id before switching to #management, and we open it straight away.
   useEffect(() => {
     let target = null;
     try { target = sessionStorage.getItem("openAdminSection"); sessionStorage.removeItem("openAdminSection"); } catch { /* ignore */ }
-    if (target) openItem(target);
+    // replace, not push: the entry the caller created by setting #management is
+    // the one that should carry the section, otherwise Back lands on an empty
+    // Administration hub the user never actually visited.
+    if (target) { setNavDirection(1); setActiveTab(target); setSectionHash(target, true); }
   }, []);
 
   // Administration is a first-class page for PMs; the hardcoded allowlist
@@ -5630,12 +5760,53 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
         )}
       </PageHeader>
 
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-6 pb-6 overflow-hidden">
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-6 pb-6">
+        {/* Breadcrumb bar. This is page chrome, not panel content, so it sits
+            outside the sliding panel — and it has to sit outside the
+            overflow-hidden that clipping the slide requires, because
+            position:sticky does nothing inside a clipped ancestor. Being
+            sticky is the point: Films and Studio Analytics are both long
+            enough that the way back used to scroll off the top, leaving no
+            exit without scrolling all the way up again.
+            The negative margins let the blurred background bleed to the
+            content column's edges while the padding keeps the crumbs aligned
+            with the panel below. */}
+        {nav && (
+          <div className="sticky top-0 z-30 -mx-4 sm:-mx-6 mb-4 px-4 sm:px-6 py-3
+                          bg-slate-100/85 supports-[backdrop-filter]:bg-slate-100/70 backdrop-blur-md
+                          border-b border-[#dce4ec]">
+            <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+              <button
+                onClick={backToHub}
+                className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-all shrink-0"
+              >
+                <ChevronLeft className="w-4 h-4" /> Administration
+              </button>
+              {/* The group crumb goes back to the hub with that group open —
+                  which is where you came from, except on a deep link, where
+                  nothing was expanded yet. */}
+              <ChevronRight className="w-3.5 h-3.5 text-[#b0bec5] shrink-0 hidden sm:block" />
+              <button
+                onClick={() => backToGroup(nav.group.id)}
+                className="hidden sm:block text-xs font-bold text-[#768994] hover:text-[#122027] transition-colors shrink-0 truncate"
+              >
+                {nav.group.label}
+              </button>
+              <ChevronRight className="w-3.5 h-3.5 text-[#b0bec5] shrink-0 hidden sm:block" />
+              <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${nav.group.gradient} flex items-center justify-center text-white shadow-sm shrink-0`}>
+                <nav.item.icon className="w-4 h-4" />
+              </div>
+              <h2 className="font-display text-lg sm:text-xl font-bold text-[#122027] tracking-tight truncate">{nav.item.label}</h2>
+            </div>
+          </div>
+        )}
+
         {/* The hub (with its accordion) and an open item's content are the
             only two panels that ever swap — the accordion itself doesn't
             trigger this, it's a height animation inside the hub panel.
-            overflow-hidden on the parent clips the 28px travel so nothing
-            peeks past the edge mid-transition. */}
+            overflow-hidden clips the 28px travel so nothing peeks past the
+            edge mid-transition. */}
+        <div className="overflow-hidden">
         <AnimatePresence mode="wait" custom={navDirection} initial={false}>
           <motion.div
             key={nav ? `item:${nav.item.id}` : "hub"}
@@ -5653,24 +5824,10 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
               />
             )}
 
-            {/* The item's actual content */}
+            {/* The item's actual content. Its heading and the way back now
+                live in the sticky breadcrumb above, outside this panel. */}
             {nav && (
               <div>
-                <div className="flex items-center gap-3 mb-4">
-                  <button
-                    onClick={backToHub}
-                    className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-all"
-                  >
-                    <ChevronLeft className="w-4 h-4" /> Administration
-                  </button>
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${nav.group.gradient} flex items-center justify-center text-white shadow-sm shrink-0`}>
-                      <nav.item.icon className="w-4 h-4" />
-                    </div>
-                    <h2 className="font-display text-xl font-bold text-[#122027] tracking-tight truncate">{nav.item.label}</h2>
-                  </div>
-                </div>
-
                 <div className="bg-white border border-[#dce4ec] rounded-2xl p-6 shadow-sm">
                   {/* Project/Time is the logged-time-per-job feed — same
                       component Job Book uses (JobsFeedSection), not a separate
@@ -5702,6 +5859,7 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
             )}
           </motion.div>
         </AnimatePresence>
+        </div>
       </div>
 
       {campaignFilm && (

@@ -191,9 +191,63 @@ function timeAgo(iso) {
   return days === 1 ? "yesterday" : `${days}d ago`;
 }
 
-function StatCard({ label, value, unit, icon: Icon, accent = "#12a0e1" }) {
+// Count a figure up to its value once, the first time there is one to show.
+//
+// This is the one page where that's the right call. Per the motion budget, a
+// hundred-times-a-day surface gets no animation at all — but a profile is
+// somewhere you look occasionally, and "1,284 tasks all time" arriving by
+// counting is the difference between a number and an achievement. It also does
+// something useful: the figure moving is what tells you the lifetime stats
+// finished loading, which a static number swapping in from "—" does not.
+//
+// Once only. These values refetch, and a card that re-counted every time the
+// cache refreshed would be a fidget toy. Non-numeric values (a formatted
+// string, the "—" placeholder) pass straight through untouched.
+const COUNT_UP_MS = 900;
+function useCountUp(target) {
+  const isNum = typeof target === "number" && Number.isFinite(target);
+  const [shown, setShown] = useState(isNum ? 0 : target);
+  const counted = useRef(false);
+
+  useEffect(() => {
+    if (!isNum) { setShown(target); return; }
+    // Already run, or the user asked for stillness: land on the real number.
+    if (counted.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      counted.current = true;
+      setShown(target);
+      return;
+    }
+    counted.current = true;
+    const start = performance.now();
+    let raf;
+    const step = (now) => {
+      const p = Math.min((now - start) / COUNT_UP_MS, 1);
+      // power3.out — the same decelerating family as the GSAP reveals on this
+      // page and the chart bars on Analytics, so the whole app counts and
+      // arrives with one accent.
+      setShown(Math.round(target * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, isNum]);
+
+  return shown;
+}
+
+function StatCard({ label, value, unit, icon: Icon, accent = "#12a0e1", format }) {
+  const counted = useCountUp(value);
+  // A formatter turns the counter into its own unit as it climbs — "Total time"
+  // counts seconds but reads "1h 23m", so the figure is legible at every frame
+  // rather than being a bare number until it lands.
+  const display = typeof counted === "number" && format ? format(counted) : counted;
+
   return (
-    <div className="bg-white border border-[#dce4ec] rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+    <div
+      className="group bg-white border border-[#dce4ec] rounded-2xl p-5 shadow-sm flex flex-col gap-3
+                 transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]
+                 hover:-translate-y-px hover:border-[#c6d0da] hover:shadow-[0_10px_26px_-12px_rgba(18,32,39,0.22)]"
+    >
       <div className="flex items-center gap-2">
         <div
           className="p-1.5 rounded-lg"
@@ -201,12 +255,14 @@ function StatCard({ label, value, unit, icon: Icon, accent = "#12a0e1" }) {
         >
           <Icon className="w-3.5 h-3.5" />
         </div>
-        <span className="text-[10px] font-black text-[#768994] uppercase tracking-widest">
+        <span className="text-[10px] font-black text-[#768994] uppercase tracking-[0.18em]">
           {label}
         </span>
       </div>
-      <div className="text-2xl font-black text-[#122027] leading-none">
-        {value} <span className="text-sm font-bold text-[#768994]">{unit}</span>
+      {/* Display weight and tabular figures, matching Analytics' KPI tiles —
+          tabular so a counting number doesn't jitter its own width per frame. */}
+      <div className="font-display text-[clamp(1.75rem,3vw,2.5rem)] font-bold text-[#122027] leading-[0.9] tracking-[-0.04em] tabular-nums">
+        {display} <span className="font-sans text-sm font-bold tracking-normal text-[#768994]">{unit}</span>
       </div>
     </div>
   );
@@ -859,7 +915,7 @@ function OverviewSection({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard
           label="Tasks logged"
           value={tasks.length}
@@ -867,9 +923,12 @@ function OverviewSection({
           icon={Clock}
           accent="#12a0e1"
         />
+        {/* Seconds plus the formatter, rather than a pre-formatted string, so
+            the figure can climb and still read as a duration on the way. */}
         <StatCard
           label="Total time"
-          value={formatDurationText(totalSeconds)}
+          value={totalSeconds}
+          format={formatDurationText}
           unit=""
           icon={TrendingUp}
           accent="#1cc1a5"
@@ -932,12 +991,12 @@ function OverviewSection({
                       {a.label}
                     </p>
                     {a.live && (
-                      <span className="text-[9px] font-black text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
+                      <span className="text-[10px] font-black text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
                         Live timer
                       </span>
                     )}
                     {!a.live && a.pending && (
-                      <span className="text-[9px] font-black text-orange-600 bg-orange-50 border border-orange-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
+                      <span className="text-[10px] font-black text-orange-600 bg-orange-50 border border-orange-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
                         Not pulled
                       </span>
                     )}
@@ -1676,7 +1735,7 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
               <div className="font-display text-2xl sm:text-3xl font-bold text-white leading-none">
                 {value}
               </div>
-              <div className="text-[9px] font-black text-white/70 uppercase tracking-widest mt-1">
+              <div className="text-[10px] font-black text-white/70 uppercase tracking-widest mt-1">
                 {label}
               </div>
             </div>

@@ -132,8 +132,12 @@ const VALID_PAGES = [
   "management", "jobbook", "todayslist",
 ];
 
+// The hash is `#page` or `#page/section` — the second segment belongs to the
+// page (Administration puts its open item there, see Management.jsx), so only
+// the first is read here. Without the split, `#management/films` would fail the
+// VALID_PAGES check and bounce to Home.
 const pageFromHash = () => {
-  const id = window.location.hash.slice(1);
+  const id = window.location.hash.slice(1).split("/")[0];
   return VALID_PAGES.includes(id) ? id : "home";
 };
 
@@ -164,14 +168,29 @@ export default function App() {
 
   // Keep the URL hash in sync with the active page so a refresh (or a
   // bookmark/shared link) lands back on the same page instead of Home.
-  // replaceState, not pushState — this mirrors activePage, it doesn't give
-  // browser back/forward its own page-swap semantics (those would fight the
-  // wash-transition/AnimatePresence choreography above).
+  //
+  // pushState, so each page you open is its own history entry and the
+  // browser's (or mouse's) back/forward buttons move between pages. Two
+  // guards keep that from misbehaving:
+  //
+  //  - Compared via pageFromHash(), not the raw hash, so a page that owns the
+  //    second segment (`#management/films`) isn't clobbered back to
+  //    `#management` the moment it sets one.
+  //  - The first run replaces instead of pushing. On a cold load the hash is
+  //    usually empty while activePage is already "home", and pushing there
+  //    would leave a dead entry that swallows the first Back press.
+  //
+  // A back/forward press needs no write at all: it changes the hash itself,
+  // the hashchange listener below updates activePage, and by the time this
+  // runs the URL already agrees. That path also skips the wash overlay, which
+  // is correct — going back should be instant, not ceremonial.
+  const hashPrimed = useRef(false);
   useEffect(() => {
+    if (pageFromHash() === activePage) { hashPrimed.current = true; return; }
     const hash = `#${activePage}`;
-    if (window.location.hash !== hash) {
-      window.history.replaceState({}, "", hash);
-    }
+    if (hashPrimed.current) window.history.pushState({}, "", hash);
+    else window.history.replaceState({}, "", hash);
+    hashPrimed.current = true;
   }, [activePage]);
 
   // Home is deliberately built to own exactly one viewport with no scroll

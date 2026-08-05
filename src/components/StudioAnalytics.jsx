@@ -57,6 +57,40 @@ const fmtHours = (n) => (n >= 100 ? Math.round(n).toLocaleString("en-GB") : n.to
 // Normalize a title/name to bare alphanumerics for fuzzy film matching.
 const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
+// One-shot reveal for a chart. These charts sit below the fold — the throughput
+// and workload pairs are a scroll away — so their bars should draw when the
+// reader actually reaches them rather than playing to an empty room at mount.
+// IntersectionObserver, not a scroll listener, and disconnected after firing so
+// scrolling back up doesn't replay it.
+//
+// Under reduced motion it resolves to "revealed" immediately and never observes
+// anything: the CSS in tailwind.css leaves the bars at full size there, so this
+// only has to avoid withholding the class.
+function useReveal() {
+  const ref = useRef(null);
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { setRevealed(true); return; }
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) { setRevealed(true); io.disconnect(); }
+      },
+      { threshold: 0.15, rootMargin: "-40px 0px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return [ref, revealed];
+}
+
+// Stagger across a series. 45ms rather than the 80ms a card grid would use, and
+// capped at 6 steps: twelve adjacent bars in one chart read as a single sweep,
+// not as twelve arrivals, and 12 × 80ms would put the reveal past 900ms on its
+// own. Everything past the cap shares the last delay.
+const barDelay = (i) => `${Math.min(i, 6) * 45}ms`;
+
 // ── chart card scaffolding ───────────────────────────────────────────────────
 
 function ChartCard({ title, subtitle, rows, valueFmt, children }) {
@@ -160,12 +194,15 @@ function useElementWidth() {
 function BarsH({ rows, color, valueFmt }) {
   const { show, hide, node } = useTooltip();
   const [ref, W] = useElementWidth();
+  const [revealRef, revealed] = useReveal();
   const max = Math.max(...rows.map((r) => r.value), 1);
   const ROW_H = 26, GAP = 8, LABEL_W = 148, VAL_W = 52;
   const height = rows.length * (ROW_H + GAP) - GAP;
   const trackW = Math.max(W - LABEL_W - VAL_W, 1);
   return (
-    <div className="relative" data-chart ref={ref} style={{ minHeight: height }}>
+    <div className={`relative ${revealed ? "is-revealed" : ""}`} data-chart ref={ref} style={{ minHeight: height }}>
+      {/* Sizing owns the outer ref, so the observer gets its own zero-height probe. */}
+      <div ref={revealRef} aria-hidden="true" />
       {node}
       {W > 0 && (
       <svg width="100%" height={height} viewBox={`0 0 ${W} ${height}`} className="block">
@@ -180,6 +217,8 @@ function BarsH({ rows, color, valueFmt }) {
               <path
                 d={hBarPath(LABEL_W, y + 3, w, ROW_H - 6)}
                 fill={color}
+                className="chart-bar chart-bar--x"
+                style={{ "--bar-delay": barDelay(i) }}
                 onMouseMove={(e) => show(e, `${r.label} — ${valueFmt(r.value)}`)}
                 onMouseLeave={hide}
               />
@@ -200,12 +239,14 @@ function BarsH({ rows, color, valueFmt }) {
 function BarsMonthly({ rows, color, valueFmt = fmtInt, tipSuffix = "completed" }) {
   const { show, hide, node } = useTooltip();
   const [ref, W] = useElementWidth();
+  const [revealRef, revealed] = useReveal();
   const max = Math.max(...rows.map((r) => r.value), 1);
   const H = 190, PAD_B = 22, PAD_T = 18;
   const bw = W / rows.length;
   const peakIdx = rows.findIndex((r) => r.value === max);
   return (
-    <div className="relative" data-chart ref={ref} style={{ minHeight: H }}>
+    <div className={`relative ${revealed ? "is-revealed" : ""}`} data-chart ref={ref} style={{ minHeight: H }}>
+      <div ref={revealRef} aria-hidden="true" />
       {node}
       {W > 0 && (
       <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} className="block">
@@ -225,6 +266,8 @@ function BarsMonthly({ rows, color, valueFmt = fmtInt, tipSuffix = "completed" }
                 <path
                   d={vBarPath(x, H - PAD_B - h, w, h)}
                   fill={color}
+                  className="chart-bar chart-bar--y"
+                  style={{ "--bar-delay": barDelay(i) }}
                   onMouseMove={(e) => show(e, `${r.full} — ${valueFmt(r.value)} ${tipSuffix}`)}
                   onMouseLeave={hide}
                 />
@@ -253,10 +296,11 @@ function BarsMonthly({ rows, color, valueFmt = fmtInt, tipSuffix = "completed" }
 // row's track length is the campaign's total task count relative to the busiest;
 // the green fill is the completed share, the muted remainder is the live backlog.
 function BarsProgress({ rows }) {
+  const [revealRef, revealed] = useReveal();
   const max = Math.max(...rows.map((r) => r.total), 1);
   return (
-    <div className="space-y-2">
-      {rows.map((r) => {
+    <div className={`space-y-2 ${revealed ? "is-revealed" : ""}`} ref={revealRef}>
+      {rows.map((r, i) => {
         const trackPct = (r.total / max) * 100;
         const donePct = r.total ? (r.done / r.total) * 100 : 0;
         return (
@@ -265,9 +309,12 @@ function BarsProgress({ rows }) {
               {r.label}
             </div>
             <div className="flex-1 min-w-0">
+              {/* The track carries the reveal, so the completed portion rides
+                  out inside it — one sweep per film rather than a track and a
+                  fill competing for the same moment. */}
               <div
-                className="h-[18px] rounded-md bg-[#eef1f5] overflow-hidden"
-                style={{ width: `${Math.max(trackPct, 2)}%` }}
+                className="h-[18px] rounded-md bg-[#eef1f5] overflow-hidden chart-bar chart-bar--x"
+                style={{ width: `${Math.max(trackPct, 2)}%`, "--bar-delay": barDelay(i) }}
                 title={`${r.label} — ${r.done} completed, ${r.active} active`}
               >
                 <div className="h-full bg-[#1baf7a]" style={{ width: `${donePct}%` }} />
@@ -286,15 +333,46 @@ function BarsProgress({ rows }) {
 
 // ── KPI tile ─────────────────────────────────────────────────────────────────
 
-function StatTile({ icon: Icon, label, value, sub }) {
+// The figure is the point of a KPI tile, so it carries display weight here:
+// Bricolage at viewport-scale with negative tracking, tabular-nums so digits
+// don't jitter as the counts refresh. `accent` tints only atmosphere — the
+// bloom, the hover rule, the icon — never the figure, which stays ink. That
+// keeps the sub-3:1 series colours (aqua, amber) decorative rather than
+// load-bearing, same discipline as the charts below.
+function StatTile({ icon: Icon, label, value, sub, accent = SERIES.blue, index = 0 }) {
   return (
-    <div className="bg-white border border-[#dce4ec] rounded-2xl p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-[#768994] mb-2">
-        <Icon className="w-3.5 h-3.5" />
-        <span className="text-[10px] font-black uppercase tracking-widest">{label}</span>
+    <div
+      className="group relative overflow-hidden bg-white border border-[#dce4ec] rounded-2xl p-5 sm:p-6 shadow-sm
+                 transition-[transform,box-shadow,border-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]
+                 hover:-translate-y-1 hover:border-[#c6d0da] hover:shadow-[0_14px_34px_-12px_rgba(18,32,39,0.22)]
+                 motion-safe:animate-kpi-rise"
+      style={{ "--kpi-accent": accent, animationDelay: `${index * 90}ms` }}
+    >
+      {/* Corner bloom in the tile's own hue — the depth cue that stops four
+          white rectangles reading as a spreadsheet. Blurred and clipped by the
+          parent's overflow-hidden, so it never bleeds past the radius. */}
+      <div
+        className="pointer-events-none absolute -top-16 -right-16 w-40 h-40 rounded-full blur-2xl
+                   opacity-[0.07] transition-opacity duration-500 group-hover:opacity-[0.18]"
+        style={{ background: "var(--kpi-accent)" }}
+      />
+      {/* Rule that draws itself across the top edge on hover. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 h-[2px] origin-left scale-x-0
+                   transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]
+                   group-hover:scale-x-100"
+        style={{ background: "linear-gradient(to right, var(--kpi-accent), transparent)" }}
+      />
+
+      <div className="relative flex items-center gap-2 mb-3">
+        <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--kpi-accent)" }} />
+        <span className="text-[10px] font-black uppercase tracking-[0.18em] text-[#768994]">{label}</span>
       </div>
-      <div className="font-display text-2xl font-bold text-[#122027] leading-none">{value}</div>
-      {sub && <p className="text-[10px] text-[#768994] mt-1.5">{sub}</p>}
+      <div className="relative font-display text-[clamp(2rem,3.4vw,3rem)] font-bold text-[#122027]
+                      leading-[0.85] tracking-[-0.045em] tabular-nums">
+        {value}
+      </div>
+      {sub && <p className="relative text-[10px] leading-snug text-[#768994] mt-3 max-w-[26ch]">{sub}</p>}
     </div>
   );
 }
@@ -484,11 +562,11 @@ export default function StudioAnalytics({ wrikeData = [] }) {
   return (
     <div className="space-y-5">
       {/* KPI row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile icon={Activity} label="Active tasks" value={fmtInt(stats.active)} sub="Open across the whole studio, right now" />
-        <StatTile icon={CheckCircle2} label="Completed this month" value={fmtInt(stats.completedThisMonth)} sub={now.toLocaleDateString("en-GB", { month: "long", year: "numeric" })} />
-        <StatTile icon={Film} label="Films in production" value={fmtInt(campaigns.inProduction)} sub="Real films with active tasks" />
-        <StatTile icon={Clock} label="Hours logged" value={logRows === null ? "…" : fmtHours(stats.hours30)} sub="Timesheets, last 30 days" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+        <StatTile icon={Activity} label="Active tasks" value={fmtInt(stats.active)} sub="Open across the whole studio, right now" accent={SERIES.blue} index={0} />
+        <StatTile icon={CheckCircle2} label="Completed this month" value={fmtInt(stats.completedThisMonth)} sub={now.toLocaleDateString("en-GB", { month: "long", year: "numeric" })} accent={SERIES.aqua} index={1} />
+        <StatTile icon={Film} label="Films in production" value={fmtInt(campaigns.inProduction)} sub="Real films with active tasks" accent={SERIES.violet} index={2} />
+        <StatTile icon={Clock} label="Hours logged" value={logRows === null ? "…" : fmtHours(stats.hours30)} sub="Timesheets, last 30 days" accent={SERIES.amber} index={3} />
       </div>
 
       {/* Campaign progress — the health hero: completed vs backlog per film. */}
