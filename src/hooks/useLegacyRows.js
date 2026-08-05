@@ -1,33 +1,26 @@
 import { useCallback, useMemo, useRef } from "react";
 import { useTasks } from "./useTasks";
+import { parseTimeToHours, parseTimeToSeconds } from "../utils/timeHelpers";
 
-// Parses either a decimal string ("1.5") or an "H:MM" string ("1:30") into hours.
-// getTimesheetValue() in LegacyTimesheet.js produces H:MM for Wrike-pulled rows;
-// everything else (TIME_OPTIONS, manual edits) uses decimal strings.
-export const hmToHours = (val) => {
-  if (typeof val !== "string" || !val.includes(":")) {
-    const n = parseFloat(val);
-    return isNaN(n) ? 0 : n;
-  }
-  const [h, m] = val.split(":").map(Number);
-  return (h || 0) + (m || 0) / 60;
-};
+// Hours from any stored shape — "1:30", "1.5", "2", "none". Kept as a named
+// export because the day/week totals in LegacyTimesheets read in hours, but it
+// is the shared parser underneath, so it can no longer disagree with the one
+// useTasks uses to build rawSeconds.
+export const hmToHours = parseTimeToHours;
 
 // Normalise a legacy row on add/read — useTasks.fromDb already handles seconds↔hours.
-// No rounding here: Supabase stores the exact pulled/entered time (same as Tracker).
-// 0.5h rounding only happens at JSON-export time (see handleCopyJSON), since that's
-// the only consumer (the old timesheet website) that requires half-hour steps.
+// No rounding here, and none at export either: Supabase and the exported JSON both
+// carry the exact pulled/entered time. The timesheet website's step size varies by
+// job (UK-folder jobs take 0.25, INT jobs 0.5), so the bookmarklet snaps each row
+// against that row's own dropdown — the only place the real grid is knowable.
 const normaliseLegacyRow = (row) => ({
   ...row,
   territory: row.territory || "",
   timeSpent: row.timeSpent || "none",
   additionalTime: row.additionalTime || "none",
-  // Derive rawSeconds from timeSpent for in-memory use. Uses hmToHours so "H:MM"
-  // values (from Wrike pulls) convert correctly instead of being truncated by
-  // parseFloat at the colon.
-  rawSeconds: row.rawSeconds || (row.timeSpent && row.timeSpent !== "none"
-    ? Math.round(hmToHours(row.timeSpent) * 3600)
-    : 0),
+  // Derive rawSeconds from timeSpent for in-memory use, through the shared
+  // parser so "H:MM", "1.5" and "2" all mean what they say.
+  rawSeconds: row.rawSeconds ?? parseTimeToSeconds(row.timeSpent),
   // Auto-derive project description from job number
   projectDescription: row.projectDescription ||
     (row.jobNumber?.includes(",") ? row.jobNumber.substring(row.jobNumber.indexOf(",") + 1).trim() : ""),

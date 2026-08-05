@@ -1,19 +1,22 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo, useCallback } from "react";
 import {
   Activity, Download, RefreshCw,
   List,
   Layers, Globe, Tag, Film,
 } from "lucide-react";
 
-import { TERRITORIES, TERRITORY_FLAGS, CATEGORIES, DAYS_OF_WEEK } from "../../constants";
+import { CATEGORIES, DAYS_OF_WEEK } from "../../constants";
 import { useTrackerState } from "../../hooks/useTrackerState";
 import { useTaskActions } from "../../hooks/useTaskActions";
 import { useWrikeUser } from "../../hooks/useWrikeUser";
 import { useTasks } from "../../hooks/useTasks";
 import { useJobLookup } from "../../hooks/useJobLookup";
+import { useDepartment } from "../../hooks/useDepartment";
+import { trackerSubtitleFor, jobQuickFiltersFor } from "../../lib/departments";
 import { getCurrentWeekStart } from "../../hooks/useLegacyRows";
-import { formatDurationText } from "../../utils/timeHelpers";
+import { formatDurationText, parseTimeToSeconds } from "../../utils/timeHelpers";
 import SearchableSelect from "../shared/SearchableSelect";
+import MultiCountrySelect from "../shared/MultiCountrySelect";
 import PageHeader, { pageHeaderActionClass } from "../shared/PageHeader";
 import TriageModal from "./TriageModal";
 import DeleteModal from "./DeleteModal";
@@ -23,6 +26,7 @@ import HistoryTab from "./HistoryTab";
 
 export default function Tracker({ wrikeData, onNavigateToHub }) {
   const state = useTrackerState();
+  const department = useDepartment();
   const {
     jobNumber, setJobNumber, territory, setTerritory, category, setCategory, notes, setNotes,
     isRunning, elapsedTime, entryMode, setEntryMode, manualHours, setManualHours,
@@ -58,7 +62,32 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
   // data, and self-populates Job Book from real usage the first time a job is seen.
   const jobLookup = useJobLookup();
 
-  const stateWithPull = { ...state, tasks, setTasks, addTask, addTasks, updateTask, updateTasks, deleteTasks, importTasks, isPullingTime, setIsPullingTime, wrikeUser, jobLookup };
+  // What the job picker actually offers: the Job Book first (the live list,
+  // continuously backfilled from Wrike), then anything this browser has logged
+  // that hasn't reached the book yet. jobOptions on its own is a hardcoded
+  // constant plus local additions, which is why most of the studio's jobs
+  // couldn't be found by searching.
+  //
+  // Deduped by XY code, not by string. The same job exists in both lists under
+  // different spellings — the constant says "Paw Patrol: The Dino Movie", the
+  // book says "Paw Patrol The Dino Movie" — and since the picker groups by the
+  // text before " : ", a plain union listed that film twice, once with 19 jobs
+  // and once with 37. The book's spelling wins: it's the curated source, and
+  // it's what the timesheet bookmarklet matches against.
+  const allJobOptions = useMemo(() => {
+    const byCode = new Map();
+    const keyFor = (opt) => (opt.match(/XY\d{5,6}/i) || [opt])[0].toUpperCase();
+    for (const opt of jobLookup.jobNumbers || []) byCode.set(keyFor(opt), opt);
+    for (const opt of jobOptions) {
+      const k = keyFor(opt);
+      if (!byCode.has(k)) byCode.set(k, opt);
+    }
+    return [...byCode.values()];
+  }, [jobLookup.jobNumbers, jobOptions]);
+
+  // Downstream too: the job-number guesser resolves a Wrike code against this
+  // list, so a short list meant a real job resolved to nothing.
+  const stateWithPull = { ...state, jobOptions: allJobOptions, tasks, setTasks, addTask, addTasks, updateTask, updateTasks, deleteTasks, importTasks, isPullingTime, setIsPullingTime, wrikeUser, jobLookup };
   const actions = useTaskActions(stateWithPull);
 
   // Lottie script loader
@@ -71,20 +100,44 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
     }
   }, []);
 
-  // Normalise a task regardless of whether it came from Tracker or Legacy
+  // Normalise a task regardless of whether it came from Tracker or Legacy.
+  // Both fall back through the shared parser rather than parseFloat, which
+  // truncated an "H:MM" string at the colon and turned 2:30 into 2 hours.
   const getTerritory = (t) => t.territory || "Unknown Territory";
-  const getRawSeconds = (t) => {
-    if (t.rawSeconds) return t.rawSeconds;
-    if (t.timeSpent && t.timeSpent !== "none") return Math.round(parseFloat(t.timeSpent) * 3600);
-    return 0;
-  };
-  const getAddSeconds = (t) => {
-    if (t.additionalSeconds) return t.additionalSeconds;
-    if (t.additionalTime && t.additionalTime !== "none") return Math.round(parseFloat(t.additionalTime) * 3600);
-    return 0;
-  };
+  const getRawSeconds = (t) => t.rawSeconds || parseTimeToSeconds(t.timeSpent);
+  const getAddSeconds = (t) => t.additionalSeconds || parseTimeToSeconds(t.additionalTime);
 
   // Derived data
+  // Job picker ordering. jobOptions is append-only — every job ever seen, in
+  // the order it was first seen — so the dropdown opened on the oldest films
+  // in the studio's history and you scrolled past finished work to reach what
+  // you're actually on today.
+  //
+  // Rank each film by the newest job under it, using the Job Book's own dates.
+  // Anything marked done contributes nothing, so a wrapped campaign sinks even
+  // if it was recent. Films you've logged against this week beat everything,
+  // since that's the strongest signal of what you're working on right now.
+  const myRecentFilms = useMemo(() => {
+    const seen = new Set();
+    for (const t of tasks) if (t.filmTitle) seen.add(t.filmTitle.toLowerCase());
+    return seen;
+  }, [tasks]);
+
+  const rankJobGroup = useCallback(
+    (groupName, items) => {
+      if (myRecentFilms.has(String(groupName).toLowerCase())) return Number.MAX_SAFE_INTEGER;
+      let newest = 0;
+      for (const opt of items) {
+        const job = jobLookup?.getJob?.(opt);
+        if (!job || job.job_done) continue;
+        const t = Date.parse(job.start_date || job.created_at || "") || 0;
+        if (t > newest) newest = t;
+      }
+      return newest;
+    },
+    [jobLookup, myRecentFilms]
+  );
+
   const currentFilteredTasks = tasks.filter((t) => t.dayOfWeek === selectedDay);
   const getSecondsForDay = (day) =>
     tasks.filter((t) => t.dayOfWeek === day).reduce((sum, t) => sum + getRawSeconds(t) + getAddSeconds(t), 0);
@@ -120,7 +173,7 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
         handlePasteImport={actions.handlePasteImport}
       />
 
-      <PageHeader pageId="timesheet" icon={Activity} title="XYi Timesheeter" subtitle="Timesheet Tracker for the Motion Peeps">
+      <PageHeader pageId="timesheet" icon={Activity} title="XYi Timesheeter" subtitle={trackerSubtitleFor(department)}>
         <button
           onClick={() => actions.handlePullWrikeTime(wrikeData)}
           disabled={isPullingTime}
@@ -193,7 +246,7 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
                         Keep Selection
                       </label>
                     </div>
-                    <SearchableSelect options={jobOptions} value={jobNumber} onChange={setJobNumber} placeholder="Type to search or add..." icon={Film} disabled={isRunning && entryMode === "timer"} quickFilters={["DOOH","Titles","Print","Digital","Internal"]} isGrouped={true} alignRight={false} dropdownId="tracker-job" activeDropdown={activeDropdown} setActiveDropdown={setActiveDropdown} />
+                    <SearchableSelect options={allJobOptions} value={jobNumber} onChange={setJobNumber} placeholder="Type to search or add..." icon={Film} disabled={isRunning && entryMode === "timer"} quickFilters={jobQuickFiltersFor(department)} isGrouped={true} groupRank={rankJobGroup} alignRight={false} dropdownId="tracker-job" activeDropdown={activeDropdown} setActiveDropdown={setActiveDropdown} />
                   </div>
                   {/* Country */}
                   <div>
@@ -206,7 +259,7 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
                         Keep
                       </label>
                     </div>
-                    <SearchableSelect options={TERRITORIES} value={territory} onChange={setTerritory} placeholder="Search..." disabled={isRunning && entryMode === "timer"} getPrefix={(val) => TERRITORY_FLAGS[val]} isGrouped={false} alignRight={false} dropdownId="tracker-territory" activeDropdown={activeDropdown} setActiveDropdown={setActiveDropdown} />
+                    <MultiCountrySelect value={territory} onChange={setTerritory} placeholder="Pick countries..." variant="form" disabled={isRunning && entryMode === "timer"} dropdownId="tracker-territory" activeDropdown={activeDropdown} setActiveDropdown={setActiveDropdown} needsAttention={!!jobNumber} />
                   </div>
                   {/* Category */}
                   <div>

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { supabase } from "../lib/supabaseClient";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { supabase, selectAll } from "../lib/supabaseClient";
 
 /**
  * Shared job_number -> Job Book record lookup.
@@ -43,7 +43,9 @@ export function useJobLookup() {
   const [jobMap, setJobMap] = useState({});
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from("jobs").select("*");
+    // selectAll, not .select(): a plain read stops at 1000 rows, so the newest
+    // jobs — the ones most likely to be looked up — fell out of the map.
+    const data = await selectAll("jobs", "*");
     const map = {};
     (data || []).forEach((j) => {
       if (!j.job_number) return;
@@ -57,6 +59,17 @@ export function useJobLookup() {
   useEffect(() => { load(); }, [load]);
 
   const getJob = useCallback((jobNumber) => jobMap[jobKey(jobNumber)] || null, [jobMap]);
+
+  // Every job number the book holds, for pickers. The Tracker's dropdown used
+  // to be fed only by DEFAULT_JOBS — a hardcoded array in constants.js — plus
+  // whatever this browser had happened to log against. That snapshot had 343
+  // entries against the book's 950, so two thirds of the studio's jobs simply
+  // couldn't be found by searching, and anything created after the constant
+  // was last hand-edited never appeared at all.
+  const jobNumbers = useMemo(
+    () => Object.values(jobMap).map((j) => j.job_number).filter(Boolean),
+    [jobMap]
+  );
 
   // Register a job number the first time it's seen, or fill in blank fields on an
   // existing row (e.g. one backfilled without a client). Never overwrites a field
@@ -94,5 +107,5 @@ export function useJobLookup() {
     if (error) console.warn("Failed to fill in Job Book gaps:", error.message);
   }, [jobMap]);
 
-  return { getJob, ensureJob };
+  return { getJob, ensureJob, jobNumbers };
 }

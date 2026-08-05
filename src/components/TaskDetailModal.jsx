@@ -30,6 +30,7 @@ import { supabase } from "../lib/supabaseClient";
 import { parseWrikeData } from "../lib/wrikeEnrich";
 import { guessFieldsFromTask } from "../utils/wrikeHelpers";
 import SearchableSelect from "./shared/SearchableSelect";
+import MultiCountrySelect from "./shared/MultiCountrySelect";
 import { parsePdfDeliverySpecs } from "../utils/pdfTableParser";
 import DeliverySpecsModal from "./DeliverySpecsModal";
 import { logTimeToWrike } from "../lib/wrikeApi";
@@ -241,6 +242,14 @@ export function CsvPreviewModal({
   onClose,
 }) {
   const [copied, setCopied] = useState(false);
+  // A task attachment always arrives with territoryName already guessed from
+  // the task itself (smartTerritory). A standalone PDF read with no task
+  // behind it (Active Jobs' ad-hoc "Read specs from a PDF") has nothing to
+  // guess from, so this picker only renders when the caller didn't supply
+  // one — the task flow never sees it.
+  const [manualTerritory, setManualTerritory] = useState("");
+  const [activeDropdown, setActiveDropdown] = useState(null);
+  const effectiveTerritory = territoryName || manualTerritory;
 
   const formattedData = React.useMemo(() => {
     if (!rawSpecs) return [];
@@ -275,10 +284,10 @@ export function CsvPreviewModal({
           : campaignName || "UNKNOWN",
         "Size:": size,
         "Duration:": duration,
-        "Country:": territoryName || "UNKNOWN", // 👈 Added the new Country column!
+        "Country:": effectiveTerritory || "UNKNOWN",
       };
     });
-  }, [rawSpecs, campaignName, territoryName]);
+  }, [rawSpecs, campaignName, effectiveTerritory]);
 
   const csvString = React.useMemo(() => {
     if (!formattedData.length) return "";
@@ -330,7 +339,7 @@ const handleCopy = () => {
     }
 
     const metadata = `[METADATA]\nTerritory: ${
-      territoryName || ""
+      effectiveTerritory || ""
     }\nBatch: ${batchStr}\nSource Folder: ${
       sourceFolder || ""
     }\n[/METADATA]\n\n`;
@@ -380,6 +389,33 @@ const handleCopy = () => {
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Territory picker — only when the caller had no task to guess one
+            from (a standalone PDF read via Active Jobs, not attached to any
+            Wrike task). The task-attachment flow always arrives with
+            territoryName already set, so this never shows there. */}
+        {!territoryName && (
+          <div className="flex items-center gap-3 px-6 py-3 border-b border-[#dce4ec] bg-white">
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 shrink-0">
+              Country
+            </span>
+            <div className="w-64">
+              <SearchableSelect
+                options={TERRITORIES}
+                value={manualTerritory}
+                onChange={setManualTerritory}
+                placeholder="Search territory…"
+                getPrefix={(val) => TERRITORY_FLAGS[val]}
+                dropdownId="csv-preview-territory"
+                activeDropdown={activeDropdown}
+                setActiveDropdown={setActiveDropdown}
+              />
+            </div>
+            <span className="text-[10px] text-slate-400 font-medium">
+              No task to guess this from — pick one for the CSV's Country column.
+            </span>
+          </div>
+        )}
 
         {/* Table Content */}
         <div className="flex-1 overflow-auto bg-slate-50/50 p-6">
@@ -956,15 +992,15 @@ function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, trigger
           </div>
           <div>
             <label className={labelCls}>Territory</label>
-            <SearchableSelect
-              options={TERRITORIES}
+            <MultiCountrySelect
               value={territory}
               onChange={setTerritory}
-              placeholder="Search territory…"
-              getPrefix={(val) => TERRITORY_FLAGS[val]}
+              placeholder="Pick countries…"
+              variant="form"
               dropdownId="hub-territory"
               activeDropdown={activeDropdown}
               setActiveDropdown={setActiveDropdown}
+              needsAttention
             />
           </div>
           <div>

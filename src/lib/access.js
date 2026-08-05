@@ -6,6 +6,11 @@
 //
 // Your Wrike ID is shown on the Profile Hub page (under your name, first 8
 // chars). An empty list means everyone gets access.
+//
+// This list is mirrored in the `profiles_write` RLS policy (see schema.sql),
+// which is what actually permits editing other people's department/position
+// and the Sync-from-Wrike upsert. Adding someone here without adding them
+// there gets them the Administration UI but silently-failing writes.
 export const MANAGEMENT_IDS = [
   "KUAWDLVN", "KUAQT4JC",
 ];

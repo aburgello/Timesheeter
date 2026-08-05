@@ -53,6 +53,12 @@ export default {
     if (url.pathname.startsWith("/api/wrike/")) {
       return handleProxy(request, url, env);
     }
+    if (url.pathname === "/api/jobs-feed") {
+      return handleJobsFeed(request, env);
+    }
+    if (url.pathname === "/api/jobs-feed/import" && request.method === "POST") {
+      return handleJobsFeedImport(request, env);
+    }
 
     return env.ASSETS.fetch(request);
   },
@@ -89,6 +95,286 @@ function json(body, init = {}) {
     ...init,
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
   });
+}
+
+// ── Admin Jobs Feed (all users' time) ────────────────────────────────────────
+// The tasks table has a per-user RLS policy (wrike_user_isolation), so a browser
+// read only ever returns the caller's own rows. The Administration Jobs Feed is
+// a management view that must show everyone's time, so it reads through here:
+// service-role query bypasses RLS server-side. Gated on a valid Wrike session so
+// only a connected member can call it (jobs/profiles are already world-readable
+// to authenticated users, so only tasks needs this).
+async function handleJobsFeed(request, env) {
+  const cookies = parseCookies(request);
+  const session = cookies[SESSION_COOKIE];
+  if (!session) return json({ error: "not_connected" }, { status: 401 });
+  const row = await getTokenRowBySession(env, session);
+  if (!row) return json({ error: "not_connected" }, { status: 401 });
+
+  // Limit raised alongside the CSV importer: a bulk load of historical time
+  // can push the table well past the old 5000 cap, and a silently truncated
+  // feed reads as "those hours were never imported".
+  const res = await sbFetch(env, "/tasks?select=*&order=id.desc&limit=20000");
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.error(`[jobs-feed] tasks query ${res.status}:`, detail);
+    return json({ error: "query_failed" }, { status: 502 });
+  }
+  const data = await res.json();
+  return json(data);
+}
+
+// ── Jobs Feed import ─────────────────────────────────────────────────────────
+// Bulk-load timesheet rows from a CSV shaped like the feed's own export.
+//
+// Server-side for the same reason the read is: `tasks` carries a per-user RLS
+// policy, so a browser insert can only ever write the caller's own rows — and
+// an import file covers the whole team. The service-role write bypasses that,
+// so this is gated on a valid Wrike session like the read.
+//
+// Runs in two passes. `dryRun` classifies every row and returns the plan
+// without writing; the same request without it applies exactly that plan. The
+// UI always previews first — same plan/apply contract the Wrike write layer
+// uses (see src/lib/wrikeCampaign.js).
+
+const IMPORT_MAX_ROWS = 5000;
+const EMOJI_RE = /\p{Extended_Pictographic}/gu;
+
+// Mirrors src/lib/formatName.js — the export writes emoji-stripped names, so
+// the same stripping has to happen here for "Worked On By" to match a profile.
+const cleanName = (s) => (s || "").replace(EMOJI_RE, "").replace(/\s+/g, " ").trim();
+const nameKey = (s) => cleanName(s).toLowerCase();
+
+// The feed stores time as "H:MM" text. Accept that, "H:MM:SS" (what a
+// spreadsheet writes when the column is formatted as a duration/time), or a
+// decimal ("1.5"), and normalise to "H:MM" so imported rows read identically
+// to tracked ones. Seconds are rounded into the minutes rather than dropped.
+function normaliseTime(v) {
+  const s = String(v ?? "").trim();
+  if (!s || s === "-" || s === "—") return null;
+  const hms = s.match(/^(\d+):(\d{2})(?::(\d{2}))?$/);
+  if (hms) {
+    const mins = Number(hms[1]) * 60 + Number(hms[2]) + Math.round(Number(hms[3] || 0) / 60);
+    if (mins <= 0) return null;
+    return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`;
+  }
+  const n = parseFloat(s.replace(/[^0-9.]/g, ""));
+  if (isNaN(n) || n <= 0) return null;
+  const mins = Math.round(n * 60);
+  if (mins <= 0) return null;
+  return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`;
+}
+
+// The export writes dd.mm.yy; hand-made files carry dd/mm/yyyy or ISO, and a
+// spreadsheet that treated the column as a datetime serialises a midnight time
+// alongside it ("06/01/2026 00:00:00"). The feed's date column is a date only,
+// so any time part is dropped before matching rather than failing the row.
+//
+// Day-first, not month-first: it's what the rest of the app assumes when it
+// normalises the mixed-format `date` column (see toIso in the feed), so
+// "06/01/2026" is 6 January.
+function normaliseDate(v) {
+  const s = String(v ?? "").trim().split(/[T\s]/)[0];
+  if (!s) return null;
+  // Year first is unambiguous whatever the separator.
+  const iso = s.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  const m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})$/);
+  if (!m) return null;
+  const [, d, mo, y] = m;
+  const year = y.length === 2 ? `20${y}` : y;
+  return `${year}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
+const truthy = (v) => ["y", "yes", "true", "1", "x", "✓"].includes(String(v ?? "").trim().toLowerCase());
+const money = (v) => {
+  const n = parseFloat(String(v ?? "").replace(/[^0-9.\-]/g, ""));
+  return isNaN(n) ? null : n;
+};
+const clean = (v) => {
+  const s = String(v ?? "").trim();
+  return s && s !== "—" && s !== "-" ? s : null;
+};
+
+async function handleJobsFeedImport(request, env) {
+  const cookies = parseCookies(request);
+  const session = cookies[SESSION_COOKIE];
+  if (!session) return json({ error: "not_connected" }, { status: 401 });
+  const tokenRow = await getTokenRowBySession(env, session);
+  if (!tokenRow) return json({ error: "not_connected" }, { status: 401 });
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: "bad_json" }, { status: 400 }); }
+  const rows = Array.isArray(body?.rows) ? body.rows : null;
+  const dryRun = body?.dryRun !== false; // default to the safe pass
+  if (!rows) return json({ error: "rows_required" }, { status: 400 });
+  if (rows.length > IMPORT_MAX_ROWS) {
+    return json({ error: "too_many_rows", max: IMPORT_MAX_ROWS }, { status: 413 });
+  }
+
+  // Reference data: existing time (duplicate detection), the Job Book, and
+  // everyone's name so "Worked On By" resolves to a wrike_user_id.
+  const [tasksRes, jobsRes, profilesRes] = await Promise.all([
+    sbFetch(env, "/tasks?select=job_number,date,wrike_user_id,category,time_spent,additional_time&limit=20000"),
+    sbFetch(env, "/jobs?select=*&limit=20000"),
+    sbFetch(env, "/profiles?select=wrike_user_id,first_name,last_name"),
+  ]);
+  if (!tasksRes.ok || !jobsRes.ok || !profilesRes.ok) {
+    console.error("[jobs-feed/import] reference read failed",
+      tasksRes.status, jobsRes.status, profilesRes.status);
+    return json({ error: "query_failed" }, { status: 502 });
+  }
+  const [existingTasks, jobs, profiles] = await Promise.all([
+    tasksRes.json(), jobsRes.json(), profilesRes.json(),
+  ]);
+
+  const peopleByName = {};
+  for (const p of profiles) {
+    const key = nameKey(`${p.first_name || ""} ${p.last_name || ""}`);
+    if (key) peopleByName[key] = p.wrike_user_id;
+  }
+  const jobByNumber = {};
+  for (const j of jobs) if (j.job_number) jobByNumber[j.job_number] = j;
+
+  // A row is "the same time already logged" when job, day, person, category
+  // and both durations match. Deliberately not id-based: a re-exported file
+  // carries no ids, and matching on the timesheet's own natural key is what
+  // makes re-running a corrected file safe.
+  const dupKey = (r) => [
+    r.job_number || "", r.date || "", r.wrike_user_id || "",
+    r.category || "", r.time_spent || "", r.additional_time || "",
+  ].join(" ");
+  const seen = new Set(existingTasks.map(dupKey));
+
+  const toInsert = [];
+  const errors = [];
+  const unknownStaff = new Set();
+  const jobsToCreate = new Map();  // job_number -> row payload
+  const jobsToUpdate = new Map();  // job_number -> patch
+  let duplicates = 0;
+
+  rows.forEach((raw, i) => {
+    const line = i + 2; // header is line 1, so this is the file's own line number
+    const jobNumber = clean(raw.job_number);
+    const date = normaliseDate(raw.date);
+    const timeSpent = normaliseTime(raw.time_spent);
+    const extra = normaliseTime(raw.additional_time);
+
+    if (!jobNumber) { errors.push({ line, reason: "No job number" }); return; }
+    if (!date) { errors.push({ line, reason: `Unreadable date "${raw.date ?? ""}"` }); return; }
+    if (!timeSpent && !extra) { errors.push({ line, reason: "No time on the row" }); return; }
+
+    const worked = clean(raw.worked_on);
+    const wrikeUserId = worked ? peopleByName[nameKey(worked)] || null : null;
+    if (worked && !wrikeUserId) unknownStaff.add(worked);
+
+    const task = {
+      job_number: jobNumber,
+      date,
+      client: clean(raw.client),
+      film_title: clean(raw.film_title),
+      project_description: clean(raw.project_description),
+      category: clean(raw.category),
+      client_amends: truthy(raw.client_amends),
+      is_3d: truthy(raw.is_3d),
+      time_spent: timeSpent,
+      additional_time: extra,
+      wrike_user_id: wrikeUserId,
+      source: "import",
+    };
+
+    if (seen.has(dupKey(task))) { duplicates++; return; }
+    seen.add(dupKey(task));
+    toInsert.push(task);
+
+    // Job-level columns ride along on the file. An unknown job number gets a
+    // stub created from them; a known one gets them written over the top.
+    const jobFields = {
+      office: clean(raw.office),
+      print_digital: clean(raw.print_digital),
+      job_work_category: clean(raw.job_category),
+      ordered_by: clean(raw.ordered_by),
+      billed_to: clean(raw.billed_to),
+      fixed_cost: money(raw.costs),
+    };
+    const present = Object.fromEntries(Object.entries(jobFields).filter(([, v]) => v != null));
+
+    if (!jobByNumber[jobNumber] && !jobsToCreate.has(jobNumber)) {
+      // Every key on every object, nulls included — PostgREST rejects a bulk
+      // insert whose objects don't all share the same key set (PGRST102), and
+      // spreading only the populated columns gives each row a different shape.
+      // On a create a null is right anyway: the column genuinely has no value.
+      jobsToCreate.set(jobNumber, {
+        job_number: jobNumber,
+        client: task.client,
+        film_title: task.film_title,
+        project_description: task.project_description,
+        start_date: date,
+        status: "Active",
+        ...jobFields,
+      });
+    } else if (jobByNumber[jobNumber] && Object.keys(present).length) {
+      jobsToUpdate.set(jobNumber, { ...(jobsToUpdate.get(jobNumber) || {}), ...present });
+    }
+  });
+
+  const plan = {
+    rows: rows.length,
+    toInsert: toInsert.length,
+    duplicates,
+    errors,
+    unknownStaff: [...unknownStaff],
+    jobsToCreate: [...jobsToCreate.keys()],
+    jobsToUpdate: [...jobsToUpdate.keys()],
+  };
+
+  if (dryRun) return json({ dryRun: true, plan });
+
+  // ── Apply ──────────────────────────────────────────────────────────────
+  // Jobs first: a task row is only meaningful in the feed once its job exists.
+  try {
+    if (jobsToCreate.size) {
+      const res = await sbFetch(env, "/jobs?on_conflict=job_number", {
+        method: "POST",
+        headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+        body: JSON.stringify([...jobsToCreate.values()]),
+      });
+      if (!res.ok) throw new Error(`jobs insert ${res.status}: ${await res.text()}`);
+    }
+
+    for (const [jobNumber, patch] of jobsToUpdate) {
+      const res = await sbFetch(env, `/jobs?job_number=eq.${encodeURIComponent(jobNumber)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`job patch ${jobNumber} ${res.status}: ${await res.text()}`);
+    }
+
+    // tasks.id has no default or identity — the client has always supplied it
+    // (Date.now() in the tracker). Base off the current max so an import can
+    // never collide with a row the tracker writes at the same moment.
+    const maxRes = await sbFetch(env, "/tasks?select=id&order=id.desc&limit=1");
+    const maxRows = maxRes.ok ? await maxRes.json() : [];
+    let nextId = Math.max(Number(maxRows[0]?.id || 0), Date.now()) + 1;
+
+    let inserted = 0;
+    for (let i = 0; i < toInsert.length; i += 500) {
+      const chunk = toInsert.slice(i, i + 500).map((t) => ({ ...t, id: nextId++ }));
+      const res = await sbFetch(env, "/tasks", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(chunk),
+      });
+      if (!res.ok) throw new Error(`tasks insert ${res.status}: ${await res.text()}`);
+      inserted += chunk.length;
+    }
+
+    return json({ dryRun: false, plan: { ...plan, inserted } });
+  } catch (e) {
+    console.error("[jobs-feed/import] apply failed:", e.message);
+    return json({ error: "import_failed", detail: e.message }, { status: 502 });
+  }
 }
 
 // ── Supabase (service role) helpers ──────────────────────────────────────────
@@ -147,9 +433,31 @@ async function deleteTokenRow(env, sessionToken) {
   });
 }
 
+// Raised when Supabase itself didn't answer — as opposed to answering "there
+// is no such row". Callers that talk to Wrike have to tell those apart; see
+// getWebhookConfig.
+class SupabaseUnavailable extends Error {}
+
+// Returns the row, or null when Supabase positively reports no webhook is
+// configured. Throws SupabaseUnavailable when Supabase couldn't be reached or
+// refused the read (402 over-quota, 5xx, network error).
+//
+// These two used to collapse into the same null, and handleWebhookEvent turned
+// any null into a 404 — so while Supabase was over its quota and 402ing, every
+// Wrike delivery was answered "webhook_not_configured". That reads to Wrike as
+// an endpoint that no longer exists, and it suspends the webhook account-wide.
+// The outage was transient; the suspension it caused was not, since clearing it
+// needs a manual admin re-register long after Supabase recovered.
 async function getWebhookConfig(env) {
-  const res = await sbFetch(env, `/wrike_webhook_config?select=*&limit=1`);
-  if (!res.ok) return null;
+  let res;
+  try {
+    res = await sbFetch(env, `/wrike_webhook_config?select=*&limit=1`);
+  } catch (err) {
+    throw new SupabaseUnavailable(`webhook config fetch failed: ${err.message}`);
+  }
+  if (!res.ok) {
+    throw new SupabaseUnavailable(`webhook config read failed: ${res.status}`);
+  }
   const rows = await res.json();
   return rows[0] || null;
 }
@@ -367,7 +675,20 @@ async function handleWebhookRegister(request, url, env) {
   // half-written — a blank webhookId plus a secret that no longer matches
   // whatever webhook Wrike is still actually delivering with, which silently
   // 401s (and drops) every future delivery until someone notices the outage.
-  const previousConfig = await getWebhookConfig(env);
+  // Bail out early and legibly if Supabase is unreachable. Registering writes
+  // the new secret to Supabase before Wrike validates the hook URL, so there
+  // is no version of this that succeeds while the database is down — without
+  // this the run would get as far as that write and surface an opaque 500.
+  let previousConfig;
+  try {
+    previousConfig = await getWebhookConfig(env);
+  } catch (err) {
+    console.error("[webhook] register aborted, Supabase unavailable:", err.message);
+    return json({
+      error: "database_unavailable",
+      detail: "Couldn't reach the database to save the webhook secret. Live sync can't be enabled until that recovers.",
+    }, { status: 503 });
+  }
 
   // Delete any webhooks already pointing at this Worker before creating a new
   // one. Each register generates a fresh secret, but wrike_webhook_config can
@@ -435,7 +756,21 @@ async function handleWebhookRegister(request, url, env) {
 // {"requestType":"WebHook secret verification"}; real deliveries are a JSON
 // array of event objects. Both are signature-verified the same way first.
 async function handleWebhookEvent(request, env) {
-  const config = await getWebhookConfig(env);
+  let config;
+  try {
+    config = await getWebhookConfig(env);
+  } catch (err) {
+    // Supabase didn't answer, so we can't read the secret — meaning we can
+    // neither verify nor record this delivery. Answering Wrike with an error
+    // would be the honest status, but Wrike responds to a failing endpoint by
+    // suspending the webhook for the whole account, and that suspension
+    // outlives the outage that caused it. Acknowledge and drop instead: the
+    // periodic Wrike sync (useWrikeCache) re-fetches tasks independently of
+    // this feed, so an outage costs freshness until it recovers rather than
+    // taking live sync down until someone notices and re-registers by hand.
+    console.error("[webhook] config unavailable, ACKing to keep hook alive:", err.message);
+    return json({ ok: true, dropped: "config_unavailable" });
+  }
   if (!config) return json({ error: "webhook_not_configured" }, { status: 404 });
 
   const rawBody = await request.text();

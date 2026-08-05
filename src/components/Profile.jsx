@@ -12,7 +12,6 @@ import {
   RefreshCw,
   TrendingUp,
   Zap,
-  Calendar,
   Film,
   Activity,
   Layers,
@@ -22,8 +21,15 @@ import {
   Check,
   LogOut,
   ExternalLink,
+  FileSpreadsheet,
+  Eye,
+  EyeOff,
+  Moon,
+  Sun,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
+import { isDarkMode, toggleDarkMode } from "../lib/theme";
+import { fullName, cleanNamePart } from "../lib/formatName";
 import PageHeader from "./shared/PageHeader";
 import HubRow from "./shared/HubRow";
 import { useTasks } from "../hooks/useTasks";
@@ -31,10 +37,13 @@ import { useWrikeUser } from "../hooks/useWrikeUser";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import { startWrikeOAuth, disconnectWrike, fetchWrikeOAuthStatus } from "../lib/wrikeApi";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
-import TaskDetailModal from "./TaskDetailModal";
+import TaskDetailModal, { CsvPreviewModal } from "./TaskDetailModal";
+import DeliverySpecsModal from "./DeliverySpecsModal";
+import { parsePdfDeliverySpecs } from "../utils/pdfTableParser";
 import { formatDurationText } from "../utils/timeHelpers";
 import { getTagStyle, getBorderColorClass } from "../utils/tagStyles";
 import { TERRITORY_FLAGS } from "../constants";
+import { splitTerritories, territoryFlags } from "../utils/territories";
 import {
   BarChart,
   Bar,
@@ -243,51 +252,141 @@ function WrikeTaskCard({ task, filter, onClick, cascadeRef }) {
     <div
       ref={cascadeRef}
       onClick={onClick}
-      className={`p-4 border-y border-r border-l-4 rounded-2xl transition-[background-color,box-shadow] ${borderColor} ${
-        isMatrix
-          ? "border-y-[#dce4ec] border-r-[#dce4ec] bg-slate-200/50 opacity-70"
-          : "border-y-[#dce4ec] border-r-[#dce4ec] bg-slate-50"
-      } ${onClick ? "cursor-pointer hover:bg-white hover:shadow-md" : ""}`}
+      className={`group relative overflow-hidden flex items-center gap-3 px-4 py-3 border-y border-r border-l-4 rounded-xl bg-white border-y-[#dce4ec] border-r-[#dce4ec] ${borderColor} ${
+        isMatrix ? "opacity-60" : ""
+      } ${
+        onClick
+          ? "cursor-pointer"
+          : ""
+      }`}
     >
-      <div className="flex flex-wrap items-center gap-2 mb-1.5">
-        <span className={getTagStyle(statusName)}>{statusName}</span>
-        <div className="flex items-center gap-2 ml-auto flex-wrap">
-          {filter === "completed" && completedStr && (
-            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-              <CheckCircle className="w-3 h-3" /> Delivered {completedStr}
-            </span>
-          )}
-          {updatedStr && (
-            <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-              <Activity className="w-3 h-3" /> Updated {updatedStr}
-            </span>
-          )}
-          {dueStr && (
-            <span className="flex items-center gap-1 text-[10px] font-bold text-[#768994] bg-white px-2 py-0.5 rounded border border-slate-200">
-              <Calendar className="w-3 h-3" /> Due {dueStr}
-            </span>
-          )}
-        </div>
-      </div>
+      {/* The app's one hover idiom, borrowed from HubRow: a gradient sweep from
+          the left in the section's own colours — deepened here.
+          HubRow's own #12a0e1→#1cc1a5 is tuned for white type at DISPLAY size
+          (large text, 3:1); these rows are 15px, which is normal text and needs
+          4.5:1. On the stock gradient white lands at 2.94:1 (blue) / 2.28:1
+          (teal) — and the dates sit at the teal end, the worst of it. These
+          deeper stops are the same hue family at 5.5:1 / 5.3:1. */}
+      {onClick && (
+        <div className="absolute inset-0 bg-gradient-to-r from-[#12a0e1] to-[#1cc1a5] origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-out" />
+      )}
+      {/* One row: title leads, status + dates ride the right edge. Stacking
+          them cost ~100px of height per job for ~15 characters of content —
+          with most campaigns holding a single job, the list was mostly air. */}
       <p
-        className={`text-sm font-bold ${
-          isMatrix ? "text-slate-400" : "text-[#122027]"
+        className={`relative z-10 font-display font-bold tracking-tight leading-snug text-[15px] min-w-0 truncate transition-colors duration-300 group-hover:text-white ${
+          isMatrix ? "text-[#a9b4bd]" : "text-[#122027]"
         }`}
       >
         {task.title}
       </p>
+
+      {/* The status tag is the single coloured element — the only thing here
+          that encodes state. "Updated"/"Due" are just dates, so they read as
+          muted text rather than three competing bordered chips in three
+          unrelated hues. Delivered keeps green: "it's done" is a real state
+          change worth one accent. */}
+      <div className="relative z-10 flex items-center gap-2.5 shrink-0">
+        {/* Goes translucent-white once the row it sits on has itself gone
+            gradient — the same move HubRow makes with its icon chip, so the
+            status pill doesn't fight the wash with its own hue. */}
+        <span
+          className={`${getTagStyle(
+            statusName
+          )} transition-colors duration-300 group-hover:bg-white/20 group-hover:text-white group-hover:border-white/30`}
+        >
+          {statusName}
+        </span>
+        <div className="hidden sm:flex items-center gap-2 text-[11px] font-semibold text-[#768994] whitespace-nowrap transition-colors duration-300 group-hover:text-white/85">
+          {filter === "completed" && completedStr && (
+            <span className="flex items-center gap-1 text-emerald-600 transition-colors duration-300 group-hover:text-white">
+              <CheckCircle className="w-3 h-3" /> Delivered {completedStr}
+            </span>
+          )}
+          {updatedStr && <span>Updated {updatedStr}</span>}
+          {updatedStr && dueStr && (
+            <span className="text-[#dce4ec] transition-colors duration-300 group-hover:text-white/40">·</span>
+          )}
+          {dueStr && <span>Due {dueStr}</span>}
+        </div>
+      </div>
     </div>
   );
 }
 
 // ── Jobs section — fetches live from Wrike, grouped by campaign ───────────────
 
+// How long a job can sit untouched before it drops out of the live list.
+// Tune here — it's the only place the threshold is defined.
+const STALE_DAYS = 30;
+
+// A <label>-wrapped file input, not a button — that opens the OS picker
+// directly on click, with no extra intermediate modal to dismiss first.
+function PdfSpecsButton({ busy, onPick, label }) {
+  return (
+    <label
+      title="Read the delivery-spec table out of any PDF (parsed in your browser, nothing is uploaded)"
+      className={`flex items-center gap-1.5 text-[11px] font-bold transition-colors ${
+        busy ? "text-[#12a0e1] cursor-wait" : "text-[#768994] hover:text-[#12a0e1] cursor-pointer"
+      }`}
+    >
+      {busy ? (
+        <span className="w-3 h-3 border-2 border-[#12a0e1] border-t-transparent rounded-full animate-spin" />
+      ) : (
+        <FileSpreadsheet className="w-3 h-3" />
+      )}
+      {busy ? "Reading…" : label}
+      <input
+        type="file"
+        accept="application/pdf"
+        className="hidden"
+        disabled={busy}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          // Reset so picking the same file twice still re-fires onChange.
+          e.target.value = "";
+          onPick(f);
+        }}
+      />
+    </label>
+  );
+}
+
 function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jobOptions }) {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [fetched, setFetched] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
+  // Default on, like Motion Board's equivalent — a job untouched this long is
+  // almost never something you still need in your live workload.
+  const [hideStale, setHideStale] = useState(true);
+  // Ad-hoc PDF spec parsing: drop in a delivery-spec PDF that isn't attached to
+  // any Wrike task and read its formats, using the same parser + checklist UI
+  // the task modal uses. Nothing is uploaded or stored — it's parsed in-browser.
+  const [pdfSpecs, setPdfSpecs] = useState(null);
+  const [pdfName, setPdfName] = useState("");
+  const [pdfBusy, setPdfBusy] = useState(false);
+  // CSV export re-shapes the SAME already-parsed pdfSpecs — no second file
+  // pick or re-parse — through the identical CsvPreviewModal a task's PDF
+  // attachment uses (Artwork/Campaign/Size/Duration/Country columns).
+  const [csvOpen, setCsvOpen] = useState(false);
   const getCascadeRef = useCascadeRefs();
+
+  const handlePickPdf = useCallback(async (file) => {
+    if (!file) return;
+    setPdfBusy(true);
+    setPdfName(file.name);
+    try {
+      const specs = await parsePdfDeliverySpecs(file);
+      if (specs?.length) setPdfSpecs(specs);
+      else triggerToast?.("No spec table found in that PDF.", "error");
+    } catch (e) {
+      console.error(e);
+      triggerToast?.("Couldn't read that PDF.", "error");
+    } finally {
+      setPdfBusy(false);
+    }
+  }, [triggerToast]);
 
   // Extracted out of fetchTasks (which used to close over statusNameMap
   // directly) so the webhook patch effect below can produce an identically-
@@ -426,9 +525,32 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
     [tasks, filter]
   );
 
+  // "Stale" = nobody has touched it in over a month. Motion Board's own
+  // hide-stale toggle keys off dueDate because it's a scheduling board; here
+  // most jobs carry no due date at all (hence the Updated-only rows), so the
+  // signal that actually works is how long since the task last moved.
+  // Hiding is purely a view filter — nothing is written back to Wrike.
+  const staleCutoff = useMemo(() => Date.now() - STALE_DAYS * 86400000, []);
+  const isStale = useCallback(
+    (t) => !!t.updatedDate && new Date(t.updatedDate).getTime() < staleCutoff,
+    [staleCutoff]
+  );
+  const staleCount = useMemo(
+    () => (filter === "completed" ? 0 : filtered.filter(isStale).length),
+    [filtered, isStale, filter]
+  );
+
+  const visible = useMemo(
+    () =>
+      filter === "completed" || !hideStale
+        ? filtered
+        : filtered.filter((t) => !isStale(t)),
+    [filtered, hideStale, isStale, filter]
+  );
+
   const sorted = useMemo(
     () =>
-      [...filtered]
+      [...visible]
         .sort((a, b) => {
           const da =
             filter === "completed"
@@ -441,7 +563,7 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
           return da - db;
         })
         .slice(0, 40),
-    [filtered, filter]
+    [visible, filter]
   );
 
   const grouped = useMemo(
@@ -485,12 +607,23 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
 
   if (fetched && sorted.length === 0)
     return (
-      <Empty
-        icon={Icon}
-        message={`No ${
-          filter === "completed" ? "completed" : "active"
-        } jobs found.`}
-      />
+      <div className="space-y-3">
+        <Empty
+          icon={Icon}
+          message={`No ${
+            filter === "completed" ? "completed" : "active"
+          } jobs found.`}
+        />
+        {filter === "active" && (
+          <div className="flex justify-center">
+            <PdfSpecsButton busy={pdfBusy} onPick={handlePickPdf} label="Read specs from a PDF" />
+          </div>
+        )}
+        <DeliverySpecsModal specs={pdfSpecs} pdfName={pdfName} onClose={() => setPdfSpecs(null)} onExportCsv={() => setCsvOpen(true)} />
+        {csvOpen && pdfSpecs && (
+          <CsvPreviewModal rawSpecs={pdfSpecs} pdfName={pdfName} onClose={() => setCsvOpen(false)} />
+        )}
+      </div>
     );
 
   return (
@@ -502,12 +635,37 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
         <span className="text-[10px] font-black text-[#768994] bg-white border border-[#dce4ec] px-2.5 py-1 rounded-full uppercase tracking-wider">
           {sorted.length} {filter === "completed" ? "delivered" : "active"}
         </span>
-        <button
-          onClick={fetchTasks}
-          className="flex items-center gap-1.5 text-[11px] font-bold text-[#768994] hover:text-[#12a0e1] transition-colors"
-        >
-          <RefreshCw className="w-3 h-3" /> Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {/* Only render when there's actually something to hide — a toggle
+              that reveals nothing is just a dead control in the toolbar. */}
+          {filter === "active" && staleCount > 0 && (
+            <button
+              onClick={() => setHideStale((v) => !v)}
+              title={
+                hideStale
+                  ? `Show ${staleCount} job${staleCount === 1 ? "" : "s"} untouched for over ${STALE_DAYS} days`
+                  : `Hide jobs untouched for over ${STALE_DAYS} days`
+              }
+              className={`flex items-center gap-1.5 text-[11px] font-bold transition-colors ${
+                hideStale
+                  ? "text-[#768994] hover:text-[#12a0e1]"
+                  : "text-[#12a0e1]"
+              }`}
+            >
+              {hideStale ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+              {hideStale ? `${staleCount} hidden` : "Hiding off"}
+            </button>
+          )}
+          {filter === "active" && (
+            <PdfSpecsButton busy={pdfBusy} onPick={handlePickPdf} label="Read PDF specs" />
+          )}
+          <button
+            onClick={fetchTasks}
+            className="flex items-center gap-1.5 text-[11px] font-bold text-[#768994] hover:text-[#12a0e1] transition-colors"
+          >
+            <RefreshCw className="w-3 h-3" /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Each campaign is its own bordered/shadowed white card — the same
@@ -515,14 +673,24 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
           all campaigns sharing one flat, unbroken column. */}
       {sortedCampaigns.map((campaign) => (
         <div key={campaign} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
-          <div className="flex items-center gap-2 text-xs font-black text-[#12a0e1] uppercase tracking-widest px-4 py-3 border-b border-[#dce4ec] bg-slate-50/60">
-            <Film className="w-3.5 h-3.5" /> {campaign}
-            <span className="ml-auto bg-white text-[#768994] px-2 py-0.5 rounded-full text-[10px] normal-case tracking-normal font-bold border border-[#dce4ec]">
+          {/* Gradient icon chip = the same identity the Active Jobs HubRow uses
+              to get here, so the teal/cyan thread survives the drill-in. */}
+          <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#dce4ec] bg-white">
+            <span className="w-7 h-7 rounded-xl bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center shrink-0">
+              <Film className="w-3.5 h-3.5" />
+            </span>
+            <span className="font-display font-bold tracking-tight text-[#122027] text-sm truncate">
+              {campaign}
+            </span>
+            <span className="ml-auto bg-slate-50 text-[#768994] px-2 py-0.5 rounded-full text-[10px] font-bold border border-[#dce4ec] shrink-0">
               {grouped[campaign].length}{" "}
               {grouped[campaign].length === 1 ? "job" : "jobs"}
             </span>
           </div>
-          <div className="p-3 space-y-2.5">
+          {/* Faint tint so the white job cards read as cards, not as one flat
+              column — the app's usual "white cards float on a tint" pattern,
+              which the old grey-cards-on-white had backwards. */}
+          <div className="p-2.5 space-y-1.5 bg-slate-50/50">
             {grouped[campaign].map((task, i) => (
               <WrikeTaskCard
                 key={task.id}
@@ -545,6 +713,11 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
         triggerToast={triggerToast}
         jobOptions={jobOptions}
       />
+
+      <DeliverySpecsModal specs={pdfSpecs} pdfName={pdfName} onClose={() => setPdfSpecs(null)} onExportCsv={() => setCsvOpen(true)} />
+      {csvOpen && pdfSpecs && (
+        <CsvPreviewModal rawSpecs={pdfSpecs} pdfName={pdfName} onClose={() => setCsvOpen(false)} />
+      )}
     </div>
   );
 }
@@ -674,7 +847,10 @@ function OverviewSection({
   const territories = useMemo(() => {
     const counts = {};
     tasks.forEach((t) => {
-      if (t.territory) counts[t.territory] = (counts[t.territory] || 0) + 1;
+      // A task can cover several markets — count each one separately.
+      splitTerritories(t.territory).forEach((terr) => {
+        counts[terr] = (counts[terr] || 0) + 1;
+      });
     });
     return Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
@@ -972,66 +1148,64 @@ function HistorySection({ tasks }) {
                   })
                 : null;
             return (
-              <div key={dayKey}>
-                {/* Day group header */}
-                <div
-                  className={`flex items-center gap-2 text-xs font-black uppercase tracking-widest mb-3 border-b border-[#dce4ec] pb-2 ${dc.text}`}
-                >
-                  <span
-                    className={`px-2 py-0.5 rounded-md text-[10px] ${dc.pill}`}
-                  >
+              // Same "each group is its own bordered/shadowed white card"
+              // treatment as Completed's per-campaign cards (JobsSection),
+              // just grouped by day instead of by campaign.
+              <div key={dayKey} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
+                {/* Day group header — mirrors the campaign header: identity
+                    chip, label, count/total pill on the right. */}
+                <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#dce4ec] bg-white">
+                  <span className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${dc.pill}`}>
+                    <Clock className="w-3.5 h-3.5" />
+                  </span>
+                  <span className="font-display font-bold tracking-tight text-[#122027] text-sm truncate">
                     {weekdayName}
                   </span>
                   {dateLabel && (
-                    <span className="text-[10px] font-bold text-[#768994] normal-case tracking-normal">
+                    <span className="text-[11px] font-semibold text-[#768994] truncate">
                       {dateLabel}
                     </span>
                   )}
-                  <span className="ml-auto bg-slate-100 text-[#768994] px-2 py-0.5 rounded text-[10px] normal-case tracking-normal font-bold shrink-0">
+                  <span className="ml-auto bg-slate-50 text-[#768994] px-2 py-0.5 rounded-full text-[10px] font-bold border border-[#dce4ec] shrink-0">
                     {formatDurationText(groupTotal)} · {rows.length}{" "}
                     {rows.length === 1 ? "row" : "rows"}
                   </span>
                 </div>
 
-                {/* Subtask rows — left-bordered like tracker history */}
-                <div className="space-y-2">
+                {/* Faint tint so the white rows read as cards, same as the
+                    campaign cards' job-list body. */}
+                <div className="p-2.5 space-y-1.5 bg-slate-50/50">
                   {rows.map((t, i) => {
                     const dc = DAY_COLORS[t.dayOfWeek] || DEFAULT_DAY;
                     return (
                       <div
                         key={t.id}
                         ref={getCascadeRef(t.id, i)}
-                        className={`border-y border-r border-l-4 ${dc.border} border-y-[#dce4ec] border-r-[#dce4ec] rounded-2xl ${dc.bg} p-4 flex items-center gap-4`}
+                        className={`flex items-center gap-3 px-4 py-2.5 border-y border-r border-l-4 rounded-xl bg-white border-y-[#dce4ec] border-r-[#dce4ec] ${dc.border}`}
                       >
-                        {/* Date stamp */}
-                        <div className="shrink-0 text-center w-14">
-                          {t.date && (
-                            <p className="text-[11px] font-bold text-[#768994]">
-                              {t.date}
-                            </p>
-                          )}
-                        </div>
-
-                        {/* Meta */}
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-black text-[#122027] truncate">
+                        {/* Title + inline meta, single row like the
+                            Completed job cards — the date stamp this used to
+                            carry is redundant now that the whole card is
+                            grouped under a dated header. */}
+                        <div className="flex-1 min-w-0 flex items-baseline gap-2.5">
+                          <p className="font-display font-bold tracking-tight text-[15px] text-[#122027] truncate">
                             {t.jobNumber || "Unknown job"}
                           </p>
-                          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                          <div className="hidden sm:flex items-center gap-2 shrink-0">
                             {t.territory && (
-                              <span className="text-[11px] font-bold text-[#768994]">
-                                {TERRITORY_FLAGS[t.territory] || "🌍"}{" "}
+                              <span className="text-[11px] font-semibold text-[#768994] whitespace-nowrap">
+                                {territoryFlags(t.territory, 4) || "🌍"}{" "}
                                 {t.territory}
                               </span>
                             )}
                             {t.category && (
-                              <span className="text-[10px] font-black text-[#768994] bg-white border border-[#dce4ec] px-2 py-0.5 rounded-full">
+                              <span className="text-[10px] font-black text-[#768994] bg-white border border-[#dce4ec] px-2 py-0.5 rounded-full whitespace-nowrap">
                                 {t.category}
                               </span>
                             )}
                           </div>
                           {t.notes && (
-                            <p className="text-[11px] text-[#768994] mt-1 italic truncate">
+                            <p className="text-[11px] text-[#768994] italic truncate">
                               {t.notes}
                             </p>
                           )}
@@ -1064,14 +1238,31 @@ function HistorySection({ tasks }) {
 // ── Analytics ─────────────────────────────────────────────────────────────────
 
 function AnalyticsSection({ tasks }) {
+  // Recharts paints into SVG from literal JS values, so none of it is reachable
+  // by the .dark-theme class overrides — the gridlines were drawing near-white
+  // across a dark card and the tooltip flashed as a white slab. Read the theme
+  // once and derive the chrome from it. Re-read on the theme event so toggling
+  // dark mode repaints the charts without a reload.
+  const [chartDark, setChartDark] = useState(isDarkMode);
+  useEffect(() => {
+    const el = document.documentElement;
+    const obs = new MutationObserver(() => setChartDark(isDarkMode()));
+    obs.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+
+  const gridStroke = chartDark ? "#334155" : "#f1f5f9";
+  const axisTick = chartDark ? "#94a3b8" : "#768994";
   const tooltipStyle = {
-    backgroundColor: "#ffffff",
-    borderColor: "#dce4ec",
+    backgroundColor: chartDark ? "#1e293b" : "#ffffff",
+    borderColor: chartDark ? "#334155" : "#dce4ec",
     borderRadius: "12px",
-    color: "#323b43",
+    color: chartDark ? "#e2e8f0" : "#323b43",
     fontSize: "11px",
     fontWeight: 600,
-    boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
+    boxShadow: chartDark
+      ? "0 10px 15px -3px rgb(0 0 0 / 0.5)"
+      : "0 10px 15px -3px rgb(0 0 0 / 0.1)",
   };
 
   const timePerJob = useMemo(() => {
@@ -1128,13 +1319,13 @@ function AnalyticsSection({ tasks }) {
                   <CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
-                    stroke="#f1f5f9"
+                    stroke={gridStroke}
                   />
                   <XAxis
                     dataKey="name"
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fill: "#768994", fontSize: 9, fontWeight: 600 }}
+                    tick={{ fill: axisTick, fontSize: 9, fontWeight: 600 }}
                     angle={-30}
                     textAnchor="end"
                     dy={10}
@@ -1142,7 +1333,7 @@ function AnalyticsSection({ tasks }) {
                   <YAxis
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fill: "#768994", fontSize: 10, fontWeight: 600 }}
+                    tick={{ fill: axisTick, fontSize: 10, fontWeight: 600 }}
                   />
                   <Tooltip
                     contentStyle={tooltipStyle}
@@ -1232,6 +1423,7 @@ function AnalyticsSection({ tasks }) {
 function SettingsSection({ onSave }) {
   const [status, setStatus] = useState({ checked: false, connected: false });
   const [disconnecting, setDisconnecting] = useState(false);
+  const [dark, setDark] = useState(isDarkMode);
 
   useEffect(() => {
     fetchWrikeOAuthStatus().then((s) =>
@@ -1299,6 +1491,43 @@ function SettingsSection({ onSave }) {
         </div>
       </div>
 
+      {/* Appearance card */}
+      <div className="border border-[#dce4ec] rounded-2xl overflow-hidden">
+        <div className="bg-slate-50 border-b border-[#dce4ec] px-5 py-3 flex items-center gap-2">
+          <Moon className="w-4 h-4 text-[#12a0e1]" />
+          <span className="text-sm font-black text-[#122027]">Appearance</span>
+        </div>
+        <div className="p-5 flex items-center gap-4">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-[#122027]">Dark mode</p>
+            <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
+              Dims the whole app. Remembered on this device.
+            </p>
+          </div>
+          <button
+            onClick={() => setDark(toggleDarkMode())}
+            role="switch"
+            aria-checked={dark}
+            aria-label="Dark mode"
+            className={`relative w-12 h-7 rounded-full shrink-0 transition-colors ${
+              dark ? "bg-[#12a0e1]" : "bg-slate-200"
+            }`}
+          >
+            <span
+              className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow-sm flex items-center justify-center transition-all ${
+                dark ? "left-6" : "left-1"
+              }`}
+            >
+              {dark ? (
+                <Moon className="w-2.5 h-2.5 text-[#12a0e1]" />
+              ) : (
+                <Sun className="w-2.5 h-2.5 text-[#768994]" />
+              )}
+            </span>
+          </button>
+        </div>
+      </div>
+
       {/* Info card */}
       <div className="bg-slate-50 border border-[#dce4ec] rounded-2xl p-5">
         <p className="text-xs font-black text-[#768994] uppercase tracking-widest mb-3">
@@ -1362,9 +1591,12 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
       });
   }, [wrikeUser?.id]);
 
+  // Through the shared helper, not raw concatenation — Wrike names carry emoji
+  // ("Trott ⚡️") and this is the page header, the most prominent place one
+  // could show up.
   const displayName = profile
-    ? `${profile.first_name || ""} ${profile.last_name || ""}`.trim()
-    : wrikeUser?.firstName || "Your profile";
+    ? fullName(profile.first_name, profile.last_name) || "Your profile"
+    : cleanNamePart(wrikeUser?.firstName) || "Your profile";
 
   const totalSeconds = tasks.reduce(
     (s, t) => s + (t.rawSeconds ?? 0) + (t.additionalSeconds ?? 0),

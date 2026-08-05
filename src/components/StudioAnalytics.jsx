@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Activity, CheckCircle2, Clock, Film, Table2, BarChart3, RefreshCw } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { cleanNamePart } from "../lib/formatName";
+import { zoomFactor } from "../utils/zoom";
 
 // Management-facing analytics, fed from two pools:
 //  1) The in-memory Wrike task cache (wrikeData prop — the same 25k-task
@@ -100,7 +101,12 @@ function useTooltip() {
   const [tip, setTip] = useState(null); // { x, y, text }
   const show = (e, text) => {
     const box = e.currentTarget.closest("[data-chart]").getBoundingClientRect();
-    setTip({ x: e.clientX - box.left, y: e.clientY - box.top, text });
+    // clientX and box.left are both visual pixels under html{zoom:1.1}; their
+    // difference is a visual delta, but the tooltip is an absolute child of the
+    // (zoomed) chart, so its left/top are re-zoomed on paint. Divide back to
+    // layout space or the pill drifts ~10% off the cursor.
+    const z = zoomFactor();
+    setTip({ x: (e.clientX - box.left) / z, y: (e.clientY - box.top) / z, text });
   };
   const hide = () => setTip(null);
   const node = tip && (

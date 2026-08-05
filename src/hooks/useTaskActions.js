@@ -1,7 +1,11 @@
 import { DAYS_OF_WEEK } from "../constants";
 import { guessFieldsFromTask } from "../utils/wrikeHelpers";
 import { fetchExistingTimelogIds } from "../lib/supabaseClient";
-import { roundToHalfHourSeconds } from "../utils/timeHelpers";
+import {
+  splitTerritories,
+  territoryKey,
+  toTimesheetTerritories,
+} from "../utils/territories";
 import { logTimeToWrike } from "../lib/wrikeApi";
 
 /**
@@ -69,6 +73,14 @@ export function useTaskActions(state) {
 
     if (jobNumber && !jobOptions.includes(jobNumber))
       setJobOptions((prev) => [...prev, jobNumber]);
+
+    // Register this job in the shared Job Book so a Wrike pull (possibly from
+    // another session/device) can find it by code instead of only matching by
+    // coincidence against this browser's local jobOptions list.
+    const jobColonMatch = jobNumber.match(/^([^:]+)\s*:/);
+    state.jobLookup?.ensureJob(jobNumber, {
+      filmTitle: jobColonMatch ? jobColonMatch[1].trim() : undefined,
+    });
 
     const newTask = {
       id: Date.now(),
@@ -266,6 +278,7 @@ export function useTaskActions(state) {
     // otherwise a stale filmTitle from a bad Wrike folder-tree guess would survive the edit.
     const jobColonMatch = editGroupForm.jobNumber.match(/^([^:]+)\s*:/);
     const filmTitle = jobColonMatch ? jobColonMatch[1].trim() : undefined;
+    state.jobLookup?.ensureJob(editGroupForm.jobNumber, { filmTitle });
     updateTasks(taskIds, {
       jobNumber: editGroupForm.jobNumber,
       territory: editGroupForm.territory,
@@ -298,6 +311,10 @@ export function useTaskActions(state) {
     if (editTaskForm.jobNumber && !jobOptions.includes(editTaskForm.jobNumber)) {
       setJobOptions((prev) => [...prev, editTaskForm.jobNumber]);
     }
+    const editJobColonMatch = editTaskForm.jobNumber.match(/^([^:]+)\s*:/);
+    state.jobLookup?.ensureJob(editTaskForm.jobNumber, {
+      filmTitle: editJobColonMatch ? editJobColonMatch[1].trim() : undefined,
+    });
     setEditingTaskId(null);
     triggerToast("Subtask detached and moved successfully!", "success");
   };
@@ -369,7 +386,9 @@ export function useTaskActions(state) {
   const getConsolidatedTasks = (taskList) => {
     const consolidated = {};
     taskList.forEach((t) => {
-      const key = `${t.dayOfWeek}|${t.jobNumber}|${t.territory}|${t.category}`;
+      // territoryKey so multi-country rows merge regardless of the order the
+      // countries were picked in.
+      const key = `${t.dayOfWeek}|${t.jobNumber}|${territoryKey(t.territory)}|${t.category}`;
       if (!consolidated[key]) {
         consolidated[key] = { ...t, rawSeconds: 0, additionalSeconds: 0, notesArray: [], subtaskCount: 0 };
       }
@@ -380,18 +399,23 @@ export function useTaskActions(state) {
         consolidated[key].notesArray.push(t.notes);
       }
     });
-    // Round to nearest 0.5h at export time only — the old timesheet website
-    // only accepts half-hour values. Supabase itself stores unrounded time.
+    // Exact seconds go out. How coarse a row may be is decided per *job* on the
+    // timesheet site (a UK-folder job takes 0.25 steps, an INT one only 0.5)
+    // and nothing here can know which — so the bookmarklet snaps each row
+    // against its own dropdown instead of us guessing up front.
     return Object.values(consolidated).map((c) => ({
       ...c,
-      rawSeconds: roundToHalfHourSeconds(c.rawSeconds),
-      additionalSeconds: c.additionalSeconds > 0 ? roundToHalfHourSeconds(c.additionalSeconds) : 0,
+      // A row can cover several markets; the timesheet site ticks one checkbox
+      // per country on the same row, so send the list alongside the string.
+      // Translated to the site's vocabulary on the way out — see
+      // toTimesheetTerritories.
+      territories: toTimesheetTerritories(c.territory),
       notes: c.notesArray.filter(Boolean).join(" | "),
     }));
   };
 
   const generateExportData = () => ({
-    version: 5,
+    version: 7, // 7 = seconds are exact (the bookmarklet does the rounding)
     exportDate: new Date().toISOString(),
     tasks: getConsolidatedTasks(tasks),
     rawTasks: tasks,
@@ -458,6 +482,10 @@ export function useTaskActions(state) {
     if (recentTaskDraft.jobNumber && !jobOptions.includes(recentTaskDraft.jobNumber)) {
       setJobOptions((prev) => [...prev, recentTaskDraft.jobNumber]);
     }
+    const jobColonMatch = (recentTaskDraft.jobNumber || "").match(/^([^:]+)\s*:/);
+    state.jobLookup?.ensureJob(recentTaskDraft.jobNumber, {
+      filmTitle: jobColonMatch ? jobColonMatch[1].trim() : undefined,
+    });
     const newTask = {
       id: Date.now(),
       jobNumber: recentTaskDraft.jobNumber,

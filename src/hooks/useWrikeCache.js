@@ -16,6 +16,8 @@ import {
   getFilmName,
   buildChildToParent,
   buildFilmCodeMappings,
+  keepsDescription,
+  PRINT_HUB_RE,
 } from "../lib/wrikeEnrich";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 
@@ -119,82 +121,20 @@ async function fetchWrikeTasks(sinceIso) {
   return rawTasks;
 }
 
-// Progressively smaller field lists to retry with. Wrike rejects the WHOLE
-// request with 400 "Fields parameter value 'X' not allowed" if ANY field in
-// fields= isn't visible to the connected account for that specific task —
-// seen for customFields on a task outside this account's custom-field
-// visibility scope (custom fields can be scoped per space/team in Wrike).
-// This is real per-task access control, not something a fixed field list can
-// predict — so a single such task must degrade gracefully (fewer fields)
-// rather than fail the whole fetch and vanish from whatever list needed it.
-const FIELDS_FALLBACKS = [
-  FIELDS_FILTER,
-  encodeURIComponent("[parentIds,responsibleIds,subTaskIds,description]"),
-  null, // bare Wrike defaults, no optional fields — always succeeds
-];
-
-// Which fallback tier Wrike actually accepted for a given task, remembered so
-// repeat webhook events for the same task skip straight to the request that
-// works instead of re-earning the same 400s every time. A handful of tasks get
-// touched by Wrike automation every few seconds, and each event was re-walking
-// the whole ladder — hundreds of known-doomed requests a minute against a
-// rate-limited API.
-//
-// Entries expire: field visibility is account/space scoped and can change (a
-// task moves into a space we can see), so a degraded task is retried at full
-// fields once a day rather than being written off forever.
-const FIELD_TIER_KEY = "xyi_wrike_field_tier_v1";
-const FIELD_TIER_TTL_MS = 24 * 60 * 60 * 1000;
-
-const fieldTiers = (() => {
+// Wrike's get-tasks-BY-ID endpoint returns every optional field the app
+// needs (description, customFields, parentIds, responsibleIds, subTaskIds,
+// permalink) by default — and it 400s ("Fields parameter value 'subTaskIds'
+// not allowed") when those fields are passed explicitly via fields=. Only
+// the flat LIST endpoint needs FIELDS_FILTER. The old code here sent
+// fields= on by-id requests and walked a per-task fallback ladder, which
+// meant two guaranteed-400 requests per task before the bare one succeeded —
+// harmless at webhook scale, catastrophic when a sync backfills thousands.
+async function fetchOneTask(id) {
   try {
-    const stored = JSON.parse(localStorage.getItem(FIELD_TIER_KEY) || "{}");
-    const now = Date.now();
-    return new Map(
-      Object.entries(stored).filter(([, e]) => e && now - e.at < FIELD_TIER_TTL_MS)
-    );
-  } catch {
-    return new Map();
-  }
-})();
-
-function getFieldTier(id) {
-  const entry = fieldTiers.get(id);
-  if (!entry || Date.now() - entry.at >= FIELD_TIER_TTL_MS) return 0;
-  return entry.tier;
-}
-
-let persistTimer = null;
-function setFieldTier(id, tier) {
-  // Tier 0 is the default — only degraded tasks are worth remembering.
-  if (tier === 0) {
-    if (!fieldTiers.delete(id)) return;
-  } else {
-    if (fieldTiers.get(id)?.tier === tier) return;
-    fieldTiers.set(id, { tier, at: Date.now() });
-  }
-  clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(FIELD_TIER_KEY, JSON.stringify(Object.fromEntries(fieldTiers)));
-    } catch { /* quota — the in-memory map still does the job this session */ }
-  }, 1000);
-}
-
-const taskUrl = (ids, fields) =>
-  fields ? `/api/wrike/tasks/${ids}?fields=${fields}` : `/api/wrike/tasks/${ids}`;
-
-async function fetchOneTask(id, startTier = getFieldTier(id)) {
-  for (let tier = startTier; tier < FIELDS_FALLBACKS.length; tier++) {
-    try {
-      const r = await fetch(taskUrl(id, FIELDS_FALLBACKS[tier]));
-      if (r.ok) {
-        setFieldTier(id, tier);
-        return (await r.json()).data?.[0] || null;
-      }
-    } catch (e) {
-      console.warn(`[WrikeCache] refetch ${id} error`, e);
-    }
+    const r = await fetch(`/api/wrike/tasks/${id}`);
+    if (r.ok) return (await r.json()).data?.[0] || null;
+  } catch (e) {
+    console.warn(`[WrikeCache] refetch ${id} error`, e);
   }
   return null;
 }
@@ -217,43 +157,25 @@ async function fetchBatched(ids) {
   const out = [];
   // Batch up to 100 IDs per request — Wrike supports comma-separated IDs.
   const BATCH = 100;
-
-  // Group by remembered field tier: a task known to reject customFields would
-  // 400 the whole batch it rides in, so it goes out with its own tier's peers
-  // rather than poisoning the batch and forcing everyone into per-id retries.
-  const byTier = new Map();
-  for (const id of ids) {
-    const tier = getFieldTier(id);
-    if (!byTier.has(tier)) byTier.set(tier, []);
-    byTier.get(tier).push(id);
-  }
-
-  for (const [tier, tierIds] of byTier) {
-    for (let i = 0; i < tierIds.length; i += BATCH) {
-      const batch = tierIds.slice(i, i + BATCH);
-      let ok = false;
-      try {
-        const r = await fetch(taskUrl(batch.join(","), FIELDS_FALLBACKS[tier]));
-        if (r.ok) {
-          out.push(...((await r.json()).data || []));
-          ok = true;
-        }
-      } catch (e) {
-        console.warn(`[WrikeCache] batch refetch error`, e);
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const batch = ids.slice(i, i + BATCH);
+    let ok = false;
+    try {
+      const r = await fetch(`/api/wrike/tasks/${batch.join(",")}`);
+      if (r.ok) {
+        out.push(...((await r.json()).data || []));
+        ok = true;
       }
-      if (ok) continue;
-      // Batch failed — some task in it has a field-visibility issue we hadn't
-      // seen yet (see FIELDS_FALLBACKS above). Fall back per-id, tiering fields
-      // down per task instead of losing the whole batch to one bad task.
-      //
-      // A one-id batch pins the blame: that task just failed at this tier, so
-      // start it at the next one. With >1 id the culprit is unknown — the rest
-      // are likely fine at this tier — so each retries from its own memo.
-      const startTier = batch.length === 1 ? tier + 1 : undefined;
-      for (const id of batch) {
-        const task = await fetchOneTask(id, startTier ?? getFieldTier(id));
-        if (task) out.push(task);
-      }
+    } catch (e) {
+      console.warn(`[WrikeCache] batch refetch error`, e);
+    }
+    if (ok) continue;
+    // One bad id (deleted / no longer shared with this account) fails the
+    // whole comma-list — retry per id so the rest of the batch isn't lost
+    // with it.
+    for (const id of batch) {
+      const task = await fetchOneTask(id);
+      if (task) out.push(task);
     }
   }
   return out;
@@ -332,6 +254,10 @@ export function useWrikeCache() {
   const [syncError, setSyncError]               = useState(null);
   const syncingRef  = useRef(false);
   const scanningRef = useRef(false);
+  // Live mirror of `tasks` for non-reactive readers (sync/webhook relevance
+  // checks) — reading state inside those callbacks would go stale.
+  const tasksRef = useRef([]);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
   // Dictionaries needed to enrich a single webhook-pushed task outside of a
   // full sync() call — sync() only keeps these as local variables, so we
   // mirror the latest copy here whenever mount-load or sync() refreshes them.
@@ -440,25 +366,44 @@ export function useWrikeCache() {
       // After repair, fetch a fresh folder dict if the Supabase copy is sparse, then
       // backfill studioName on every task that still lacks it.
       if (wrikeUserId && loaded.length) {
+        // Broken cached copies to re-fetch by id: MATRIX tasks that predate
+        // parentIds in FIELDS_FILTER (or lost their table), and Print launch
+        // hubs that were cached from list pages 2+ — those pages drop the
+        // whole fields param, so the hub arrived with NO subTaskIds (and no
+        // description), leaving the Launch Tracker without its market links.
         const broken = loaded.filter(
-          (t) => t.title?.toUpperCase().includes("MATRIX") && (!t.tableHtml || !t.parentIds?.length)
+          (t) =>
+            (t.title?.toUpperCase().includes("MATRIX") && (!t.tableHtml || !t.parentIds?.length)) ||
+            (t.title && PRINT_HUB_RE.test(t.title) && (!t.subTaskIds?.length || !t.notesText))
         );
         // Nothing to heal → skip the whole block, most importantly the
         // multi-MB folder_dictionary download it needs. This is the steady
         // state: repairs and backfills persist, so after one clean pass this
         // costs zero egress.
         const needsStudioProbe = loaded.some((t) => !t.studioName);
-        if (broken.length === 0 && !needsStudioProbe) return;
+        // Print launch hubs whose per-market subtasks aren't cached: those
+        // subtasks were mostly completed before the sync lookback window, so
+        // no delta/full sync will ever pull them — backfill them by id here,
+        // once, and persist. (Same self-heal idiom as the MATRIX repair.)
+        const cachedIds = new Set(loaded.map((t) => t.id));
+        const subIdsOfHubs = () => [...new Set(
+          loaded
+            .filter((t) => t.title && PRINT_HUB_RE.test(t.title))
+            .flatMap((t) => t.subTaskIds || [])
+            .filter((id) => !cachedIds.has(id))
+        )];
+        if (broken.length === 0 && !needsStudioProbe && subIdsOfHubs().length === 0) return;
 
-        // Only now pay for the dictionary blob
+        // Only now pay for the dictionary blobs (status/contact dicts ride
+        // along so backfilled subtasks get real workflow-status names).
         const { data: dictRow } = await supabase
           .from("wrike_sync_meta")
-          .select("folder_dictionary")
+          .select("folder_dictionary,contact_dictionary,status_dictionary")
           .eq("wrike_user_id", SHARED_META_ID)
           .maybeSingle();
 
         if (broken.length > 0) {
-          console.log(`[WrikeCache] repairing ${broken.length} MATRIX tasks (missing table/parentIds)`);
+          console.log(`[WrikeCache] repairing ${broken.length} MATRIX/launch-hub tasks (missing table/parentIds/subTaskIds)`);
           const refetched = await fetchTasksByIds(broken.map((t) => t.id));
           const refetchedById = new Map(refetched.map((t) => [t.id, t]));
           const repaired = broken
@@ -469,6 +414,8 @@ export function useWrikeCache() {
               return {
                 ...t,
                 parentIds: full.parentIds || t.parentIds,
+                subTaskIds: full.subTaskIds?.length ? full.subTaskIds : t.subTaskIds,
+                responsibleIds: full.responsibleIds || t.responsibleIds,
                 tableHtml: parsed.tableHtml || t.tableHtml,
                 notesText: parsed.notesText || t.notesText,
                 extractedPathData: parsed.extractedPathData || t.extractedPathData,
@@ -553,6 +500,46 @@ export function useWrikeCache() {
             console.log(`[WrikeCache] studio backfilled ${backfilled.length} tasks`);
           }
         }
+
+        // --- PRINT LAUNCH SUBTASK BACKFILL ---
+        // Fetch the hub subtasks the sync window can't reach, run them through
+        // the same enrichment as everything else, and persist to both caches —
+        // after this one pass the Launch Tracker's market chips survive
+        // refreshes and render for the whole team without any live fetching.
+        // Recomputed AFTER the repair above: a hub that just got its
+        // subTaskIds restored surfaces its missing subtasks in this same
+        // pass instead of waiting for the next reload.
+        const missingSubIds = subIdsOfHubs();
+        if (missingSubIds.length > 0) {
+          console.log(`[WrikeCache] backfilling ${missingSubIds.length} print launch subtasks`);
+          const rawSubs = await fetchTasksByIds(missingSubIds);
+          if (rawSubs.length > 0) {
+            const enrichedSubs = enrichTasks(
+              rawSubs,
+              fd,
+              dictRow?.contact_dictionary || {},
+              dictRow?.status_dictionary || {},
+              c2p,
+              enrichCtxRef.current.filmCodeMappings || {}
+            );
+            const rows = enrichedSubs.map((t) => ({
+              id: t.id,
+              wrike_user_id: wrikeUserId,
+              task_data: stripForStorage(t),
+              updated_date: t.updatedDate ?? null,
+            }));
+            for (let i = 0; i < rows.length; i += 500) {
+              await supabase.from("wrike_tasks_cache").upsert(rows.slice(i, i + 500), { onConflict: "id" });
+            }
+            await saveLocalTasks(enrichedSubs);
+            setTasks((prev) => {
+              const m = new Map(prev.map((p) => [p.id, p]));
+              enrichedSubs.forEach((t) => m.set(t.id, t));
+              return [...m.values()];
+            });
+            console.log(`[WrikeCache] backfilled ${enrichedSubs.length} print launch subtasks`);
+          }
+        }
       }
     })();
   }, []);
@@ -635,18 +622,45 @@ export function useWrikeCache() {
 
       // Filter to the motion-team-relevant subset FIRST (filter only uses base
       // fields — title/parentIds/responsibleIds/subTaskIds — present on every page).
-      const relevant = filterToMotionTeam(rawTasks, folderDictionary, contactDictionary);
+      // Print/digital launch-hub subtasks are relevant BY MEMBERSHIP, not by
+      // title: digital launch waves' per-market subtasks carry no "_Print_"
+      // marker, so a title-only filter would purge what the Launch Tracker's
+      // backfill just cached. Anything hanging off a known hub — already
+      // cached or in this batch — is kept and kept fresh.
+      const hubSubIds = new Set(
+        [...tasksRef.current, ...rawTasks]
+          .filter((t) => t.title && PRINT_HUB_RE.test(t.title))
+          .flatMap((t) => t.subTaskIds || [])
+      );
+      const relevantMap = new Map(
+        filterToMotionTeam(rawTasks, folderDictionary, contactDictionary).map((t) => [t.id, t])
+      );
+      for (const t of rawTasks) {
+        if (hubSubIds.has(t.id)) relevantMap.set(t.id, t);
+      }
+      const relevant = [...relevantMap.values()];
 
       // Tasks Wrike reports as changed but that no longer pass the filter
       // (e.g. reassigned off the Motion team) must be purged from the cache —
       // otherwise their stale pre-change copy lingers there forever, since
       // nothing else ever revisits a task once it drops out of relevance.
-      const relevantIds = new Set(relevant.map((t) => t.id));
-      const droppedIds = rawTasks.filter((t) => !relevantIds.has(t.id)).map((t) => t.id);
+      // Only ids actually IN the cache are worth purging: a full refresh pulls
+      // the whole workspace's recent tasks, and issuing a DELETE for ~15k
+      // never-cached ids blew past the URL length limit (connection closed).
+      const cachedIdSet = new Set(tasksRef.current.map((t) => t.id));
+      const droppedIds = rawTasks
+        .filter((t) => !relevantMap.has(t.id) && cachedIdSet.has(t.id))
+        .map((t) => t.id);
 
       // Re-fetch descriptions for any relevant task missing one (pagination drops
       // the fields param on pages 2+). This restores the MATRIX table + notes.
-      const missingDesc = relevant.filter((t) => !t.description).map((t) => t.id);
+      // Only tasks whose description survives enrichment (MATRIX + Print launch
+      // hubs) are worth the round-trips — enrichTasks deletes everyone else's
+      // description on arrival, so backfilling those was pure API burn (4,600+
+      // by-id fetches per sync once the Print filter widened relevance).
+      const missingDesc = relevant
+        .filter((t) => !t.description && keepsDescription(t.title))
+        .map((t) => t.id);
       if (missingDesc.length > 0) {
         console.log(`[WrikeCache] re-fetching descriptions for ${missingDesc.length} tasks`);
         const refetched = await fetchTasksByIds(missingDesc);
@@ -656,6 +670,12 @@ export function useWrikeCache() {
           if (full) {
             t.description = full.description;
             t.customFields = full.customFields;
+            // The paginated list dropped these base fields too (pages 2+ lose
+            // the whole fields param) — restore them or hubs get cached with
+            // no subTaskIds and the Launch Tracker loses its market links.
+            if (!t.subTaskIds?.length && full.subTaskIds?.length) t.subTaskIds = full.subTaskIds;
+            if (!t.parentIds?.length && full.parentIds?.length) t.parentIds = full.parentIds;
+            if (!t.responsibleIds?.length && full.responsibleIds?.length) t.responsibleIds = full.responsibleIds;
           }
         });
       }
@@ -695,7 +715,11 @@ export function useWrikeCache() {
         await advanceLocalCursor(filtered);
       }
       if (droppedIds.length > 0) {
-        await supabase.from("wrike_tasks_cache").delete().in("id", droppedIds);
+        // Chunked — ids travel in the querystring, and one giant .in() list
+        // exceeds the URL limit and kills the connection.
+        for (let i = 0; i < droppedIds.length; i += 200) {
+          await supabase.from("wrike_tasks_cache").delete().in("id", droppedIds.slice(i, i + 200));
+        }
         await removeLocalTasks(droppedIds);
         console.log(`[WrikeCache] purged ${droppedIds.length} task(s) no longer Motion-relevant`);
       }
@@ -811,10 +835,22 @@ export function useWrikeCache() {
 
     // Same relevance check sync() applies — a webhook-changed task that no
     // longer (or never did) pass filterToMotionTeam must not be added to the
-    // shared cache, and must be purged if it's there from before.
-    const relevant = filterToMotionTeam(raw, ctx.folderDictionary, ctx.contactDictionary);
-    const relevantIds = new Set(relevant.map((t) => t.id));
-    const droppedIds = raw.filter((t) => !relevantIds.has(t.id)).map((t) => t.id);
+    // shared cache, and must be purged if it's there from before. Launch-hub
+    // subtasks are relevant by membership (see sync()) — a status change on a
+    // digital wave's per-market subtask must update it, not purge it.
+    const hubSubIds = new Set(
+      [...tasksRef.current, ...raw]
+        .filter((t) => t.title && PRINT_HUB_RE.test(t.title))
+        .flatMap((t) => t.subTaskIds || [])
+    );
+    const relevantMap = new Map(
+      filterToMotionTeam(raw, ctx.folderDictionary, ctx.contactDictionary).map((t) => [t.id, t])
+    );
+    for (const t of raw) {
+      if (hubSubIds.has(t.id)) relevantMap.set(t.id, t);
+    }
+    const relevant = [...relevantMap.values()];
+    const droppedIds = raw.filter((t) => !relevantMap.has(t.id)).map((t) => t.id);
 
     const enriched = enrichTasks(
       relevant,

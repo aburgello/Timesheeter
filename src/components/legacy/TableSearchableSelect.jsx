@@ -3,6 +3,7 @@
 // over LegacyTimesheet's component state.
 import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
+import { layoutRect } from "../../utils/zoom";
 
 // --- MODERN SEARCHABLE SELECT FOR TABLE ROWS ---
 export default function TableSearchableSelect({
@@ -35,7 +36,12 @@ export default function TableSearchableSelect({
   // useLayoutEffect fires before paint so the dropdown never renders at position 0,0.
   useLayoutEffect(() => {
     if (!isOpen || !wrapperRef.current) return;
-    const rect = wrapperRef.current.getBoundingClientRect();
+    // layoutRect (not getBoundingClientRect) so the trigger's coordinates are
+    // in the same layout space as innerWidth/Height and the fixed style we set
+    // below. Under the app's html{zoom:1.1} a raw rect is visual pixels, which
+    // the browser would zoom a second time on paint — landing the dropdown
+    // offset from its trigger, worse the further down/right the row is.
+    const rect = layoutRect(wrapperRef.current);
     const vw = window.innerWidth;
     const vh = window.innerHeight;
 
@@ -43,6 +49,11 @@ export default function TableSearchableSelect({
     if (isCountry) w = Math.min(800, vw - 16);
     else if (isCategory) w = Math.min(750, vw - 16);
     else if (isTime) w = 160;
+    // Job dropdown tracks its column width (the trigger spans the cell), so it
+    // lines up under the column and grows when the column is resized. Floor keeps
+    // it readable when the column is narrow; long job strings wrap rather than
+    // horizontally scroll.
+    else if (isJob) w = Math.min(vw - 16, Math.max(rect.width, 280));
 
     const rightAlign = isTime || (isCategory && !isDarkModal);
     let left = rightAlign ? rect.right - w : rect.left;

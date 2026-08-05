@@ -7,11 +7,13 @@ import {
   ChevronDown,
   Star,
   Sparkle,
+  EyeOff,
 } from "lucide-react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
-import { TERRITORY_FLAGS, MOTION_TEAM_NAME_MAP } from "../constants";
+import { TERRITORY_FLAGS, MOTION_TEAM_NAME_MAP, normalizeName } from "../constants";
 import { supabase } from "../lib/supabaseClient";
+import { useBoardNow, ActiveDot } from "./shared/BoardNow";
 import { fullName as cleanFullName } from "../lib/formatName";
 import { useMotionBoardTasks } from "../hooks/useMotionBoardTasks";
 import PageHeader from "./shared/PageHeader";
@@ -101,8 +103,6 @@ let boardEntrancePlayed = false;
 
 const prefersReducedMotion = () =>
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-const INITIAL_CAMPAIGNS = [];
 
 const FALLBACK_FLAGS = {
   UAE: "🇦🇪", SPAIN: "🇪🇸", ES: "🇪🇸", GER: "🇩🇪", GERMANY: "🇩🇪",
@@ -326,11 +326,10 @@ function AttachmentThumb({ attachment, large = false, onPreview }) {
 export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isActive = true, department }) {
   const triggerToast = _triggerToast ?? ((msg) => console.warn("Toast:", msg));
 
-  // Every non-Motion department (Print, AM, Digital, ...) drives the board
-  // off its own profiles-tagged roster; Motion keeps its hardcoded team +
-  // Riccardo slate exactly as before. `board` is the single config the rest
-  // of the component reads — members, lane colours, how tasks map to people,
-  // and the slate.
+  // Every non-Motion department (Print, AM, Digital, ...) drives the board off
+  // its own profiles-tagged roster; Motion keeps its hardcoded team. `board`
+  // is the single config the rest of the component reads — members, lane
+  // colours, and how tasks map to people.
   const usesDeptRoster = !!department && department !== "Motion";
   const deptTeam = useDepartmentTeam(department, usesDeptRoster);
   const board = useMemo(() => (
@@ -341,8 +340,6 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
           subtitle: `${department} Tasks Allocation`,
           matchBy: "id",
           wrikeIdToMember: deptTeam.wrikeIdToMember,
-          slateLead: null,
-          slateName: null,
         }
       : {
           members: TEAM_MEMBERS,
@@ -350,10 +347,15 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
           subtitle: "Motioners Tasks Allocation",
           matchBy: "name",
           nameMap: MOTION_TEAM_NAME_MAP,
-          slateLead: "Riccardo",
-          slateName: "Riccardo's Slate",
         }
   ), [usesDeptRoster, department, deptTeam]);
+
+  // Live "working now" state for this board — shared by every task's dot.
+  const now = useBoardNow(department || "Motion");
+  // Which lane is the current user's own — the only lane whose tasks they can
+  // mark as what *they're* working on. Dept boards map id→label directly;
+  // Motion's lanes are keyed by first name, which matches the profile.
+  const myBoardName = board.wrikeIdToMember?.[now.myId] || now.me?.name;
 
   // Each non-Motion department scopes its board state cache under its own
   // key so saved assignments never collide across departments or with
@@ -368,12 +370,12 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
   const boardRef = useRef(null);
   const wasActiveRef = useRef(false);
 
-  const [campaigns, setCampaigns] = useState(INITIAL_CAMPAIGNS);
   const [assignments, setAssignments] = useState(
     TEAM_MEMBERS.reduce((acc, name) => ({ ...acc, [name]: [] }), {})
   );
   const [timeframe, setTimeframe] = useState("Today");
   const [focusedPerson, setFocusedPerson] = useState(null);
+  const [hideStale, setHideStale] = useState(true);
   const saveTimeout = useRef(null);
 
   // --- Jacqui/Maria lane-cap hover flourish: stars + glitter, re-rolled
@@ -520,7 +522,6 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
     if (local) {
       try {
         const parsed = JSON.parse(local);
-        if (parsed.campaigns) setCampaigns(parsed.campaigns);
         if (parsed.assignments) setAssignments(parsed.assignments);
         if (parsed.timeframe) setTimeframe(parsed.timeframe);
       } catch (e) { /* ignore */ }
@@ -564,8 +565,8 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
   }, [assignments]);
 
   // Debounced save whenever board state changes
-  const saveBoardState = (newCampaigns, newAssignments, newTimeframe) => {
-    const state = { campaigns: newCampaigns, assignments: newAssignments, timeframe: newTimeframe, savedAt: new Date().toISOString() };
+  const saveBoardState = (newAssignments, newTimeframe) => {
+    const state = { assignments: newAssignments, timeframe: newTimeframe, savedAt: new Date().toISOString() };
     localStorage.setItem(storageKey, JSON.stringify(state));
     // Clear pending save
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
@@ -578,7 +579,6 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
       return;
     }
     const freshAssignments = board.members.reduce((acc, name) => ({ ...acc, [name]: [] }), {});
-    const freshBacklog = {};
     const now = new Date(); now.setHours(0, 0, 0, 0);
     let minDate, maxDate;
     if (targetTimeframe === "Today") {
@@ -624,33 +624,23 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
         return;
       }
 
-      // Motion (name-based): the lead's tasks form the slate, everyone else's
-      // land in their lane via the hardcoded name map.
+      // Motion (name-based): everyone's tasks land in their own lane via the
+      // hardcoded name map. Exact match on emoji-stripped full names (see
+      // normalizeName): a trailing "🐱" no longer has to line up, and a short
+      // key like "Turk" can't accidentally match a longer name that merely
+      // contains it. A task assigned to nobody on the roster isn't shown —
+      // there used to be a lead's slate catching those, and there isn't now.
       if (!task.assignees) return;
-      if (board.slateLead && task.assignees.includes(board.slateLead)) {
-        const campId = task.parentIds?.[0] || "camp-misc";
-        const campName = task.projectName || "Misc / Uncategorized";
-        if (!freshBacklog[campId]) freshBacklog[campId] = { id: campId, name: campName, subtasks: [] };
-        freshBacklog[campId].subtasks.push({
-          id: task.id, title: task.title,
-          tag: task.customStatusName || "Backlog",
-          customStatusId: task.customStatusId,
-          permalink: wrikeLink,
-        });
-      } else {
-        Object.keys(board.nameMap).forEach((wrikeName) => {
-          if (task.assignees.includes(wrikeName)) {
-            const boardName = board.nameMap[wrikeName];
-            if (freshAssignments[boardName]) freshAssignments[boardName].push(card);
-          }
-        });
-      }
+      const assigneeNames = task.assignees.split(",").map((a) => normalizeName(a));
+      Object.entries(board.nameMap).forEach(([wrikeName, boardName]) => {
+        if (assigneeNames.includes(normalizeName(wrikeName)) && freshAssignments[boardName]) {
+          freshAssignments[boardName].push(card);
+        }
+      });
     });
     for (const key in freshAssignments) freshAssignments[key] = sortTasksByStatus(freshAssignments[key]);
-    const freshCampaigns = Object.values(freshBacklog);
     setAssignments(freshAssignments);
-    setCampaigns(freshCampaigns);
-    saveBoardState(freshCampaigns, freshAssignments, targetTimeframe);
+    saveBoardState(freshAssignments, targetTimeframe);
   };
 
   // Rebuild the board from scratch whenever boardTasks gets a new reference —
@@ -664,11 +654,16 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
 
   // Stats
   const today = new Date(); today.setHours(0, 0, 0, 0);
+  const oneWeekAgo = new Date(today); oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
   const isOverdue = (d) => d && d !== "No Due Date" && new Date(d) < today;
+  // "Stale" tasks — overdue by more than a week — clutter the board long
+  // after they're actionable; hideStale lets a lane hide them without
+  // touching the underlying data or the Today/Tomorrow/Next Week window.
+  const isStale = (d) => d && d !== "No Due Date" && new Date(d) < oneWeekAgo;
   const allAssigned = Object.values(assignments).flat();
-  const backlogCount = campaigns.reduce((s, c) => s + c.subtasks.length, 0);
   const motionCount = allAssigned.filter((t) => (t.tag || "").toLowerCase().includes("motion")).length;
   const overdueCount = allAssigned.filter((t) => isOverdue(t.dueDate)).length;
+  const staleCount = allAssigned.filter((t) => isStale(t.dueDate)).length;
 
   return (
     <div ref={boardRef} className="min-h-screen bg-slate-100 text-[#122027] font-sans selection:bg-[#12a0e1]/30 selection:text-[#122027]">
@@ -680,12 +675,6 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
             <div className="font-display text-2xl font-bold text-white leading-none">{allAssigned.length}</div>
             <div className="text-[9px] font-black uppercase tracking-widest text-white/70">on the board</div>
           </div>
-          {board.slateLead && (
-            <div className="text-right">
-              <div className="font-display text-2xl font-bold text-white leading-none">{backlogCount}</div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-white/70">backlog</div>
-            </div>
-          )}
           <div className="text-right">
             <div className="font-display text-2xl font-bold text-white leading-none">{usesDeptRoster ? overdueCount : motionCount}</div>
             <div className="text-[9px] font-black uppercase tracking-widest text-white/70">{usesDeptRoster ? "overdue" : "motion"}</div>
@@ -716,60 +705,24 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
             </button>
           ))}
         </div>
+        <button
+          onClick={() => setHideStale((v) => !v)}
+          title={hideStale ? "Show tasks overdue by more than a week" : "Hide tasks overdue by more than a week"}
+          className={`relative ml-1 flex items-center gap-1.5 px-3 py-2 text-[10px] font-black uppercase tracking-wider rounded-xl border transition-colors ${
+            hideStale
+              ? "bg-white/15 border-white/20 text-white/80 hover:text-white hover:bg-white/20"
+              : "bg-white/5 border-white/10 text-white/40 hover:text-white/70"
+          }`}
+        >
+          <EyeOff className="w-3.5 h-3.5" />
+          {hideStale && staleCount > 0 && (
+            <span className="text-white/60">{staleCount}</span>
+          )}
+        </button>
       </PageHeader>
 
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-6 flex flex-col gap-4">
 
-        {/* ── The lead's Slate ─────────────────────────────────────────────
-            The lead's triage pile as a film slate: one dark strip of ink,
-            white type, campaign-grouped chips. The only dark block on the
-            page — everything below it stays quiet so it reads as "not yet
-            allocated" at a glance. Motion-only (Riccardo); department boards
-            with no configured lead skip it. */}
-        {board.slateLead && (
-        <div className="bg-[#122027] rounded-2xl overflow-hidden shrink-0">
-          <div className="flex items-center gap-4 px-5 pt-4 pb-3">
-            <div className="overflow-hidden">
-              <div data-lane-rise className="flex items-baseline gap-3">
-                <h2 className="font-display text-lg font-bold text-white tracking-tight leading-none">{board.slateName}</h2>
-                <span className="text-[10px] font-black uppercase tracking-widest text-white/50">
-                  {campaigns.reduce((s, c) => s + c.subtasks.length, 0)} unallocated
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="flex gap-6 px-5 pb-4 overflow-x-auto scrollbar-thin-dark">
-            {campaigns.length === 0 ? (
-              <p className="text-xs text-white/40 italic pb-1">Nothing on the slate for {timeframe.toLowerCase()}.</p>
-            ) : campaigns.map((campaign) => (
-              <div key={campaign.id} data-card-rise className="shrink-0 max-w-[340px]">
-                <div className="flex items-center gap-1.5 mb-2">
-                  <Film className="w-3 h-3 text-white/40 shrink-0" />
-                  <h3 className="text-[10px] font-black text-white/60 uppercase tracking-widest truncate">{campaign.name}</h3>
-                  <span className="text-[10px] font-bold text-white/35 shrink-0">{campaign.subtasks.length}</span>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {campaign.subtasks.map((task) => {
-                    const terr = getTerritoryData(task.title);
-                    return (
-                      <button
-                        key={task.id}
-                        onClick={() => setSelectedTask(task)}
-                        title={`${task.title} — ${task.tag || ""}`}
-                        className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg px-2 py-1 transition-colors"
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getStatusDotClass(task.tag)}`} />
-                        <span className="text-xs leading-none shrink-0">{terr.flag}</span>
-                        <span className="text-[10px] font-bold text-white/90 truncate max-w-[180px]">{task.title}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        )}
 
           {/* Files panel */}
           {(attachmentsLoading || Object.keys(taskAttachments).length > 0) && (
@@ -836,13 +789,19 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
             </p>
           )}
           {board.members.map((person, laneIdx) => {
-            const tasks = assignments[person] || [];
+            const tasks = (assignments[person] || []).filter((t) => !hideStale || !isStale(t.dueDate));
             const lane = board.lanes[person];
             const isFocused = focusedPerson === person;
             const isCollapsed = focusedPerson !== null && !isFocused;
             const personOverdue = tasks.filter((t) => isOverdue(t.dueDate)).length;
-            const inkHover = lane.ink === "dark" ? "group-hover:text-[#122027]" : "group-hover:text-white";
-            const inkFocus = lane.ink === "dark" ? "text-[#122027]" : "text-white";
+            // #0b1417, not #122027: a lane whose gradient is light (amber,
+            // lime) needs DARK ink on it in both themes, but the dark theme
+            // remaps #122027 to near-white with !important — which beat the
+            // non-important group-hover and put white text on a bright amber
+            // cap. This near-black isn't in the override list, so "dark ink"
+            // stays dark ink whatever the theme is doing.
+            const inkHover = lane.ink === "dark" ? "group-hover:text-[#0b1417]" : "group-hover:text-white";
+            const inkFocus = lane.ink === "dark" ? "text-[#0b1417]" : "text-white";
 
             return (
               <div
@@ -894,7 +853,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                               key={i}
                               style={vars}
                               className={`absolute top-0 opacity-0 fill-current group-hover:animate-star-fall ${
-                                lane.ink === "dark" ? "text-[#122027]/70" : "text-white/90"
+                                lane.ink === "dark" ? "text-[#0b1417]/70" : "text-white/90"
                               }`}
                             />
                           );
@@ -923,8 +882,8 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                           isCollapsed ? "text-sm" : "text-xl"
                         } ${
                           isFocused
-                            ? lane.ink === "dark" ? "text-[#122027]/60" : "text-white/60"
-                            : `text-[#c6d0da] ${lane.ink === "dark" ? "group-hover:text-[#122027]/60" : "group-hover:text-white/60"}`
+                            ? lane.ink === "dark" ? "text-[#0b1417]/60" : "text-white/60"
+                            : `text-[#c6d0da] ${lane.ink === "dark" ? "group-hover:text-[#0b1417]/60" : "group-hover:text-white/60"}`
                         }`}
                       >
                         {tasks.length}
@@ -936,7 +895,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                           isFocused || lane.ink === "dark"
                             ? "bg-[#122027]/15"
                             : "bg-rose-50 text-rose-600 group-hover:bg-white/20"
-                        } ${isFocused ? (lane.ink === "dark" ? "text-[#122027]" : "text-white") : lane.ink === "dark" ? "text-rose-600" : "group-hover:text-white"}`}
+                        } ${isFocused ? (lane.ink === "dark" ? "text-[#0b1417]" : "text-white") : lane.ink === "dark" ? "text-rose-600" : "group-hover:text-white"}`}
                       >
                         {personOverdue} overdue
                       </span>
@@ -969,7 +928,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                           key={task.id}
                           data-card-rise
                           onClick={() => setSelectedTask(task)}
-                          className={`shrink-0 cursor-pointer rounded-lg border-l-[3px] ${getBorderColorClass(task.tag)} border-y border-r border-slate-200/70 ${
+                          className={`group/chip shrink-0 cursor-pointer rounded-lg border-l-[3px] ${getBorderColorClass(task.tag)} border-y border-r border-slate-200/70 ${
                             overdue ? "bg-rose-50/40" : "bg-white"
                           } hover:shadow-md hover:-translate-y-0.5 transition-all ${
                             isFocused ? "w-72 p-3.5" : "w-60 px-3 py-2.5"
@@ -979,7 +938,10 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                             <p className="text-[9px] font-bold uppercase text-[#768994] tracking-widest truncate">
                               {task.campaignName}
                             </p>
-                            <span className="text-xs leading-none shrink-0" title={terr.name}>{terr.flag}</span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-xs leading-none" title={terr.name}>{terr.flag}</span>
+                              <ActiveDot task={task} now={now} canActivate={person === myBoardName} />
+                            </div>
                           </div>
                           <p className={`text-xs font-bold text-[#122027] leading-snug mt-1 ${isFocused ? "line-clamp-3" : "line-clamp-2"}`}>
                             {task.title}

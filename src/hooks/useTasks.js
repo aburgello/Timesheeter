@@ -1,30 +1,25 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { supabase } from "../lib/supabaseClient";
+import { supabase, whenIdentityReady, selectAll } from "../lib/supabaseClient";
+import { parseTimeToSeconds, secondsToHM } from "../utils/timeHelpers";
 
 // --- Translators ---
 
-// Stores time as "H:MM" — human-readable in Supabase
-const secsToHM = (s) => {
-  if (!(s > 0)) return null;
-  const mins = Math.round(s / 60);
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return `${h}:${String(m).padStart(2, "0")}`;
-};
+// Stores time as "H:MM" — human-readable in Supabase. null (not "none") is the
+// empty value here so the column reads as empty rather than as the string the
+// grid's dropdown uses.
+const secsToHM = (s) => secondsToHM(s, null);
 
-// Reads "H:MM" (new), decimal hours ("0.5"), or integer minutes ("30") — all legacy-compat
-const parseDbTime = (v) => {
-  if (!v || v === "none") return 0;
-  const s = String(v);
-  // New format: "H:MM"
-  const hm = s.match(/^(\d+):(\d{2})$/);
-  if (hm) return (parseInt(hm[1]) * 60 + parseInt(hm[2])) * 60;
-  const n = parseFloat(s);
-  if (isNaN(n) || n <= 0) return 0;
-  // Old decimal hours ("0.5", "1.50") → seconds
-  if (s.includes(".")) return Math.round(n * 3600);
-  // Old integer minutes ("30", "90") → seconds
-  return Math.round(n * 60);
+const parseDbTime = parseTimeToSeconds;
+
+// Given a partial update that touches time, fill in the representation the
+// caller didn't set, so in-memory seconds and the "H:MM" string always agree.
+const syncTimeFields = (changes) => {
+  const out = { ...changes };
+  if ("rawSeconds" in out) out.timeSpent = secondsToHM(out.rawSeconds ?? 0);
+  else if ("timeSpent" in out) out.rawSeconds = parseTimeToSeconds(out.timeSpent);
+  if ("additionalSeconds" in out) out.additionalTime = secondsToHM(out.additionalSeconds ?? 0);
+  else if ("additionalTime" in out) out.additionalSeconds = parseTimeToSeconds(out.additionalTime);
+  return out;
 };
 
 const toDb = (task) => ({
@@ -39,9 +34,17 @@ const toDb = (task) => ({
   territory: task.territory ?? null,
   notes: task.notes ?? null,
   wrike_timelog_id: task.wrikeTimelogId ?? null,
-  // Time: DB stores integer minutes (new) or decimal hours (old legacy rows)
-  time_spent: task.timeSpent ?? secsToHM(task.rawSeconds ?? 0),
-  additional_time: task.additionalTime ?? secsToHM(task.additionalSeconds ?? 0),
+  // Time: always written as "H:MM". A caller may hand us either shape (a pull
+  // sets timeSpent, the Tracker sets rawSeconds); both are parsed to seconds
+  // and re-formatted so only one shape ever reaches the column.
+  time_spent: secsToHM(
+    task.timeSpent != null ? parseTimeToSeconds(task.timeSpent) : (task.rawSeconds ?? 0)
+  ),
+  additional_time: secsToHM(
+    task.additionalTime != null
+      ? parseTimeToSeconds(task.additionalTime)
+      : (task.additionalSeconds ?? 0)
+  ),
   // Legacy fields
   film_title: task.filmTitle ?? null,
   client: task.client ?? null,
@@ -107,22 +110,30 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
   useEffect(() => {
     const fetchTasks = async () => {
       setLoading(true);
+      // On a first login the anon session / identity stamp may still be in
+      // flight; querying before then returns an empty set under RLS.
+      await whenIdentityReady();
       // Note: "date" is a text column with mixed historical formats (ISO and
       // dd/mm/yyyy), so filtering it with .gte() at the DB level is unreliable
       // (lexicographic string comparison, not a real date compare). Instead we
       // fetch all matching rows and filter by weekStart client-side after
       // normalising every date to ISO below.
-      let query = supabase.from("tasks").select("*").order("id", { ascending: false });
-      if (source) query = query.eq("source", source);
-      if (effectiveUid) query = query.eq("wrike_user_id", effectiveUid);
-
-      const { data, error } = await query;
+      // selectAll: a plain read stops at 1000 rows. Ordered newest-first that
+      // truncation quietly eats a long-serving user's OLDEST tasks, so the
+      // current week looks fine while older weeks come up empty. selectAll pages
+      // ascending, so reverse to keep the newest-first order callers expect.
+      let error = null;
+      const data = await selectAll("tasks", "*", (q) => {
+        if (source) q = q.eq("source", source);
+        if (effectiveUid) q = q.eq("wrike_user_id", effectiveUid);
+        return q;
+      }).catch((e) => { error = e; return []; });
 
       if (error) {
         console.error("Failed to load tasks:", error);
         triggerToast?.("Failed to load tasks from database.");
       } else {
-        const mapped = (data ?? []).map(fromDb);
+        const mapped = data.slice().reverse().map(fromDb);
         if (weekStart) {
           // Normalise any "dd/mm/yyyy" dates to ISO before comparing.
           // Old entries were saved with toLocaleDateString("en-GB") which sorts
@@ -150,6 +161,7 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
   const addTask = useCallback(async (task) => {
     const t = { ...task, wrikeUserId: task.wrikeUserId ?? uidRef.current };
     setTasks((prev) => [t, ...prev]);
+    await whenIdentityReady();
     const { error } = await supabase.from("tasks").insert(toDb(t));
     if (error) {
       console.error("Failed to save task:", error);
@@ -161,6 +173,7 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
   const addTasks = useCallback(async (newTasks) => {
     const stamped = newTasks.map((t) => ({ ...t, wrikeUserId: t.wrikeUserId ?? uidRef.current }));
     setTasks((prev) => [...stamped, ...prev]);
+    await whenIdentityReady();
     const { error } = await supabase.from("tasks").insert(stamped.map(toDb));
     if (error) {
       console.error("Failed to save tasks:", error);
@@ -170,7 +183,14 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
   }, []);
 
   const updateTask = useCallback(async (id, changes) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...changes } : t)));
+    // A task carries time twice — seconds in memory, "H:MM" for the DB — and a
+    // caller only ever sets one of them: the grid's dropdown writes timeSpent,
+    // the Tracker's editor writes rawSeconds. Deriving the counterpart here
+    // keeps them in step. Without this, editing a row's time left the old
+    // rawSeconds in state, so the consolidated header and the bookmarklet
+    // export both kept reporting the PREVIOUS duration until a full reload.
+    const synced = syncTimeFields(changes);
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...synced } : t)));
 
     const KEY_MAP = {
       jobNumber: "job_number", territory: "territory", category: "category",
@@ -181,8 +201,11 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
       clientAmends: "client_amends", is3D: "is_3d",
     };
 
-    // Convert in-memory seconds to decimal hours before persisting
-    const resolved = { ...changes };
+    // Persist from the synced seconds, so the column always lands as "H:MM"
+    // regardless of which representation the caller set. The grid's dropdown
+    // writes bare hours ("2"); normalising here stops that shape reaching the
+    // database at all, instead of relying on every reader to interpret it.
+    const resolved = { ...synced };
     if ("rawSeconds" in resolved) {
       resolved.timeSpent = secsToHM(resolved.rawSeconds ?? 0);
       delete resolved.rawSeconds;
@@ -237,6 +260,7 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
       .map((t) => ({ ...t, wrikeUserId: t.wrikeUserId ?? uidRef.current }));
     if (stamped.length === 0) { triggerToast?.("No new tasks found."); return 0; }
     setTasks((prev) => [...stamped, ...prev]);
+    await whenIdentityReady();
     const { error } = await supabase.from("tasks").insert(stamped.map(toDb));
     if (error) {
       triggerToast?.("Import failed to sync.");

@@ -17,7 +17,7 @@ gsap.registerPlugin(useGSAP);
 const TABS = [
   { id: "jobsSetup", label: "Jobs Setup", desc: "Create new job numbers", icon: FolderPlus },
   { id: "jobs",      label: "Job Book",   desc: "Live budgets & tracking", icon: Briefcase },
-  { id: "feed",      label: "Jobs Feed",  desc: "Every logged hour by job", icon: Activity },
+  { id: "feed",      label: "Project/Time", desc: "Every logged hour by job", icon: Activity },
 ];
 
 // Play the masked-rise entrance once per session — same contract as

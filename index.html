@@ -7,6 +7,36 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // TEMP LOCAL-ONLY MOCK — reverted before commit.
+      if (location.search.includes("mock=1")) {
+        (function () {
+          var d = function (f) { return "<p>/Volumes/Jobs/" + f + "/DIGITAL/a</p>"; };
+          var mk = function (id, t, f, cs, up, due) {
+            return { id: id, title: t, status: "Active", customStatusId: cs, updatedDate: up,
+              dueDate: due, permalink: "#", description: d(f), superTaskIds: [], responsibleIds: ["ME"] };
+          };
+          var active = [
+            mk("t1","Liv - 360 Feedback","Liv","cs1","2026-07-16T10:00:00Z",null),
+            mk("t2","2026 Showreel","2026_Showreel","cs3","2026-07-13T10:00:00Z",null),
+            mk("t4","Luke - 360 Feeback","Luke","cs1","2026-07-02T10:00:00Z","2026-07-20T10:00:00Z")
+          ];
+          var wf = { data: [{ customStatuses: [
+            { id: "cs1", name: "In Progress" }, { id: "cs3", name: "Motion" }] }] };
+          var contacts = { data: [{ id: "ME", firstName: "Antonio", lastName: "Burgello", avatarUrl: "", profiles: [{ email: "antonio@xyi.com" }] }] };
+          var orig = window.fetch.bind(window);
+          window.fetch = function (u, o) {
+            var url = String(u && u.url ? u.url : u);
+            var J = function (x) { return Promise.resolve(new Response(JSON.stringify(x), { status: 200, headers: { "Content-Type": "application/json" } })); };
+            if (url.indexOf("/api/wrike/contacts") > -1) return J(contacts);
+            if (url.indexOf("/api/wrike/workflows") > -1) return J(wf);
+            if (url.indexOf("/api/wrike/tasks") > -1) return J({ data: url.indexOf("status=Active") > -1 ? active : [] });
+            if (url.indexOf("/api/wrike/") > -1) return J({ data: [] });
+            return orig(u, o);
+          };
+        })();
+      }
+    </script>
     <script type="module" src="/src/index.jsx"></script>
   </body>
 </html>

@@ -6,11 +6,15 @@ import React, {
   useCallback,
 } from "react";
 import { useLegacyRows, getCurrentWeekStart, hmToHours } from "../hooks/useLegacyRows";
-import { roundToHalfHourSeconds } from "../utils/timeHelpers";
+import { useColumnResize } from "../lib/useColumnResize";
+import { layoutRect } from "../utils/zoom";
 import { useJobLookup } from "../hooks/useJobLookup";
 import {
+  supabase,
   setWrikeUserId as stampWrikeUserId,
   fetchExistingTimelogIds,
+  whenIdentityReady,
+  selectAll,
 } from "../lib/supabaseClient";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
@@ -36,14 +40,70 @@ import {
   TERRITORIES,
   CATEGORIES,
   TERRITORY_FLAGS,
-  REGION_ALIASES,
   FILM_MAPPINGS,
+  normalizeName,
 } from "../constants.js";
+import { resolveJobNumber } from "../utils/wrikeHelpers";
+import { resolveCountries } from "../utils/countryCodes";
+import { getFolderCountries, buildChildToParent } from "../lib/wrikeEnrich";
+import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
+import { countryFieldIds, warmCountryFields } from "../lib/countryField";
+import { secondsToHM } from "../utils/timeHelpers";
 import { COLUMNS, DAYS, TIME_OPTIONS, getDarkTagStyle } from "./legacy/legacyConstants";
 import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
 import TableSearchableSelect from "./legacy/TableSearchableSelect";
+import MultiCountrySelect from "./shared/MultiCountrySelect";
+import {
+  splitTerritories,
+  joinTerritories,
+  territoryFlags,
+  territoryKey,
+  territoryCode,
+  toTimesheetTerritories,
+} from "../utils/territories";
 
 export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
+  // Drag-resizable column configs (persisted per table).
+  const WRIKE_TS_COLS = [
+    { key: "title",    label: "Assignment Title", px: 320 },
+    { key: "status",   label: "Status",           px: 140 },
+    { key: "category", label: "Category Link",    px: 240 },
+    { key: "jobkey",   label: "Job Key",          px: 160 },
+    { key: "due",      label: "Due Date",         px: 110 },
+    { key: "location", label: "Location",         px: 160 },
+    ...["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => ({ key: `day_${d}`, label: d, px: 64 })),
+  ];
+  const { widths: wtWidths, resizeHandle: wtHandle } = useColumnResize("legacy-wrike-ts-cols", WRIKE_TS_COLS);
+
+  // Default widths mirror the previous per-cell w-[…] classes so the layout is
+  // unchanged until the user drags.
+  const CONSOL_PX = {
+    "Job Number": 240, "Client": 140, "Film Title": 150, "Project Description": 220,
+    "Country": 140, "Category": 180, "Client Amends": 80, "Notes": 140,
+    "3D": 56, "Time Spent": 104, "Additional Time": 104,
+  };
+  // These four hold a checkbox or a short time dropdown, never prose. They're
+  // already the size they need to be, so squeezing them only clips the control
+  // ("none" became "n…") without buying the text columns much room.
+  const CONSOL_FIXED = new Set(["Client Amends", "3D", "Time Spent", "Additional Time"]);
+  const CONSOL_COLS = COLUMNS.map((c, i) => ({
+    key: `c${i}`,
+    label: c,
+    px: CONSOL_PX[c] || 140,
+    fixed: CONSOL_FIXED.has(c),
+  }));
+  // Job Number and Additional Time keep their width and stay pinned to the
+  // edges; everything between them is squeezed to whatever the window leaves,
+  // so a narrow laptop scales the table down instead of pushing the last
+  // columns off the right where nobody finds them.
+  const consolScrollRef = useRef(null);
+  const { widths: consolWidths, resizeHandle: consolHandle } = useColumnResize(
+    "legacy-consol-cols",
+    CONSOL_COLS,
+    { fitTo: consolScrollRef, keepFirst: true, keepLast: true }
+  );
+  const consolTotal = CONSOL_COLS.reduce((s, c) => s + consolWidths[c.key], 0);
+
   const [activeDay, setActiveDay] = useState(() => {
     return localStorage.getItem("xyi_legacy_activeDay") || "Monday";
   });
@@ -180,12 +240,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Formats a decimal-hours total as "H:MM" — decimal hours (e.g. "4.17h" for
   // 4h10m) read like hundredths to a human, so display the same H:MM shape
   // used everywhere else in the app instead.
-  const formatDayTotal = (hours) => {
-    const mins = Math.round(hours * 60);
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${h}:${String(m).padStart(2, "0")}`;
-  };
+  // "0:00" rather than "none" for an empty day — this is a running total, not
+  // a row's value.
+  const formatDayTotal = (hours) => secondsToHM(hours * 3600, "0:00");
 
   // --- Add blank row ---
   const handleAddRow = () => {
@@ -206,6 +263,41 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       timeSpent: "none",
       additionalTime: "none",
     });
+  };
+
+  // Add one new entry (row) into a job group while consolidated — inherits the
+  // group's job/client/film, leaves territory/category/time blank to fill in.
+  // This is what lets you add times without leaving consolidated view.
+  const addEntryToGroup = (g, extra = {}) => {
+    if (frozenDays[activeDay]) return;
+    addRow({
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      taskId: null,
+      dayOfWeek: activeDay,
+      jobNumber: g.jobNumber || "",
+      client: g.client || "",
+      filmTitle: g.filmTitle || "",
+      projectDescription: g.projectDescription || "",
+      territory: "",
+      category: "",
+      clientAmends: false,
+      notes: "",
+      is3D: false,
+      timeSpent: "none",
+      additionalTime: "none",
+      ...extra,
+    });
+    setCollapsedGroups((prev) => ({ ...prev, [g.jobNumber]: false })); // ensure visible
+  };
+
+  // Multi-country: ONE entry covering every country picked, so the time is
+  // logged once for the work rather than duplicated per market. The company
+  // timesheet site takes several countries on a single row, so this exports
+  // straight across — see handleCopyJSON.
+  const addMultiCountryEntry = (g, countries, extra = {}) => {
+    if (frozenDays[activeDay] || !countries?.length) return;
+    addEntryToGroup(g, { territory: joinTerritories(countries), ...extra });
+    setAddEntryFor(null);
   };
 
   const [isWrikeModalOpen, setIsWrikeModalOpen] = useState(false);
@@ -247,8 +339,43 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // ever runs later (on sync or on a webhook event), by which point the
   // whole component body (and parseWrikeDescription's const binding) has
   // already executed for this render.
+  // Parent tasks for any subtasks in a batch, keyed by id.
+  //
+  // A subtask is where both of the deliberate country rules go quiet: Wrike
+  // gives it no folder membership of its own (parentIds is the PARENT's
+  // business), and production writes the market code on the parent — the task
+  // people actually record time against — not on every subtask beneath it. So
+  // a subtask of "ODY_CN_EmperorCinema", sitting in a folder called
+  // "China 🇨🇳", could see neither the name nor the folder and fell through to
+  // whatever its custom fields happened to say.
+  //
+  // The Tracker gets this for free by inverting subTaskIds across its cache of
+  // the whole workspace (see enrichTasks). Legacy can't: it only ever holds
+  // MY tasks, and the parent of my subtask is often somebody else's, so it
+  // simply isn't in the batch to invert. Asking for the parents by id is the
+  // reliable way round — one batched call, only when subtasks are present,
+  // deduped and coalesced by fetchTasksByIds.
+  const fetchParentTasks = useCallback(async (tasks) => {
+    const have = new Map(tasks.map((t) => [t.id, t]));
+    const missing = [
+      ...new Set(tasks.flatMap((t) => t.superTaskIds || [])),
+    ].filter((id) => !have.has(id));
+
+    if (missing.length) {
+      try {
+        for (const p of await fetchTasksByIds(missing)) have.set(p.id, p);
+      } catch {
+        /* parents unavailable → subtasks fall back to their custom fields */
+      }
+    }
+    return have;
+  }, []);
+
   const enrichLegacyTask = useCallback(
-    (task, statusDict) => {
+    (task, statusDict, parentById) => {
+      const parent = (task.superTaskIds || [])
+        .map((id) => parentById?.get(id))
+        .find(Boolean);
       const parsed = parseWrikeDescription(task.description);
       let projectName = task.title.split(/[_|-]/)[0].trim();
       if (parsed.extractedPathData) {
@@ -265,6 +392,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         extractedPathData: parsed.extractedPathData,
         notesText: parsed.notesText,
         projectName,
+        // Rule 2: the code ending the parent task's name.
+        parentTaskTitle: parent?.title || task.parentTaskTitle || "",
+        // Rule 3, for subtasks: the folders the PARENT sits in, used only when
+        // the task carries none of its own. Kept as its own field rather than
+        // written over parentIds, which means one specific thing to Wrike and
+        // is read elsewhere.
+        superTaskParentIds: task.parentIds?.length ? [] : parent?.parentIds || [],
         customStatusName: task.customStatusId
           ? statusDict[task.customStatusId] || task.status
           : task.status,
@@ -279,6 +413,46 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Last-built status-id → name map, reused by the webhook patch below so an
   // incoming single-task event doesn't need to refetch /api/wrike/workflows.
   const statusDictRef = useRef({});
+
+  // The folder tree, held for the life of the page. Localisation campaigns put
+  // the market in a folder rather than in the task name — an hour on
+  // "ODY_CN_EmperorCinema", which sits in a folder called "China 🇨🇳", is the
+  // case — and only Generate Today's Timesheet ever fetched the tree to read
+  // it. Pull Wrike Times and Sync My Jobs built their rows without it, so
+  // those rows silently skipped the folder rule and fell through to whatever
+  // the task's custom fields happened to say. It lives beside the resolver's
+  // one funnel (guessFieldsFromTask) now, so no path can miss it again.
+  //
+  // fetchFolderDictionary reads the tree the last sync cached in Supabase and
+  // only crawls Wrike when that copy is missing or sparse, so this costs one
+  // select — cheap enough to warm on mount and await on click.
+  const folderTreeRef = useRef({ folderDictionary: {}, childToParent: {} });
+  const ensureFolderTree = useCallback(async (seed) => {
+    if (seed && Object.keys(seed).length) {
+      folderTreeRef.current = {
+        folderDictionary: seed,
+        childToParent: buildChildToParent(seed),
+      };
+      return;
+    }
+    if (Object.keys(folderTreeRef.current.folderDictionary).length) return;
+    try {
+      const { folderDictionary } = await fetchFolderDictionary();
+      folderTreeRef.current = {
+        folderDictionary,
+        childToParent: buildChildToParent(folderDictionary),
+      };
+    } catch {
+      /* no dictionary → countries fall back to the task name / custom field */
+    }
+  }, []);
+
+  // Both warmed on mount so rows built off a webhook patch — which arrives
+  // without anyone clicking anything — resolve their countries in full.
+  useEffect(() => {
+    ensureFolderTree();
+    warmCountryFields();
+  }, [ensureFolderTree]);
 
   // Near-instant updates: a webhook event only carries a changed task's id,
   // so batches of ids (debounced, see wrikeWebhookSubscription.js) get
@@ -296,11 +470,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const changed = await fetchTasksByIds(ids);
       if (!changed.length) return;
 
+      // Same parent lookup the bulk sync does, so a task edited into existence
+      // by a webhook resolves its country the same way one pulled by hand does.
+      const parentById = await fetchParentTasks(changed);
+
       setLocalWrikeTasks((prev) => {
         const map = new Map(prev.map((t) => [t.id, t]));
         changed.forEach((t) => {
           if (t.responsibleIds?.includes(wrikeUserId)) {
-            map.set(t.id, enrichLegacyTask(t, statusDictRef.current));
+            map.set(t.id, enrichLegacyTask(t, statusDictRef.current, parentById));
           } else {
             map.delete(t.id); // reassigned away from me
           }
@@ -310,7 +488,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     };
 
     return subscribeToWrikeTaskEvents(handleWebhookTaskIds);
-  }, [wrikeUserId, enrichLegacyTask]);
+  }, [wrikeUserId, enrichLegacyTask, fetchParentTasks]);
 
   const handleSyncMyJobs = async (silent = false) => {
     if (!wrikeUserId) {
@@ -323,6 +501,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
     setIsSyncingJobs(true);
     try {
+      await Promise.all([ensureFolderTree(), warmCountryFields()]);
+
       const wfRes = await fetch("/api/wrike/workflows");
       const wfJson = await wfRes.json();
       const statusDict = {};
@@ -337,8 +517,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       }
       statusDictRef.current = statusDict;
 
+      // superTaskIds is what tells us a task is a subtask at all — see
+      // fetchParentTasks for why the parent has to be looked up rather than
+      // inverted out of this batch.
       const fieldsFilter = encodeURIComponent(
-        "[customFields,parentIds,description]"
+        "[customFields,parentIds,superTaskIds,description]"
       );
       const responsiblesFilter = encodeURIComponent(`["${wrikeUserId}"]`);
 
@@ -388,7 +571,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         hasMore = !!nextPageToken;
       }
 
-      const enrichedTasks = rawTasks.map((task) => enrichLegacyTask(task, statusDict));
+      const parentById = await fetchParentTasks(rawTasks);
+      const enrichedTasks = rawTasks.map((task) =>
+        enrichLegacyTask(task, statusDict, parentById)
+      );
 
       setLocalWrikeTasks(enrichedTasks);
       return enrichedTasks;
@@ -414,33 +600,34 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       linkedTask.notesText || ""
     }`.toUpperCase();
 
-    let guessedTerritory = "";
-    let earliestIndex = Infinity;
-    const boundary = `(?:^|[^a-zA-Z])`;
-
-    // 1. Check direct matches with constants
-    const sortedTerritories = [...TERRITORIES].sort(
-      (a, b) => b.length - a.length
+    // Countries come from the same resolver the Tracker uses — the code at the
+    // end of the task name, else the parent's, else the market folder, else the
+    // Country custom field. This path used to run its own copy of the old
+    // free-text scan that never even looked at custom fields, so a Legacy-pulled
+    // row and a Tracker-pulled row could disagree about the same task. One rule
+    // now, in one place.
+    //
+    // The folder rule is resolved here for every caller. Tasks that arrive with
+    // it already worked out (the Tracker's cache, which enriches against the
+    // tree at sync time) keep theirs untouched.
+    // A subtask has no folders of its own, so it climbs from its parent's —
+    // resolved at fetch time into superTaskParentIds (see fetchParentTasks).
+    const folderCountries = linkedTask.folderCountries?.length
+      ? linkedTask.folderCountries
+      : getFolderCountries(
+          linkedTask.parentIds?.length
+            ? linkedTask
+            : { ...linkedTask, parentIds: linkedTask.superTaskParentIds || [] },
+          folderTreeRef.current.folderDictionary,
+          folderTreeRef.current.childToParent
+        );
+    const guessedTerritory = joinTerritories(
+      resolveCountries(
+        { ...linkedTask, folderCountries },
+        linkedTask.parentTaskTitle || "",
+        { countryFieldIds: countryFieldIds() }
+      )
     );
-    for (const terr of sortedTerritories) {
-      const escapedTerr = terr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(`${boundary}${escapedTerr}${boundary}`, "i");
-      const match = searchTarget.match(regex);
-      if (match && match.index < earliestIndex) {
-        earliestIndex = match.index;
-        guessedTerritory = terr;
-      }
-    }
-
-    // 2. Check aliases from constants file
-    for (const [abbr, targetTerritory] of Object.entries(REGION_ALIASES)) {
-      const regex = new RegExp(`${boundary}${abbr}${boundary}`, "i");
-      const match = searchTarget.match(regex);
-      if (match && match.index < earliestIndex) {
-        earliestIndex = match.index;
-        guessedTerritory = targetTerritory;
-      }
-    }
 
     let guessedJob = "";
     let rawPrefix = "";
@@ -453,23 +640,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           cf.value.match(/(XY\d{5,6})/i)
       );
       if (jobField) {
-        const cfMatch = jobField.value.match(/(XY\d{5,6})/i);
-        rawPrefix = cfMatch[1].toUpperCase();
-        const matchingOption = DEFAULT_JOBS.find((job) =>
-          job.toUpperCase().includes(rawPrefix)
-        );
-        guessedJob = matchingOption ? matchingOption : rawPrefix;
+        // Custom field value may carry a suffix beyond the base code — see
+        // resolveJobNumber for which suffixes survive onto the row and why.
+        const cfMatch = jobField.value.match(/(XY\d{5,6}(?:_[A-Za-z0-9]+)*)/i);
+        const fullCode = cfMatch[1].toUpperCase();
+        rawPrefix = fullCode.match(/XY\d{5,6}/i)[0];
+        guessedJob = resolveJobNumber(fullCode, DEFAULT_JOBS);
       }
     }
 
     if (!rawPrefix) {
-      const xyMatch = searchTarget.match(/(XY\d{5,6})/i);
+      const xyMatch = searchTarget.match(/(XY\d{5,6}(?:_[A-Za-z0-9]+)*)/i);
       if (xyMatch) {
-        rawPrefix = xyMatch[1].toUpperCase();
-        const matchingOption = DEFAULT_JOBS.find((job) =>
-          job.toUpperCase().includes(rawPrefix)
-        );
-        guessedJob = matchingOption ? matchingOption : rawPrefix;
+        const fullCode = xyMatch[1].toUpperCase();
+        rawPrefix = fullCode.match(/XY\d{5,6}/i)[0];
+        guessedJob = resolveJobNumber(fullCode, DEFAULT_JOBS);
       } else {
         const rawSplit = linkedTask.title?.split(/[_|-]/)[0]?.trim();
         for (const job of DEFAULT_JOBS) {
@@ -518,16 +703,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     };
   };
 
-  const getTimesheetValue = (hours) => {
-    if (!hours || hours === 0) return "none";
-    const secs = Math.round(hours * 3600);
-    if (secs <= 0) return "none";
-    const mins = Math.round(secs / 60);
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${h}:${String(m).padStart(2, "0")}`;
-  };
-
   const getLogHoursForTaskAndDay = (taskId, targetDay) => {
     const dayNames = [
       "Sunday",
@@ -542,14 +717,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
     wrikeWeeklyLogs.forEach((log) => {
       if (log.taskId === taskId) {
-        const logDay = dayNames[new Date(log.trackedDate).getDay()];
+        // Parse as a LOCAL date. A bare "2026-08-04" is parsed as UTC midnight,
+        // so west of Greenwich getDay() lands on the previous weekday and the
+        // hours show up in the wrong column.
+        const dayKey = String(log.trackedDate || "").split("T")[0];
+        const logDay = dayNames[new Date(`${dayKey}T00:00:00`).getDay()];
         if (logDay === targetDay) {
           totalHours += log.hours;
         }
       }
     });
 
-    return totalHours > 0 ? totalHours.toFixed(1) : null;
+    // Exact hours, not toFixed(1). The caller turns this into minutes, and
+    // rounding to one decimal first meant every quarter-hour was reported
+    // wrong: 0.25h became "0.3" and displayed as 18m, 2.75h as 2h 48m.
+    return totalHours > 0 ? totalHours : null;
   };
 
   const getTaskSortValues = (t) => {
@@ -585,70 +767,106 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const tomorrowStr = toLocalDateStr(tomorrow);
 
       const fieldsFilter = encodeURIComponent(
-        "[customFields,parentIds,description]"
+        "[customFields,parentIds,superTaskIds,description]"
       );
 
-      // --- STEP 1: Fetch today's timelogs (source of truth for worked-on tasks) ---
+      // --- STEP 1: Fetch this reporting week's timelogs ---
+      // The modal draws a Mon–Sun grid, but this used to keep only today's and
+      // yesterday's logs — so any hour tracked earlier in the week rendered as
+      // "—" in its column, on a panel headed "CURRENT REPORTING WEEK". Keep the
+      // whole week the grid actually shows.
+      const weekStartStr = getCurrentWeekStart();          // Monday, local
+      const weekEnd = new Date(`${weekStartStr}T00:00:00`);
+      weekEnd.setDate(weekEnd.getDate() + 6);              // Sunday
+      const weekEndStr = toLocalDateStr(weekEnd);
+
       const timelogRes = await fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`);
       const timelogJson = await timelogRes.json();
       const logs = (timelogJson.data || []).filter((l) => {
         const d = l.trackedDate?.split("T")[0];
-        return d === todayStr || d === yesterdayStr;
+        return d && d >= weekStartStr && d <= weekEndStr;  // ISO dates sort lexically
       });
       setWrikeWeeklyLogs(logs);
 
-      const todayLoggedTaskIds = [
-        ...new Set(
-          logs
-            .filter((l) => l.trackedDate?.split("T")[0] === todayStr)
-            .map((l) => l.taskId)
-        ),
-      ];
+      // One cached lookup, used twice below:
+      //  · folderDictionary — localisation campaigns carry the market in the
+      //    folder tree, not the task name ("PP3 - CHI - DOOH - Batch 1 - POST"
+      //    lives in a folder called "Chile" and ends in "POST"), and these
+      //    tasks already come back with parentIds so the climb is free.
+      //  · statusDictionary — resolves customStatusId to the workflow label
+      //    ("Delivered"), which is what the status badge is meant to show.
+      let folderDictionary = {}, statusDictionary = {}, childToParent = {};
+      try {
+        ({ folderDictionary, statusDictionary } = await fetchFolderDictionary());
+        childToParent = buildChildToParent(folderDictionary);
+        // Share it with guessFieldsFromTask rather than let it read the same
+        // cached tree a second time.
+        ensureFolderTree(folderDictionary);
+      } catch {
+        /* no dictionary → countries fall back to the task name / custom field */
+      }
 
-      // --- STEP 2: Fetch today's timelog tasks directly, one by one ---
-      // We fetch each task individually so a single failure never blocks the rest.
+      // Every task with time against it ANYWHERE in the week, not just today.
+      // This used to be today-only, which meant a task logged on Monday had its
+      // hours in `logs` but no row in the grid to show them against — so the
+      // week's earlier columns were permanently empty however much had been
+      // tracked.
+      const weekLoggedTaskIds = [...new Set(logs.map((l) => l.taskId).filter(Boolean))];
+
+      // --- STEP 2: Fetch the week's logged tasks ---
+      // Each task is fetched independently so one failure never blocks the
+      // rest, and they go out together rather than one-at-a-time — serially
+      // this was one round trip per task, which a full week makes slow enough
+      // to notice.
       // Strategy per task:
       //   A) Try with fields= (gives custom fields, description, parentIds)
       //   B) If that 400s (e.g. unassigned tasks on some Wrike plans), retry bare
       //      — we still get title/status/dates, which is enough to show the row.
-      let timelogTasks = [];
-      for (const taskId of todayLoggedTaskIds) {
-        try {
-          // Attempt A: full fields
-          let res = await fetch(`/api/wrike/tasks/${taskId}?fields=${fieldsFilter}`);
-
-          // Attempt B: bare fetch if fields caused a 400
-          if (!res.ok) {
-            res = await fetch(`/api/wrike/tasks/${taskId}`);
-          }
-
-          if (res.ok) {
-            const json = await res.json();
-            if (json.data)
-              timelogTasks = [
-                ...timelogTasks,
-                ...json.data.map(enrichWrikeTask),
-              ];
-          } else {
-            console.warn(
-              `Could not fetch timelog task ${taskId}: ${res.status}`
-            );
-          }
-        } catch (err) {
-          console.warn(`Failed to fetch timelog task ${taskId}:`, err);
-        }
-      }
+      const timelogRaw = (
+        await Promise.all(
+          weekLoggedTaskIds.map(async (taskId) => {
+            try {
+              let res = await fetch(`/api/wrike/tasks/${taskId}?fields=${fieldsFilter}`);
+              if (!res.ok) res = await fetch(`/api/wrike/tasks/${taskId}`);
+              if (!res.ok) {
+                console.warn(`Could not fetch timelog task ${taskId}: ${res.status}`);
+                return [];
+              }
+              const json = await res.json();
+              return json.data || [];
+            } catch (err) {
+              console.warn(`Failed to fetch timelog task ${taskId}:`, err);
+              return [];
+            }
+          })
+        )
+      ).flat();
+      const timelogParentById = await fetchParentTasks(timelogRaw);
+      const timelogTasks = timelogRaw.map((t) =>
+        enrichWrikeTask(t, statusDictionary, timelogParentById)
+      );
 
       // --- STEP 3: Fetch assigned tasks due today/tomorrow ---
-      const myFirstName = wrikeFullName.split(" ")[0];
       let assignedTasks = await handleSyncMyJobs(true);
       if (!assignedTasks) assignedTasks = activeWrikeData || [];
 
+      // Matching used to be `assignees.includes(firstName)` for arrays and an
+      // exact `=== firstName` for strings — but enrichTasks joins assignees
+      // into a comma-separated list of FULL names, so the string branch never
+      // matched anyone and the whole assigned-tasks step was silently empty for
+      // most people. Compare emoji-stripped full names (normalizeName), which
+      // is how the rest of the app identifies people.
+      const meNormalized = normalizeName(wrikeFullName);
+      const isAssignedToMe = (t) => {
+        const raw = Array.isArray(t.assignees) ? t.assignees : String(t.assignees || "").split(",");
+        return raw.some((n) => {
+          const name = normalizeName(n);
+          return name === meNormalized || name === normalizeName(wrikeFullName.split(" ")[0]);
+        });
+      };
+
       const assignedFiltered = assignedTasks.filter((t) => {
-        const isAssigned = Array.isArray(t.assignees)
-          ? t.assignees.includes(myFirstName)
-          : t.assignees === myFirstName;
-        if (!isAssigned) return false;
+        if (!isAssignedToMe(t)) return false;
 
         const customStatus = (
           t.customStatusName ||
@@ -683,8 +901,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const newExpanded = {};
 
       myTasks.forEach((task) => {
+        task.folderCountries = getFolderCountries(task, folderDictionary, childToParent);
         const fields = guessFieldsFromTask(task);
-        const groupName = fields.jobNumber || "Others (No Job Number)";
 
         let client = "";
         // Job number "Film Name : CODE, Description" is the ground truth — prefer it over
@@ -736,8 +954,31 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         const known2 = jobLookup?.getJob?.(fields.jobNumber);
         if (known2?.film_title) filmTitle = known2.film_title;
         if (known2?.client) client = known2.client;
+        // Upgrade a bare/suffixed code to Job Book's canonical
+        // "Film : CODE, Description" string so it reads consistently with jobs
+        // that carried the full string from Wrike.
+        if (known2?.job_number && (known2.job_number.includes(" : ") || !(fields.jobNumber || "").includes(" : "))) {
+          // Job Book is authoritative — adopt its registered number whenever the
+          // code is on file (canonical wins; a bare row won't downgrade a
+          // canonical guess). The scanner-backfilled book makes this the primary
+          // match, not a fallback.
+          fields.jobNumber = known2.job_number;
+        } else if (
+          fields.jobNumber &&
+          !fields.jobNumber.includes(" : ") &&
+          filmTitle &&
+          filmTitle !== "XYi Unbilled"
+        ) {
+          // Brand-new job with no Job Book record yet — synthesize the canonical
+          // string ourselves instead of leaving a bare/suffixed code that
+          // external systems (e.g. the timesheet bookmarklet) won't recognize.
+          fields.jobNumber = `${filmTitle} : ${fields.jobNumber}, ${fields.notes || ""}`
+            .trim()
+            .replace(/,\s*$/, "");
+        }
         jobLookup?.ensureJob?.(fields.jobNumber, { filmTitle, client });
 
+        const groupName = fields.jobNumber || "Others (No Job Number)";
         if (!grouped[groupName]) {
           grouped[groupName] = [];
           newExpanded[groupName] = true;
@@ -885,7 +1126,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           </div>
           {wrikeHours &&
             (() => {
-              const totalMins = Math.round(parseFloat(wrikeHours) * 60);
+              const totalMins = Math.round(wrikeHours * 60);
               const h = Math.floor(totalMins / 60);
               const m = totalMins % 60;
               const label =
@@ -925,7 +1166,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   };
 
   // Shared helper: enrich a raw Wrike task object the same way handleSyncMyJobs does
-  const enrichWrikeTask = (task) => {
+  // `statusDictionary` maps customStatusId -> the workflow label. Without it
+  // this fell back to task.status, which is Wrike's fixed Active/Completed
+  // lifecycle — so a timelog-fetched row's badge read "Completed" while the
+  // identical task pulled through the assigned path read "Delivered".
+  const enrichWrikeTask = (task, statusDictionary = {}, parentById) => {
+    const parent = (task.superTaskIds || [])
+      .map((id) => parentById?.get(id))
+      .find(Boolean);
     const parsed = parseWrikeDescription(task.description);
     let projectName = task.title.split(/[_|-]/)[0].trim();
     if (parsed.extractedPathData) {
@@ -941,7 +1189,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       extractedPathData: parsed.extractedPathData,
       notesText: parsed.notesText,
       projectName,
-      customStatusName: task.status,
+      // Rules 2 and 3 for subtasks — see fetchParentTasks.
+      parentTaskTitle: parent?.title || task.parentTaskTitle || "",
+      superTaskParentIds: task.parentIds?.length ? [] : parent?.parentIds || [],
+      customStatusName:
+        (task.customStatusId && statusDictionary[task.customStatusId]) || task.status,
       // Mark as unassigned-recovery so we know this task was fetched because
       // the user was removed from it — keeps all metadata intact
       assignees: ["__recovered__"],
@@ -961,24 +1213,55 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     if (missingIds.length === 0) return currentTasks;
 
     const fieldsFilter = encodeURIComponent(
-      "[customFields,parentIds,description]"
+      "[customFields,parentIds,superTaskIds,description]"
     );
-    let recovered = [...currentTasks];
+    // Collected raw, then enriched in one pass at the end: the parent lookup
+    // that subtask countries need is worth doing once for the whole recovery,
+    // not per 100-id chunk.
+    let rawRecovered = [];
+
+    // Same A/B strategy STEP 2 of handleSyncMyJobs uses: `fields=` 400s for
+    // tasks the caller isn't a responsible on, and this path exists precisely
+    // to recover those. Without the retry a 400 left `json.data` undefined and
+    // the whole chunk was dropped in silence — `res.json()` on an error body
+    // doesn't throw, so the catch below never fired and nothing was logged.
+    // Every timelog in that chunk then found no task and produced a blank row
+    // (no job number, "Internal"/"XYi Unbilled", no territory).
+    const fetchChunk = async (ids) => {
+      let res = await fetch(`/api/wrike/tasks/${ids.join(",")}?fields=${fieldsFilter}`);
+      if (!res.ok) res = await fetch(`/api/wrike/tasks/${ids.join(",")}`);
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.data || null;
+    };
 
     for (let i = 0; i < missingIds.length; i += 100) {
       const chunk = missingIds.slice(i, i + 100);
       try {
-        const res = await fetch(`/api/wrike/tasks/${chunk.join(",")}?fields=${fieldsFilter}`);
-        const json = await res.json();
-        if (json.data) {
-          recovered = [...recovered, ...json.data.map(enrichWrikeTask)];
+        const data = await fetchChunk(chunk);
+        if (data) {
+          rawRecovered = [...rawRecovered, ...data];
+          continue;
+        }
+        // A batch request is all-or-nothing: one unreadable id fails all 100
+        // with it. Fall back to one call per id so a single bad task costs
+        // only its own row.
+        for (const id of chunk) {
+          const one = await fetchChunk([id]).catch(() => null);
+          if (one) rawRecovered = [...rawRecovered, ...one];
+          else console.warn("Could not recover timelog task:", id);
         }
       } catch (err) {
         console.warn("Failed to recover missing tasks chunk:", chunk, err);
         // Don't abort the whole pull — continue with whatever we have
       }
     }
-    return recovered;
+
+    const parentById = await fetchParentTasks(rawRecovered);
+    return [
+      ...currentTasks,
+      ...rawRecovered.map((t) => enrichWrikeTask(t, {}, parentById)),
+    ];
   };
 
   const dismissNewWeekBanner = () => setNewWeekBanner(false);
@@ -991,21 +1274,40 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
     setIsPulling(true);
     try {
+      // Awaited here too, not just in the sync below: that call can bail early
+      // (no Wrike user, a failed fetch) and this path then builds its rows off
+      // activeWrikeData regardless — with no tree, those rows would be exactly
+      // the ones that skipped the folder rule before.
+      await Promise.all([ensureFolderTree(), warmCountryFields()]);
+
       let currentTasks = await handleSyncMyJobs(true);
       if (!currentTasks) currentTasks = activeWrikeData;
 
       // Use contacts-scoped endpoint — avoids the broken trackedDate query param
-      // Filter to target date client-side using local date string
+      // Filter to target date(s) client-side using local date strings
+      const localIso = (d) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+          d.getDate()
+        ).padStart(2, "0")}`;
       const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(
-        now.getMonth() + 1
-      ).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      const targetDateStr = (typeof dateStr === "string" && dateStr) ? dateStr : todayStr;
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      // A normal pull covers today *and* yesterday, so time logged after the
+      // last pull of the previous day still lands without needing a debug
+      // pull. The admin debug pull stays single-date — it's for targeting one
+      // specific day. Anything already pulled is skipped by
+      // existingTimelogIds below, and frozen days are dropped when grouping,
+      // so widening the window can't duplicate or overwrite yesterday's rows.
+      const targetDates =
+        typeof dateStr === "string" && dateStr
+          ? [dateStr]
+          : [localIso(yesterday), localIso(now)];
+      const targetDateSet = new Set(targetDates);
 
       const res = await fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`);
       const json = await res.json();
-      const logs = (json.data || []).filter(
-        (l) => l.trackedDate?.split("T")[0] === targetDateStr
+      const logs = (json.data || []).filter((l) =>
+        targetDateSet.has(l.trackedDate?.split("T")[0])
       );
 
       // Recover any tasks where the user was removed as a responsible —
@@ -1123,8 +1425,23 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           // Upgrade a bare "XY025716" to Job Book's canonical
           // "Film : XY025716, Description" string so pulled rows read
           // consistently with those that carried the full string from Wrike.
-          if (known1?.job_number?.includes(" : ") && !(guessed.jobNumber || "").includes(" : ")) {
+          if (known1?.job_number && (known1.job_number.includes(" : ") || !(guessed.jobNumber || "").includes(" : "))) {
+            // Job Book is authoritative — adopt its registered number whenever
+            // the code is on file (canonical wins; a bare row won't downgrade a
+            // canonical guess). Backfilled book = primary match, not a fallback.
             guessed.jobNumber = known1.job_number;
+          } else if (
+            guessed.jobNumber &&
+            !guessed.jobNumber.includes(" : ") &&
+            filmTitle &&
+            filmTitle !== "XYi Unbilled"
+          ) {
+            // Brand-new job with no Job Book record yet — synthesize the canonical
+            // string ourselves instead of leaving a bare/suffixed code that
+            // external systems (e.g. the timesheet bookmarklet) won't recognize.
+            guessed.jobNumber = `${filmTitle} : ${guessed.jobNumber}, ${guessed.notes || ""}`
+              .trim()
+              .replace(/,\s*$/, "");
           }
           jobLookup?.ensureJob?.(guessed.jobNumber, { filmTitle, client });
 
@@ -1143,7 +1460,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             clientAmends: false,
             notes: notes || task?.title || "",
             is3D: false,
-            timeSpent: getTimesheetValue(totalHours),
+            timeSpent: secondsToHM(totalHours * 3600),
             additionalTime: "none",
           });
         }
@@ -1164,7 +1481,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           "success"
         );
       } else {
-        showToast("No new or unfrozen times found for today.");
+        showToast(
+          targetDates.length > 1
+            ? "No new or unfrozen times found for today or yesterday."
+            : "No new or unfrozen times found for that date."
+        );
       }
     } catch (err) {
       console.error(err);
@@ -1221,18 +1542,23 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         const rawSecs = row.rawSeconds ?? 0;
         const addSecs = row.additionalSeconds ?? 0;
 
-        let exportTerritory = row.territory || "";
-        if (exportTerritory === "UK") exportTerritory = "United Kingdom";
-        else if (exportTerritory === "USA" || exportTerritory === "US")
-          exportTerritory = "United States";
-        else if (exportTerritory === "UAE")
-          exportTerritory = "United Arab Emirates";
+        // A row can cover several markets; the destination site ticks one
+        // checkbox per country on the same row, so send them all. Names go out
+        // exactly as TERRITORIES holds them — that list mirrors the site's own
+        // country names ("UK", not "United Kingdom"), and renaming them here
+        // used to leave those rows with no country ticked at all. The one
+        // exception is a value the site has no checkbox for at all, which
+        // toTimesheetTerritories swaps for the nearest one it does have.
+        const exportTerritories = toTimesheetTerritories(row.territory);
 
         return {
           id: row.id,
           taskId: row.taskId,
           jobNumber: row.jobNumber || "",
-          territory: exportTerritory,
+          // `territory` stays a string for older bookmarklets (they match it
+          // against a single checkbox); `territories` is what current ones read.
+          territory: exportTerritories.join(", "),
+          territories: exportTerritories,
           category: row.category || "",
           notes:
             (row.projectDescription || "") +
@@ -1248,7 +1574,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const getConsolidatedTasks = (taskList) => {
         const consolidated = {};
         taskList.forEach((t) => {
-          const key = `${t.dayOfWeek}|${t.jobNumber}|${t.territory}|${t.category}`;
+          // territoryKey so "Belgium, France" and "France, Belgium" merge.
+          const key = `${t.dayOfWeek}|${t.jobNumber}|${territoryKey(t.territory)}|${t.category}`;
           if (!consolidated[key]) {
             consolidated[key] = {
               ...t,
@@ -1266,16 +1593,18 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           }
         });
 
+        // Exact seconds go out. How coarse a row may be is decided per *job* on
+        // the timesheet site (a UK-folder job takes 0.25 steps, an INT one only
+        // 0.5) and nothing here can know which — so the bookmarklet snaps each
+        // row against its own dropdown instead of us guessing up front.
         return Object.values(consolidated).map((c) => ({
           ...c,
-          rawSeconds: roundToHalfHourSeconds(c.rawSeconds),
-          additionalSeconds: c.additionalSeconds > 0 ? roundToHalfHourSeconds(c.additionalSeconds) : 0,
           notes: c.notesArray.filter(Boolean).join(" | "),
         }));
       };
 
       const exportData = {
-        version: 5,
+        version: 7, // 7 = seconds are exact (the bookmarklet does the rounding)
         exportDate: new Date().toISOString(),
         tasks: getConsolidatedTasks(mappedTasks),
         rawTasks: mappedTasks,
@@ -1308,13 +1637,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // updateRow(id, field, value) and deleteRow(id) are provided by useLegacyRows
   const handleUpdateRow = (id, field, value) => {
     if (frozenDays[activeDay]) return;
-    // Auto-fill projectDescription from jobNumber if it contains a comma
-    if (field === "jobNumber" && value && value.includes(",")) {
-      updateRow(
-        id,
-        "projectDescription",
-        value.substring(value.indexOf(",") + 1).trim()
-      );
+    // Picking a job fills client / film / description from the Job Book, exactly
+    // like a Wrike pull does — so a manually-set job isn't left with blank
+    // client & film columns.
+    if (field === "jobNumber" && value) {
+      const known = jobLookup?.getJob?.(value);
+      if (known?.client) updateRow(id, "client", known.client);
+      if (known?.film_title) updateRow(id, "filmTitle", known.film_title);
+      const desc = value.includes(",") ? value.substring(value.indexOf(",") + 1).trim() : "";
+      if (desc) updateRow(id, "projectDescription", desc);
     }
     updateRow(id, field, value);
   };
@@ -1331,55 +1662,219 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     }));
   };
 
-  const currentDayRows = rows.filter((r) => r.dayOfWeek === activeDay);
+  // Clean a stored job number for display: if the Job Book has a canonical
+  // "Film : CODE, Desc" for this code, show that instead of whatever polluted
+  // string an old logged row carries (e.g. the bloated field value). Purely a
+  // display fix — the row persists its clean value only if the user edits it.
+  const canonicalJob = useCallback((jn) => {
+    const known = jn && jobLookup?.getJob?.(jn);
+    return known?.job_number?.includes(" : ") ? known.job_number : jn;
+  }, [jobLookup]);
+  const currentDayRows = useMemo(
+    () => rows.filter((r) => r.dayOfWeek === activeDay).map((r) => ({ ...r, jobNumber: canonicalJob(r.jobNumber) })),
+    [rows, activeDay, canonicalJob]
+  );
   const isDayFrozen = frozenDays[activeDay] || false;
 
   const [consolidatedView, setConsolidatedView] = useState(true);
+
+  // ── Job-number dropdown options: jobs we've actually logged, most-recent
+  // first, then the static catalogue as a fallback. RLS scopes the tasks query
+  // to the caller's own rows, so this is genuinely "jobs I've logged". Dates are
+  // stored dd/mm/yyyy (or ISO), so parse before comparing — a string sort would
+  // put 31/01 ahead of 01/12.
+  // Dropdown options come from the Job Book (the curated, clean list) — NOT the
+  // raw logged rows, which can still carry old polluted job strings. We only use
+  // the logged rows to *order* the book by recency (the codes I've logged most
+  // recently float to the top); the label always comes from the book, so a
+  // deleted/renamed job never reappears from stale timesheet history.
+  const [recentJobs, setRecentJobs] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const codeKey = (j) => (j.match(/XY\d{5,6}/i)?.[0] || j).trim().toUpperCase();
+      // All three tables are RLS-gated to `authenticated` (tasks additionally by
+      // wrike_user_id), so this must wait for the session + identity stamp or it
+      // returns empty on a first login.
+      await whenIdentityReady();
+      if (!alive) return;
+      // selectAll on all three: each is past (or heading past) Supabase's 1000-row
+      // response cap, which truncates without erroring. A partial `jobs` read is
+      // what made recently-allocated jobs unselectable in the row dropdown.
+      const [books, legacyTasks, films] = await Promise.all([
+        selectAll("jobs", "job_number"),
+        selectAll("tasks", "job_number, date", (q) =>
+          q.eq("source", "legacy").not("job_number", "is", null)),
+        selectAll("films", "title"),
+      ]);
+      if (!alive) return;
+      // Real films from the DB — used to sink pseudo-"films" (e.g. a "2026" year
+      // folder) below genuine titles in the dropdown grouping.
+      const normFilm = (s) => (s || "").toLowerCase().replace(/[_\s]+/g, " ").trim();
+      const realFilms = new Set(films.map((f) => normFilm(f.title)));
+      // A group name like "2026" (a year folder) or a purely numeric/blank token
+      // isn't a real film — sink those regardless of whether the films table read
+      // succeeded. Confirmed DB films rank highest.
+      const looksNonFilm = (film) => /^\d{2,4}$/.test(film.trim()) || !/[a-z]/i.test(film);
+      const filmRank = (label) => {
+        const film = (label.split(" : ")[0] || "").trim();
+        if (realFilms.has(normFilm(film))) return 2;
+        if (looksNonFilm(film)) return 0;
+        return 1;
+      };
+      // Book: code -> best canonical label (prefer "Film : CODE, Desc").
+      const bookLabel = {};
+      books.forEach((r) => {
+        const j = (r.job_number || "").trim();
+        if (!j) return;
+        const k = codeKey(j);
+        if (!bookLabel[k] || (j.includes(" : ") && !bookLabel[k].includes(" : "))) bookLabel[k] = j;
+      });
+      // Recency: code -> most recent date it was logged.
+      const parseDate = (d) => {
+        if (!d) return 0;
+        const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(d);
+        if (dmy) return new Date(+dmy[3], +dmy[2] - 1, +dmy[1]).getTime();
+        const t = Date.parse(d);
+        return isNaN(t) ? 0 : t;
+      };
+      const recency = {};
+      legacyTasks.forEach((r) => {
+        const k = codeKey(r.job_number || "");
+        if (!k) return;
+        const t = parseDate(r.date);
+        if (!(k in recency) || t > recency[k]) recency[k] = t;
+      });
+      // Book jobs: real films first, then most-recently-logged, then alphabetical.
+      const codes = Object.keys(bookLabel).sort((a, b) =>
+        (filmRank(bookLabel[b]) - filmRank(bookLabel[a])) ||
+        ((recency[b] || 0) - (recency[a] || 0)) ||
+        bookLabel[a].localeCompare(bookLabel[b])
+      );
+      setRecentJobs(codes.map((k) => bookLabel[k]));
+    })();
+    return () => { alive = false; };
+  }, [rows.length]);
+
+  // Book-first (recency-ordered), de-duped by XY code, with the static catalogue
+  // appended so nothing that used to be selectable disappears. Finally, sink any
+  // pseudo-film bucket (a year/numeric group name like "2026" the scan derived
+  // from a year folder) BELOW real films — applied to the merged list so a real
+  // film from the catalogue floats above a "2026" job from the book. Stable sort
+  // keeps recency order within each bucket.
+  const jobOptions = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    const codeKey = (j) => (j.match(/XY\d{5,6}/i)?.[0] || j).toUpperCase();
+    [...recentJobs, ...DEFAULT_JOBS].forEach((j) => {
+      const k = codeKey(j);
+      if (!seen.has(k)) { seen.add(k); out.push(j); }
+    });
+    const nonFilm = (label) => {
+      const f = (label.split(" : ")[0] || "").trim();
+      return /^\d{2,4}$/.test(f) || !/[a-z]/i.test(f);
+    };
+    return out.sort((a, b) => (nonFilm(a) ? 1 : 0) - (nonFilm(b) ? 1 : 0));
+  }, [recentJobs]);
+
   const [expandedSessions, setExpandedSessions] = useState({});
   const toggleSessions = (rowKey) =>
     setExpandedSessions((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }));
+  // Collapsed job groups in consolidated view (default: expanded, so you see
+  // every territory/category subrow). Keyed by jobNumber.
+  const [collapsedGroups, setCollapsedGroups] = useState({});
+  const toggleJobGroup = (jobNumber) =>
+    setCollapsedGroups((prev) => ({ ...prev, [jobNumber]: !prev[jobNumber] }));
+  // Multi-country add: which job group's "add entry" popover is open, and the
+  // countries currently ticked in it.
+  const [addEntryFor, setAddEntryFor] = useState(null);
+  const [addEntryPos, setAddEntryPos] = useState(null);
+  const [multiCountrySel, setMultiCountrySel] = useState([]);
+  const [countryQuery, setCountryQuery] = useState("");
+  // Position the popover as position:fixed anchored to the "+" button so it
+  // escapes the table's scroll container (which would otherwise clip it at the
+  // table's bottom edge). layoutRect corrects for the app's html{zoom:1.1}.
+  const openAddPopover = (jobNumber, e) => {
+    if (addEntryFor === jobNumber) { setAddEntryFor(null); return; }
+    const rect = layoutRect(e.currentTarget);
+    const w = 256, estH = 380;
+    let left = Math.max(8, Math.min(rect.right - w, window.innerWidth - w - 8));
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const top = spaceBelow < estH && rect.top > spaceBelow
+      ? Math.max(8, rect.top - estH)
+      : rect.bottom + 6;
+    setAddEntryPos({ left, top, width: w });
+    setAddEntryFor(jobNumber);
+    setMultiCountrySel([]);
+    setCountryQuery("");
+  };
 
+  // Consolidated = grouped by Job Number. Each job bundles every territory /
+  // category / session logged against it that day; those individual entries are
+  // the group's editable subrows. (Previously grouped by the whole
+  // job+territory+category triple, which fragmented one job across many rows.)
   const consolidatedRows = useMemo(() => {
     const groups = {};
     currentDayRows.forEach((row) => {
-      const key = `${row.jobNumber}|||${row.territory}|||${row.category}`;
+      const key = row.jobNumber || "(no job number)";
       if (!groups[key]) {
         groups[key] = {
-          ...row,
+          id: `grp:${key}`,           // stable key for the group header row
+          isGroup: true,
+          jobNumber: row.jobNumber,
+          client: row.client,
+          filmTitle: row.filmTitle,
+          projectDescription: row.projectDescription,
           _rawSeconds: 0,
           _additionalSeconds: 0,
-          _notes: new Set(),
-          _count: 0,
+          _territories: new Set(),
+          _categories: new Set(),
+          _subRows: [],
         };
       }
-      // Sum raw seconds — never the already-rounded timeSpent values
-      groups[key]._rawSeconds += row.rawSeconds ?? 0;
-      groups[key]._additionalSeconds += row.additionalSeconds ?? 0;
-      if (row.notes) groups[key]._notes.add(row.notes);
-      groups[key]._count += 1;
-      if (!groups[key]._subRows) groups[key]._subRows = [];
-      groups[key]._subRows.push(row);
+      const g = groups[key];
+      g._rawSeconds += row.rawSeconds ?? 0;
+      g._additionalSeconds += row.additionalSeconds ?? 0;
+      // A row can cover several markets, so count each one against the job.
+      splitTerritories(row.territory).forEach((t) => g._territories.add(t));
+      if (row.category) g._categories.add(row.category);
+      // First non-empty client/film wins, so the header isn't blank when only
+      // some sessions carry them.
+      if (!g.client && row.client) g.client = row.client;
+      if (!g.filmTitle && row.filmTitle) g.filmTitle = row.filmTitle;
+      g._subRows.push(row);
     });
-    const sToHM = (s) => {
-      if (!(s > 0)) return "none";
-      const mins = Math.round(s / 60);
-      const h = Math.floor(mins / 60);
-      const m = mins % 60;
-      return `${h}:${String(m).padStart(2, "0")}`;
-    };
     return Object.values(groups).map((g) => ({
       ...g,
       rawSeconds: g._rawSeconds,
       additionalSeconds: g._additionalSeconds,
-      timeSpent: sToHM(g._rawSeconds),
-      additionalTime: sToHM(g._additionalSeconds),
-      notes: [...g._notes].filter(Boolean).join(" | "),
-      _subRows: g._subRows || [],
+      timeSpent: secondsToHM(g._rawSeconds),
+      additionalTime: secondsToHM(g._additionalSeconds),
+      territories: [...g._territories],
+      categories: [...g._categories],
     }));
   }, [currentDayRows]);
 
+  // Flat list of what the tbody renders. Consolidated view emits a group-header
+  // row followed by its editable subrows (unless the group is collapsed); flat
+  // view emits each real row directly. Either way every item ultimately edits a
+  // real row by its own id — the group header is a read-only summary and never
+  // routes an edit.
+  const renderItems = useMemo(() => {
+    if (!consolidatedView) return currentDayRows.map((row) => ({ type: "row", row }));
+    return consolidatedRows.flatMap((g) => {
+      const collapsed = collapsedGroups[g.jobNumber];
+      return [
+        { type: "group", group: g },
+        ...(collapsed ? [] : g._subRows.map((sub) => ({ type: "sub", row: sub, group: g }))),
+      ];
+    });
+  }, [consolidatedView, currentDayRows, consolidatedRows, collapsedGroups]);
+
   const displayRows = consolidatedView ? consolidatedRows : currentDayRows;
-  const rowsAreEditable = !isDayFrozen && !consolidatedView;
+  // Only the explicit per-day Lock blocks editing now — consolidated view is
+  // fully editable (you edit real subrows, never the merged summary).
+  const rowsAreEditable = !isDayFrozen;
   const showConsolidationWarning =
     !consolidatedView &&
     currentDayRows.some(
@@ -1387,7 +1882,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         arr.filter(
           (x) =>
             x.jobNumber === r.jobNumber &&
-            x.territory === r.territory &&
+            territoryKey(x.territory) === territoryKey(r.territory) &&
             x.category === r.category
         ).length > 1
     );
@@ -1584,26 +2079,29 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           <div className="flex-1 overflow-auto bg-[#0b0f17] custom-scrollbar">
             {/* TIMESHEET TAB */}
             {modalTab === "timesheet" && (
-              <table className="w-full text-left text-[12px] border-collapse whitespace-nowrap min-w-max">
+              <table className="w-full text-left text-[12px] border-collapse whitespace-nowrap [&_td]:overflow-hidden" style={{ tableLayout: "fixed", minWidth: `${WRIKE_TS_COLS.reduce((s, c) => s + wtWidths[c.key], 0)}px` }}>
+                <colgroup>
+                  {WRIKE_TS_COLS.map((c) => <col key={c.key} style={{ width: wtWidths[c.key] }} />)}
+                </colgroup>
                 <thead className="bg-[#121824] text-slate-400 font-bold uppercase tracking-wider sticky top-0 z-20 shadow-md border-b border-[#222f3e]">
                   <tr>
-                    <th className="px-5 py-3.5 border-r border-[#222f3e] w-[320px]">
-                      Assignment Title
+                    <th className="relative px-5 py-3.5 border-r border-[#222f3e] overflow-hidden">
+                      Assignment Title{wtHandle("title")}
                     </th>
-                    <th className="px-5 py-3.5 border-r border-[#222f3e] w-[140px]">
-                      Status
+                    <th className="relative px-5 py-3.5 border-r border-[#222f3e] overflow-hidden">
+                      Status{wtHandle("status")}
                     </th>
-                    <th className="px-5 py-3.5 border-r border-[#222f3e] w-[240px]">
-                      Category Link
+                    <th className="relative px-5 py-3.5 border-r border-[#222f3e] overflow-hidden">
+                      Category Link{wtHandle("category")}
                     </th>
-                    <th className="px-5 py-3.5 border-r border-[#222f3e]">
-                      Job Key
+                    <th className="relative px-5 py-3.5 border-r border-[#222f3e] overflow-hidden">
+                      Job Key{wtHandle("jobkey")}
                     </th>
-                    <th className="px-5 py-3.5 border-r border-[#222f3e] w-[110px]">
-                      Due Date
+                    <th className="relative px-5 py-3.5 border-r border-[#222f3e] overflow-hidden">
+                      Due Date{wtHandle("due")}
                     </th>
-                    <th className="px-5 py-3.5 border-r border-[#222f3e]">
-                      Location
+                    <th className="relative px-5 py-3.5 border-r border-[#222f3e] overflow-hidden">
+                      Location{wtHandle("location")}
                     </th>
                     {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d, i) => {
                       const dayName = DAYS[i];
@@ -1612,7 +2110,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       return (
                         <th
                           key={d}
-                          className={`px-4 py-3.5 border-r border-[#222f3e] text-center w-16 last:border-r-0 ${
+                          className={`relative px-4 py-3.5 border-r border-[#222f3e] text-center overflow-hidden last:border-r-0 ${
                             isCurrent
                               ? "bg-[#12a0e1]/15 text-[#38bdf8] font-black"
                               : isEnd
@@ -1620,7 +2118,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                               : ""
                           }`}
                         >
-                          {d}
+                          {d}{wtHandle(`day_${d}`)}
                         </th>
                       );
                     })}
@@ -1878,22 +2376,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
           Welcome Back, {wrikeFullName ? wrikeFullName : "Loading..."}
         </div>
-        {wrikeUserId && (
-          <button
-            onClick={() => handleSyncMyJobs()}
-            disabled={isSyncingJobs}
-            className={pageHeaderActionClass}
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingJobs ? "animate-spin" : ""}`} />
-            {isSyncingJobs ? "Syncing..." : "Sync My Jobs"}
-          </button>
-        )}
       </PageHeader>
 
       {/* Everything below the full-bleed header gets the page's horizontal
           gutter + top/bottom spacing — the header itself must stay outside
-          any padded container to remain edge-to-edge. */}
-      <div className="px-4 sm:px-6 pt-3 pb-4">
+          any padded container to remain edge-to-edge. px/py match Job Book,
+          Today's List and Management exactly; this page used to sit tighter
+          (pt-3 pb-4) and read as misaligned when moving between them. */}
+      <div className="px-4 sm:px-6 py-6">
         {/* New week banner */}
         {newWeekBanner && (
           <div className="max-w-[1800px] mx-auto mb-3 flex items-center gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-2xl shadow-sm">
@@ -1912,9 +2402,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         )}
 
       {/* --- STANDARD UI --- */}
-      <div className="max-w-[1800px] mx-auto bg-white shadow-2xl rounded-2xl relative min-h-[calc(100vh-10rem)] flex flex-col border border-slate-200">
+      <div className="max-w-[1800px] mx-auto bg-white shadow-2xl rounded-2xl relative flex flex-col border border-slate-200">
         {/* --- MODERN TABS --- */}
-        <div className="flex px-4 pt-4 bg-slate-50 border-b border-slate-200 gap-2">
+        <div className="flex px-4 pt-4 bg-slate-50 border-b border-slate-200 gap-2 rounded-t-2xl">
           {DAYS.map((day) => {
             const isWeekend = day === "Saturday" || day === "Sunday";
             const isActive = activeDay === day;
@@ -1977,76 +2467,61 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           })}
         </div>
 
-        {/* Freeze toggle strip */}
-        <div className="bg-white border-b border-slate-100 px-4 py-1.5 flex items-center justify-end gap-4">
-          {/* Consolidated view toggle */}
+        {/* View controls — segmented pill buttons */}
+        <div className="bg-white border-b border-slate-100 px-4 py-2 flex items-center justify-between gap-3">
+          <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">View</span>
           <div className="flex items-center gap-2">
-            <Layers
-              className={`w-3.5 h-3.5 ${
-                consolidatedView ? "text-[#12a0e1]" : "text-slate-400"
-              }`}
-            />
-            <span
-              className={`text-[11px] font-bold transition-colors ${
-                consolidatedView ? "text-[#12a0e1]" : "text-slate-400"
-              }`}
-              title="Merges rows with same job/territory/category and sums raw time before rounding — more accurate than viewing individually"
-            >
-              Consolidated
-            </span>
             <button
               onClick={() => setConsolidatedView((v) => !v)}
-              title="Merge rows with same job, country & category"
-              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+              title="Merge rows with the same job number — territories & categories become subrows, raw time summed before rounding"
+              className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all active:scale-95 ${
                 consolidatedView
-                  ? "bg-[#12a0e1]"
-                  : "bg-slate-200 hover:bg-slate-300"
+                  ? "bg-[#12a0e1]/10 text-[#12a0e1] border-[#12a0e1]/30"
+                  : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
               }`}
             >
-              <span
-                className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
-                  consolidatedView ? "translate-x-4" : "translate-x-0.5"
-                }`}
-              />
+              <Layers className="w-3.5 h-3.5" />
+              Consolidated
+              <span className={`ml-0.5 text-[9px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-400"}`}>
+                {consolidatedView ? "ON" : "OFF"}
+              </span>
+            </button>
+            <button
+              onClick={toggleFreeze}
+              title={isDayFrozen ? "Unlock day to allow edits" : "Lock this day to prevent edits"}
+              className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all active:scale-95 ${
+                isDayFrozen
+                  ? "bg-amber-100 text-amber-700 border-amber-300"
+                  : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
+              }`}
+            >
+              <Lock className="w-3.5 h-3.5" />
+              {isDayFrozen ? `${activeDay} locked` : `Lock ${activeDay}`}
             </button>
           </div>
-          <div className="w-px h-4 bg-slate-200" />
-          <span
-            className={`text-[11px] font-bold transition-colors ${
-              isDayFrozen ? "text-amber-500" : "text-slate-400"
-            }`}
-          >
-            {isDayFrozen ? `${activeDay} is locked` : `Lock ${activeDay}`}
-          </span>
-          <button
-            onClick={toggleFreeze}
-            title={isDayFrozen ? "Unlock day" : "Lock day to prevent edits"}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-              isDayFrozen ? "bg-amber-400" : "bg-slate-200 hover:bg-slate-300"
-            }`}
-          >
-            <span
-              className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
-                isDayFrozen ? "translate-x-4" : "translate-x-0.5"
-              }`}
-            />
-          </button>
-          {isDayFrozen && <Lock className="w-3.5 h-3.5 text-amber-400" />}
         </div>
 
         {/* --- TABLE AREA --- */}
-        <div className="flex-1 bg-white relative overflow-x-auto w-full">
-          <table className="w-full text-left text-[12px] border-collapse min-w-max">
-            <thead>
-              <tr className="bg-slate-800 text-slate-200 shadow-sm">
-                {COLUMNS.map((col, idx) => (
+        <div ref={consolScrollRef} className="flex-1 bg-white relative overflow-x-auto w-full min-h-[600px]">
+          <table className="w-full text-left text-[12px] border-collapse [&_td]:overflow-hidden" style={{ tableLayout: "fixed", minWidth: `${consolTotal}px` }}>
+            <colgroup>
+              {CONSOL_COLS.map((c) => <col key={c.key} style={{ width: consolWidths[c.key] }} />)}
+            </colgroup>
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-slate-50 text-[#768994] shadow-sm border-b-2 border-slate-200">
+                {/* Headers wrap rather than truncate — a squeezed column showed
+                    "ADDITIONA" with no way to tell what it was. align-bottom
+                    keeps the labels on one baseline whether they run to one
+                    line or two. */}
+                {CONSOL_COLS.map((c, idx) => (
                   <th
-                    key={col}
-                    className={`p-3 border-r border-slate-700 font-bold whitespace-nowrap tracking-wide ${
-                      idx === COLUMNS.length - 1 ? "border-r-0" : ""
+                    key={c.key}
+                    className={`relative px-3 py-2 text-[10px] font-black uppercase tracking-widest leading-[1.2] align-bottom ${
+                      idx === CONSOL_COLS.length - 1 ? "" : "border-r border-slate-200/70"
                     }`}
                   >
-                    {col}
+                    {c.label}
+                    {consolHandle(c.key)}
                   </th>
                 ))}
               </tr>
@@ -2067,22 +2542,187 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   </td>
                 </tr>
               )}
-              {displayRows.map((row) => (
+              {renderItems.map((item) => {
+                // ── Group header row (consolidated view) ─────────────────────
+                if (item.type === "group") {
+                  const g = item.group;
+                  const collapsed = collapsedGroups[g.jobNumber];
+                  return (
+                    <tr key={g.id} className="bg-slate-100/70 border-y border-slate-200">
+                      {/* overflow-visible (inline, to beat the table's [&_td]:overflow-hidden)
+                          so the multi-country add popover isn't clipped by the cell. */}
+                      <td className="p-2 border-r border-slate-200/60 align-middle" style={{ overflow: "visible" }}>
+                        <div className="flex items-center gap-1.5 pl-1">
+                          <button
+                            onClick={() => toggleJobGroup(g.jobNumber)}
+                            className="w-5 h-5 grid place-items-center rounded-md text-slate-400 hover:text-[#12a0e1] hover:bg-white transition-colors shrink-0"
+                            title={collapsed ? "Expand" : "Collapse"}
+                          >
+                            <span className="text-[10px]">{collapsed ? "▶" : "▼"}</span>
+                          </button>
+                          {g.jobNumber ? (
+                            <span className="font-black text-[12px] text-[#122027] truncate">
+                              {g.jobNumber}
+                            </span>
+                          ) : (
+                            <div className="flex-1 min-w-0">
+                              <TableSearchableSelect
+                                options={jobOptions}
+                                value=""
+                                onChange={(val) => {
+                                  if (val) g._subRows.forEach((sub) => handleUpdateRow(sub.id, "jobNumber", val));
+                                }}
+                                placeholder="Set job for these entries…"
+                                isGrouped={true}
+                                dropdownId={`job-grp-${g.id}`}
+                                activeDropdown={activeDropdown}
+                                setActiveDropdown={setActiveDropdown}
+                                isJob={true}
+                                disabled={!rowsAreEditable}
+                              />
+                            </div>
+                          )}
+                          <span className="text-[9px] font-black text-[#768994] bg-white border border-slate-200 rounded-full px-1.5 py-0.5 shrink-0">
+                            {g._subRows.length}
+                          </span>
+                          {rowsAreEditable && (
+                            <div className="ml-auto shrink-0 relative">
+                              <button
+                                onClick={(e) => openAddPopover(g.jobNumber, e)}
+                                title="Add entries to this job"
+                                className={`rounded-md w-5 h-5 grid place-items-center transition-colors ${
+                                  addEntryFor === g.jobNumber
+                                    ? "bg-[#12a0e1] text-white"
+                                    : "text-[#12a0e1] hover:bg-[#12a0e1]/10"
+                                }`}
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                              {addEntryFor === g.jobNumber && (
+                                <>
+                                  <div
+                                    className="fixed inset-0 z-[99998]"
+                                    onClick={() => setAddEntryFor(null)}
+                                  />
+                                  <div
+                                    style={{ position: "fixed", left: addEntryPos?.left, top: addEntryPos?.top, width: addEntryPos?.width, zIndex: 99999 }}
+                                    className="bg-white border border-slate-200 rounded-xl shadow-2xl p-2.5 text-left animate-in fade-in slide-in-from-top-1 duration-150"
+                                  >
+                                    <button
+                                      onClick={() => {
+                                        addEntryToGroup(g);
+                                        setAddEntryFor(null);
+                                      }}
+                                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] font-bold text-slate-700 hover:bg-[#12a0e1]/10 hover:text-[#12a0e1] transition-colors"
+                                    >
+                                      <Plus className="w-3.5 h-3.5" /> One blank entry
+                                    </button>
+                                    <div className="my-1.5 border-t border-slate-100" />
+                                    <p className="px-1.5 py-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                                      One entry, several countries
+                                    </p>
+                                    <input
+                                      value={countryQuery}
+                                      onChange={(e) => setCountryQuery(e.target.value)}
+                                      placeholder="Filter countries…"
+                                      className="w-full mb-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-slate-200 outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/10"
+                                    />
+                                    <div className="max-h-44 overflow-y-auto custom-scrollbar pr-0.5">
+                                      {TERRITORIES.filter(
+                                        (t) =>
+                                          t.toLowerCase().includes(countryQuery.trim().toLowerCase()) ||
+                                          territoryCode(t).toLowerCase().includes(countryQuery.trim().toLowerCase())
+                                      ).map((t) => {
+                                        const on = multiCountrySel.includes(t);
+                                        return (
+                                          <button
+                                            key={t}
+                                            onClick={() =>
+                                              setMultiCountrySel((prev) =>
+                                                on ? prev.filter((x) => x !== t) : [...prev, t]
+                                              )
+                                            }
+                                            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
+                                              on
+                                                ? "bg-[#12a0e1]/10 text-[#12a0e1]"
+                                                : "text-slate-600 hover:bg-slate-50"
+                                            }`}
+                                          >
+                                            <span className={`w-3.5 h-3.5 rounded border grid place-items-center shrink-0 ${on ? "bg-[#12a0e1] border-[#12a0e1] text-white" : "border-slate-300"}`}>
+                                              {on && <CheckCircle className="w-2.5 h-2.5" />}
+                                            </span>
+                                            <span className="shrink-0">{TERRITORY_FLAGS[t]}</span>
+                                            <span className="truncate">{t}</span>
+                                            {territoryCode(t) && (
+                                              <span className={`ml-auto shrink-0 font-mono text-[9.5px] tracking-wide ${on ? "opacity-70" : "text-slate-400"}`}>
+                                                {territoryCode(t)}
+                                              </span>
+                                            )}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                    <button
+                                      disabled={!multiCountrySel.length}
+                                      onClick={() => addMultiCountryEntry(g, multiCountrySel)}
+                                      className={`w-full mt-2 px-3 py-2 rounded-lg text-[11px] font-black transition-colors ${
+                                        multiCountrySel.length
+                                          ? "bg-[#12a0e1] text-white hover:bg-[#0e8bc4]"
+                                          : "bg-slate-100 text-slate-300 cursor-not-allowed"
+                                      }`}
+                                    >
+                                      Add entry{multiCountrySel.length ? ` · ${multiCountrySel.length} ${multiCountrySel.length === 1 ? "country" : "countries"}` : ""}
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="p-2 border-r border-slate-200/60 align-middle text-[12px] font-semibold text-slate-600 truncate px-3">{g.client}</td>
+                      <td className="p-2 border-r border-slate-200/60 align-middle text-[12px] font-black text-slate-800 truncate px-3">{g.filmTitle}</td>
+                      <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-400 truncate px-3">{g.projectDescription}</td>
+                      <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-500 px-3">
+                        {g.territories.length ? (
+                          <span className="flex flex-wrap items-center gap-x-1 gap-y-0.5" title={g.territories.join(", ")}>
+                            <span className="text-[13px] leading-none">{territoryFlags(g.territories, 12)}</span>
+                            <span>{g.territories.length} {g.territories.length === 1 ? "country" : "countries"}</span>
+                          </span>
+                        ) : "—"}
+                      </td>
+                      <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-500 px-3">
+                        {g.categories.length ? `${g.categories.length} ${g.categories.length === 1 ? "category" : "categories"}` : "—"}
+                      </td>
+                      <td className="p-2 border-r border-slate-200/60" />
+                      <td className="p-2 border-r border-slate-200/60" />
+                      <td className="p-2 border-r border-slate-200/60" />
+                      <td className="p-2 border-r border-slate-200/60 align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.timeSpent}</td>
+                      <td className="p-2 align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.additionalTime}</td>
+                    </tr>
+                  );
+                }
+
+                // ── Editable data row (a flat row, or a group's subrow) ──────
+                const row = item.row;
+                const isSub = item.type === "sub";
+                return (
                 <tr
                   key={row.id}
                   className={`timesheet-row transition-colors group relative ${
                     !rowsAreEditable ? "frozen-row" : ""
-                  }`}
+                  } ${isSub ? "bg-white" : ""}`}
                 >
-                  <td className="p-2 border-r border-slate-100 align-middle min-w-[240px]">
+                  <td className={`p-2 border-r border-slate-100 align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
                     <div className="flex items-start gap-2 pl-1">
                       <button
                         onClick={() => handleDeleteRow(row.id)}
                         disabled={!rowsAreEditable}
+                        title={rowsAreEditable ? "Delete row" : undefined}
                         className={`mt-1.5 transition-opacity ${
                           !rowsAreEditable
-                            ? "opacity-20 cursor-not-allowed"
-                            : "opacity-50 hover:opacity-100"
+                            ? "opacity-0 cursor-not-allowed"
+                            : "opacity-0 group-hover:opacity-70 hover:!opacity-100"
                         }`}
                       >
                         <XCircle
@@ -2094,85 +2734,47 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         />
                       </button>
                       <div className="flex flex-col w-full">
-                        <TableSearchableSelect
-                          options={DEFAULT_JOBS}
-                          value={row.jobNumber}
-                          onChange={(val) =>
-                            handleUpdateRow(row.id, "jobNumber", val)
-                          }
-                          placeholder="Select Job..."
-                          isGrouped={true}
-                          dropdownId={`job-${row.id}`}
-                          activeDropdown={activeDropdown}
-                          setActiveDropdown={setActiveDropdown}
-                          isJob={true}
-                          disabled={!rowsAreEditable}
-                        />
+                        {isSub ? (
+                          // The job is set once at the group top, never per subrow —
+                          // the subrow just carries its own country/category identity.
+                          <div className="flex items-center gap-1.5 pl-3 border-l-2 border-[#12a0e1]/25 py-1 min-w-0" title={row.territory}>
+                            <span className="text-slate-300 text-[11px] shrink-0">↳</span>
+                            {/* Capped: this sits on one line next to the category,
+                                so a 20-country row can't be allowed to run away. */}
+                            <span className="text-[13px] leading-none shrink-0">{territoryFlags(row.territory, 6) || "🌐"}</span>
+                            <span className="text-[11px] font-bold text-slate-600 truncate">
+                              {splitTerritories(row.territory).length > 6
+                                ? `${splitTerritories(row.territory).length} countries`
+                                : row.territory || "No country"}
+                              {row.category ? <span className="font-medium text-slate-400"> · {row.category.replace(/^(Digital|Print|XYi)\s*-\s*/, "")}</span> : null}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className={`flex items-center gap-1.5 w-full min-w-0 ${isSub ? "pl-2 border-l-2 border-[#12a0e1]/25" : ""}`}>
+                            {isSub && <span className="text-slate-300 text-[11px] shrink-0" title="Set a job for this entry">↳</span>}
+                            <div className="flex-1 min-w-0">
+                              <TableSearchableSelect
+                                options={jobOptions}
+                                value={row.jobNumber}
+                                onChange={(val) =>
+                                  handleUpdateRow(row.id, "jobNumber", val)
+                                }
+                                placeholder={isSub ? "Set job…" : "Select Job..."}
+                                isGrouped={true}
+                                dropdownId={`job-${row.id}`}
+                                activeDropdown={activeDropdown}
+                                setActiveDropdown={setActiveDropdown}
+                                isJob={true}
+                                disabled={!rowsAreEditable}
+                              />
+                            </div>
+                          </div>
+                        )}
                         {row.wrikeTimelogId && (
                           <span className="text-[10px] font-bold text-emerald-600 ml-2 mt-0.5 flex items-center gap-1 opacity-80">
                             <CheckCircle className="w-3 h-3" /> Wrike Synced
                           </span>
                         )}
-                        {consolidatedView &&
-                          row._count > 1 &&
-                          (() => {
-                            const rowKey = `${row.jobNumber}|||${row.territory}|||${row.category}`;
-                            const isExpanded = expandedSessions[rowKey];
-                            const fmtSecs = (s) => {
-                              const h = Math.floor(s / 3600),
-                                m = Math.floor((s % 3600) / 60),
-                                sec = s % 60;
-                              return (
-                                [h && `${h}h`, m && `${m}m`, sec && `${sec}s`]
-                                  .filter(Boolean)
-                                  .join(" ") || "0s"
-                              );
-                            };
-                            return (
-                              <>
-                                <button
-                                  onClick={() => toggleSessions(rowKey)}
-                                  className="text-[10px] font-black text-[#12a0e1] bg-[#12a0e1]/10 border border-[#12a0e1]/20 hover:bg-[#12a0e1]/20 px-1.5 py-0.5 rounded-full ml-2 mt-1 flex items-center gap-1 shrink-0 transition-colors"
-                                >
-                                  <Layers className="w-3 h-3" />
-                                  {row._count} sessions
-                                  <span className="opacity-60">
-                                    {isExpanded ? "▲" : "▼"}
-                                  </span>
-                                </button>
-                                {isExpanded && (
-                                  <div className="ml-2 mt-1.5 space-y-1 border-l-2 border-[#12a0e1]/20 pl-2">
-                                    <p className="text-[9px] font-black text-[#768994] uppercase tracking-wider mb-1">
-                                      Raw sessions — time summed before rounding
-                                    </p>
-                                    {row._subRows.map((sub, i) => (
-                                      <div
-                                        key={sub.id}
-                                        className="flex items-center gap-2 text-[10px] text-slate-500"
-                                      >
-                                        <span className="font-bold text-slate-400">
-                                          #{i + 1}
-                                        </span>
-                                        <span className="font-bold text-[#122027]">
-                                          {fmtSecs(sub.rawSeconds ?? 0)}
-                                        </span>
-                                        {sub.notes && (
-                                          <span className="italic truncate max-w-[120px]">
-                                            {sub.notes}
-                                          </span>
-                                        )}
-                                        {sub.date && (
-                                          <span className="text-[9px] text-slate-400">
-                                            {sub.date}
-                                          </span>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </>
-                            );
-                          })()}
                       </div>
                     </div>
                   </td>
@@ -2215,19 +2817,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   </td>
 
                   <td className="p-2 border-r border-slate-100 align-middle w-[140px]">
-                    <TableSearchableSelect
-                      options={TERRITORIES}
+                    <MultiCountrySelect
                       value={row.territory}
                       onChange={(val) =>
                         handleUpdateRow(row.id, "territory", val)
                       }
                       placeholder="Country"
-                      getPrefix={(val) => TERRITORY_FLAGS[val]}
                       dropdownId={`country-${row.id}`}
                       activeDropdown={activeDropdown}
                       setActiveDropdown={setActiveDropdown}
-                      isCountry={true}
                       disabled={!rowsAreEditable}
+                      needsAttention={rowsAreEditable}
                     />
                   </td>
 
@@ -2332,7 +2932,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {/* Ghost Add Row */}
               {rowsAreEditable && (
                 <tr
@@ -2357,12 +2958,25 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             <div className="flex flex-col items-center justify-center py-20 text-slate-400 w-full left-0 right-0 absolute">
               <RefreshCw className="w-10 h-10 mb-4 opacity-20" />
               <p className="text-sm font-bold text-slate-500 font-sans">
-                No time logged for {activeDay}.
+                Nothing logged for {activeDay} yet.
               </p>
-              <p className="text-xs mt-1">Hit pull below to sync with Wrike.</p>
+              <p className="text-xs mt-1">Pull your times from Wrike below, or add a row to start.</p>
             </div>
           )}
         </div>
+
+        {/* Day totals — visible in the table, not only on the tab */}
+        {currentDayRows.length > 0 && (
+          <div className="px-4 py-2.5 border-t border-slate-200 bg-white flex items-center justify-end gap-6 text-[11px] font-bold text-[#768994]">
+            <span className="uppercase tracking-widest text-[10px] font-black text-slate-400">{activeDay} total</span>
+            <span className="tabular-nums">
+              {currentDayRows.length} {currentDayRows.length === 1 ? "entry" : "entries"}
+            </span>
+            <span className="tabular-nums text-[#122027] text-sm font-black">
+              {formatDayTotal(getDayTotal(activeDay))}h
+            </span>
+          </div>
+        )}
 
         {/* Bottom Action Bar */}
         <div className="p-4 border-t border-slate-200 bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
@@ -2377,6 +2991,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             <button
               onClick={() => handlePullTimes()}
               disabled={isPulling || isDayFrozen}
+              title="Pulls your Wrike time for today and yesterday"
               className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold border rounded-xl shadow-lg transition-all ${
                 isDayFrozen
                   ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-70"
@@ -2444,14 +3059,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 <Copy className="w-4 h-4" />
               )}
               {jsonCopied ? "JSON Copied!" : "Copy JSON"}
-            </button>
-
-            <button
-              onClick={handleExportExcel}
-              className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2.5 text-sm font-bold rounded-xl shadow-lg shadow-emerald-500/30 transition-all active:scale-95"
-            >
-              <FileSpreadsheet className="w-4 h-4" />
-              Export to Excel
             </button>
           </div>
         </div>

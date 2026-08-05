@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { fullName } from "../lib/formatName";
 import { X, Shield, Users, Clock, Key, RefreshCw, CheckCircle, AlertCircle, Zap, Eye } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { ALL_DEPARTMENTS } from "../lib/departments";
@@ -205,7 +206,7 @@ export default function AdminModal({ onClose }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-sm font-black text-[#122027]">
-                        {p.first_name && p.last_name ? `${p.first_name} ${p.last_name}` : "Unknown user"}
+                        {fullName(p.first_name, p.last_name) || "Unknown user"}
                       </p>
                       {isAdmin && (
                         <span className="text-[9px] font-black text-[#122027] bg-[#122027]/10 px-1.5 py-0.5 rounded-full uppercase tracking-wider">

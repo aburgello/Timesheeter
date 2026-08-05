@@ -1,14 +1,21 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabaseClient";
-import { getFilmName } from "../lib/wrikeEnrich";
-import MDEditor from "@uiw/react-md-editor";
-import "@uiw/react-md-editor/markdown-editor.css";
-import { useCreateBlockNote } from "@blocknote/react";
-import { BlockNoteView } from "@blocknote/mantine";
-import "@blocknote/core/fonts/inter.css";
-import "@blocknote/mantine/style.css";
+import { toggleDarkMode } from "../lib/theme";
+import { useColumnResize } from "../lib/useColumnResize";
+import { getFilmName, PRINT_HUB_RE } from "../lib/wrikeEnrich";
+import { fetchTasksByIds } from "../hooks/useWrikeCache";
+import RichNoteEditor from "./shared/RichNoteEditor";
+import PresenceStack from "./shared/PresenceStack";
+// Lazy — Excalidraw is a sizeable bundle + its own CSS; only a sketch page
+// being opened should pay for it, not every Notes Canvas visit.
+const ExcalidrawPageEditor = lazy(() => import("./shared/ExcalidrawPageEditor"));
 import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
+import HubRow from "./shared/HubRow";
+import { useDepartment } from "../hooks/useDepartment";
+import { boardLabelFor } from "../lib/departments";
+import { PAGE_GRADIENTS } from "../lib/pageGradients";
+import { reportError } from "../lib/monitoring";
 import { FILM_MAPPINGS } from "../constants.js";
 import {
   Layout,
@@ -34,6 +41,7 @@ import {
   Pin,
   Globe,
   Upload,
+  AlertTriangle,
   ChevronLeft,
   Loader2,
   Image as ImageIcon,
@@ -44,6 +52,12 @@ import {
   LayoutGrid,
   List,
   RefreshCw,
+  Users,
+  User,
+  Maximize2,
+  Minimize2,
+  Printer,
+  PenTool,
 } from "lucide-react";
 
 // --- DOOH country → region grouping ---
@@ -116,177 +130,844 @@ function CountryFlag({ flag, imgClass = "w-11 h-[30px]", textClass = "text-3xl" 
   );
 }
 
-// --- Shared collapsible card shell for the two Reference note sections ---
-function CollapsibleCard({ icon, title, subtitle, isOpen, onToggle, children }) {
+// --- Relative time formatter: "just now", "3m ago", "2h ago", "5d ago", "12/07" ---
+function relativeTime(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(typeof dateStr === "string" ? dateStr : null);
+  if (isNaN(d.getTime())) return "";
+  const s = Math.round((Date.now() - d.getTime()) / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  if (s < 604800) return `${Math.floor(s/86400)}d ago`;
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit" });
+}
+
+// --- Save status indicator: "Saving…" / "Saved ✓" / "Last edited Xm ago" ---
+function SaveStatus({ state, lastSavedAt }) {
+  const [now, setNow] = useState(Date.now());
+  // Re-render every 30s so "Xm ago" stays fresh while the card is open.
+  useEffect(() => {
+    if (state === "saving") return;
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, [state]);
+  if (state === "saving") {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-bold text-[#768994]">
+        <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+      </span>
+    );
+  }
+  if (state === "saved") {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-bold text-[#1baf7a]">
+        <Check className="w-3 h-3" /> Saved
+      </span>
+    );
+  }
+  // A write can fail — a schema the client is ahead of, a dropped connection,
+  // RLS. Reporting "Saved" regardless is worse than not reporting at all: the
+  // author walks away believing the note is filed.
+  if (state === "error") {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-bold text-rose-500" title="Your note is still in the editor — reload only after this clears.">
+        <AlertTriangle className="w-3 h-3" /> Not saved
+      </span>
+    );
+  }
+  const rel = lastSavedAt ? relativeTime(lastSavedAt) : "";
+  return rel ? (
+    <span className="text-[11px] font-semibold text-[#94a3b8]">Last edited {rel}</span>
+  ) : null;
+}
+
+// The page accent, matching the Campaign Canvas header gradient (see
+// src/lib/pageGradients.js) — used everywhere this file used to hardcode blue.
+const CANVAS_GRADIENT = "from-amber-600 to-orange-700";
+
+// Shared expandable menu-card shell for the three Reference sections (DOOH
+// Specs, End of Campaign, Notes Canvas). Same "collapsed card → expands in
+// place, way bigger, on click" idiom as Management's AdminHub, so these read
+// as one deliberate navigation pattern instead of three small stacked panels.
+function CollapsibleCard({ icon: Icon, title, subtitle, isOpen, onToggle, children }) {
   return (
-    <section className="rounded-3xl bg-white/60 border border-[#dce4ec] shadow-sm p-5 sm:p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div
-        role="button"
-        tabIndex={0}
+    <div className="rounded-3xl bg-white border border-[#dce4ec] shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <HubRow
+        section={{ label: title, desc: subtitle, icon: Icon, gradient: CANVAS_GRADIENT }}
         onClick={onToggle}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onToggle(); }}
-        className="flex items-center gap-3 cursor-pointer select-none"
-      >
-        <div className="w-9 h-9 rounded-xl bg-[#12a0e1]/10 text-[#12a0e1] flex items-center justify-center shadow-sm shrink-0">
-          {icon}
-        </div>
-        <div className="mr-auto">
-          <h2 className="text-lg font-black text-[#122027] tracking-tight leading-none">{title}</h2>
-          <p className="text-[11px] font-bold text-[#768994] uppercase tracking-widest mt-1">{subtitle}</p>
-        </div>
-        <ChevronRight className={`w-4 h-4 text-[#768994] shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-      </div>
-      {isOpen && <div className="mt-4" onClick={(e) => e.stopPropagation()}>{children}</div>}
-    </section>
-  );
-}
-
-// --- Reference > End of Campaign Notes: pick a campaign, write markdown wrap-up notes ---
-function EndOfCampaignNotesCard({ isOpen, onToggle, campaigns }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const [selectedCampaignId, setSelectedCampaignId] = useState(null);
-  const [content, setContent] = useState("");
-  const [loaded, setLoaded] = useState(false);
-  const skipNextSaveRef = useRef(false);
-
-  const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
-
-  useEffect(() => {
-    if (!selectedCampaignId) { setContent(""); setLoaded(false); return; }
-    setLoaded(false);
-    (async () => {
-      const { data } = await supabase
-        .from("campaign_eoc_notes")
-        .select("content")
-        .eq("campaign_id", selectedCampaignId)
-        .maybeSingle();
-      skipNextSaveRef.current = true;
-      setContent(data?.content || "");
-      setLoaded(true);
-    })();
-  }, [selectedCampaignId]);
-
-  useEffect(() => {
-    if (!selectedCampaignId || !loaded) return;
-    if (skipNextSaveRef.current) { skipNextSaveRef.current = false; return; }
-    const t = setTimeout(() => {
-      supabase.from("campaign_eoc_notes").upsert({
-        campaign_id: selectedCampaignId,
-        content,
-        updated_at: new Date().toISOString(),
-      });
-    }, 800);
-    return () => clearTimeout(t);
-  }, [content, selectedCampaignId, loaded]);
-
-  const filteredCampaigns = campaigns.filter(
-    (c) => !search.trim() || c.title.toLowerCase().includes(search.trim().toLowerCase())
-  );
-
-  return (
-    <CollapsibleCard
-      icon={<FileText className="w-5 h-5" />}
-      title="End of Campaign Notes"
-      subtitle="Wrap-up learnings · per campaign"
-      isOpen={isOpen}
-      onToggle={onToggle}
-    >
-      <div className="space-y-3">
-        <div className="relative">
-          <button
-            onClick={() => setPickerOpen((v) => !v)}
-            className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-[#dce4ec] bg-white text-sm font-bold text-[#122027] hover:border-[#12a0e1]/40"
+        open={isOpen}
+        first
+      />
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+            className="overflow-hidden bg-slate-50 border-t border-[#dce4ec]"
           >
-            <span className={selectedCampaign ? "" : "text-[#768994] font-semibold"}>
-              {selectedCampaign ? selectedCampaign.title : "Pick a campaign…"}
-            </span>
-            <ChevronRight className={`w-4 h-4 text-[#768994] shrink-0 transition-transform ${pickerOpen ? "rotate-90" : ""}`} />
-          </button>
-          {pickerOpen && (
-            <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-xl border border-[#dce4ec] bg-white shadow-lg">
-              <div className="p-2 sticky top-0 bg-white border-b border-[#dce4ec]">
-                <input
-                  autoFocus
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search campaigns…"
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-[#dce4ec] outline-none text-sm font-semibold"
-                />
-              </div>
-              {filteredCampaigns.length === 0 && (
-                <p className="p-3 text-xs font-bold text-[#768994]">No campaigns match.</p>
-              )}
-              {filteredCampaigns.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => { setSelectedCampaignId(c.id); setPickerOpen(false); setSearch(""); }}
-                  className={`w-full text-left px-3 py-2 text-sm font-bold hover:bg-[#f2f6f9] ${c.id === selectedCampaignId ? "text-[#12a0e1]" : "text-[#122027]"}`}
-                >
-                  {c.title}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {selectedCampaignId ? (
-          <div data-color-mode="light" className="rounded-xl overflow-hidden border border-[#dce4ec]">
-            <MDEditor value={content} onChange={(v) => setContent(v || "")} height={340} preview="live" />
-          </div>
-        ) : (
-          <p className="text-center text-sm font-bold text-[#768994] py-8">Pick a campaign above to write its wrap-up notes.</p>
+            <div className="p-6 sm:p-8 min-h-[460px]">{children}</div>
+          </motion.div>
         )}
-      </div>
-    </CollapsibleCard>
-  );
-}
-
-// --- Reference > Notes Canvas: folders/topics of freeform BlockNote pages ---
-function NotesCanvasPageEditor({ page, onSave }) {
-  const editor = useCreateBlockNote({
-    initialContent: page.content && page.content.length ? page.content : undefined,
-  });
-  const saveTimerRef = useRef(null);
-  const handleChange = () => {
-    clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => onSave(editor.document), 800);
-  };
-  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
-  return (
-    <div className="min-h-[420px] max-h-[600px] overflow-y-auto">
-      <BlockNoteView editor={editor} onChange={handleChange} theme="light" />
+      </AnimatePresence>
     </div>
   );
 }
 
-function NotesCanvasCard({ isOpen, onToggle }) {
+// End of Campaign notes are stored as a JSON-stringified TipTap document in
+// `content` (text column) — parsed/stringified at the call site since
+// RichNoteEditor itself is storage-format-agnostic.
+
+// --- Reference > End of Campaign Notes: pick a campaign, write wrap-up notes ---
+// Notes are per (campaign, department) — Print's wrap-up on a campaign is a
+// separate note from Motion's, sharing only the campaign picker.
+// A stored note can be a non-empty string holding an empty document: TipTap
+// serialises two blank paragraphs as 68 characters of JSON, and simply opening
+// a campaign was enough to save one. Judging on the string being non-empty
+// counted six such blanks as six wrap-ups. Test for actual content instead —
+// the same check RichNoteEditor makes before persisting.
+const hasNoteContent = (raw) =>
+  !!raw && (raw.includes('"text"') || raw.includes('"image"'));
+
+function EndOfCampaignNotesCard({ campaigns, department }) {
+  const [search, setSearch] = useState("");
+  const [selectedCampaignId, setSelectedCampaignId] = useState(null);
+  const [notes, setNotes] = useState([]);          // every author's note on this campaign
+  const [profiles, setProfiles] = useState([]);
+  const [myContent, setMyContent] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const [noteMeta, setNoteMeta] = useState({});
+  const skipNextSaveRef = useRef(false);
+  const savedTimerRef = useRef(null);
+
+  // Whether you're currently in your own box. Typing or clicking into it opens
+  // it up; a few seconds after you stop, it settles back to the size of the
+  // others. Longer than the 800ms save debounce on purpose — the box shouldn't
+  // shrink out from under someone who's merely thinking mid-sentence.
+  const [writing, setWriting] = useState(false);
+  const idleTimerRef = useRef(null);
+  const noteActivity = useCallback(() => {
+    setWriting(true);
+    clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => setWriting(false), 4000);
+  }, []);
+  useEffect(() => () => clearTimeout(idleTimerRef.current), []);
+  // A different campaign is a fresh start: collapsed until you write in it.
+  useEffect(() => { setWriting(false); clearTimeout(idleTimerRef.current); }, [selectedCampaignId]);
+
+  // Same identity the rest of Canvas uses for "who am I" (see NotesCanvasCard).
+  const myId = useMemo(() => localStorage.getItem("wrike_user_id") || null, []);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("wrike_user_id, first_name, last_name, canvas_color");
+      setProfiles(data || []);
+    })();
+  }, []);
+
+  const profileFor = useCallback(
+    (id) => profiles.find((p) => p.wrike_user_id === id),
+    [profiles]
+  );
+  const nameFor = useCallback(
+    (id) => {
+      const p = profileFor(id);
+      if (!p) return "Someone";
+      return [p.first_name, p.last_name].filter(Boolean).join(" ") || "Someone";
+    },
+    [profileFor]
+  );
+  const colorFor = useCallback(
+    (id) => profileFor(id)?.canvas_color || hashColor(id),
+    [profileFor]
+  );
+
+  // Which campaigns have been written up at all, and when last. Now that a
+  // campaign can hold several notes, the list shows the freshest of them —
+  // "when did anyone last add to this" is the useful signal, not per-author.
+  const refreshNoteMeta = useCallback(async () => {
+    // content comes back too, because "has this been written up" can't be
+    // answered without looking inside — see hasNoteContent. One department's
+    // wrap-up notes, so the extra payload is small.
+    const { data } = await supabase
+      .from("campaign_eoc_notes")
+      .select("campaign_id, updated_at, content")
+      .eq("department", department);
+    if (!data) return;
+    const latest = {};
+    for (const r of data) {
+      if (!hasNoteContent(r.content)) continue;
+      if (!latest[r.campaign_id] || new Date(r.updated_at) > new Date(latest[r.campaign_id])) {
+        latest[r.campaign_id] = r.updated_at;
+      }
+    }
+    setNoteMeta(latest);
+  }, [department]);
+
+  useEffect(() => { refreshNoteMeta(); }, [refreshNoteMeta]);
+
+  useEffect(() => {
+    if (!selectedCampaignId) { setNotes([]); setMyContent(""); setLoaded(false); setSaveState("idle"); setLastSavedAt(null); return; }
+    setLoaded(false);
+    (async () => {
+      const { data } = await supabase
+        .from("campaign_eoc_notes")
+        .select("author_id, content, updated_at")
+        .eq("campaign_id", selectedCampaignId)
+        .eq("department", department);
+      const rows = data || [];
+      setNotes(rows);
+      const mine = rows.find((r) => r.author_id === myId);
+      // The editor is remounted per campaign (keyed below), so the first
+      // change it reports is the load itself, not the author typing.
+      skipNextSaveRef.current = true;
+      setMyContent(mine?.content || "");
+      setLastSavedAt(mine?.updated_at || null);
+      setLoaded(true);
+    })();
+  }, [selectedCampaignId, department, myId]);
+
+  useEffect(() => {
+    if (!selectedCampaignId || !loaded || !myId) return;
+    if (skipNextSaveRef.current) { skipNextSaveRef.current = false; return; }
+    setSaveState("saving");
+    const t = setTimeout(async () => {
+      const { error } = await supabase.from("campaign_eoc_notes").upsert(
+        {
+          campaign_id: selectedCampaignId,
+          department,
+          author_id: myId,
+          content: myContent,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "campaign_id,department,author_id" }
+      );
+      if (error) {
+        // Stays on screen — no timer clearing it back to idle — because the
+        // note only exists in this editor until the write lands.
+        reportError(error, { scope: "eoc-note-save", campaignId: selectedCampaignId });
+        setSaveState("error");
+        return;
+      }
+      setSaveState("saved");
+      setLastSavedAt(new Date().toISOString());
+      refreshNoteMeta();
+      savedTimerRef.current = setTimeout(() => setSaveState("idle"), 2000);
+    }, 800);
+    return () => { clearTimeout(t); clearTimeout(savedTimerRef.current); };
+  }, [myContent, selectedCampaignId, department, loaded, myId, refreshNoteMeta]);
+
+  // Campaigns that already have a wrap-up come first, most recently written at
+  // the top — that's the thread of what the team has been adding to. Everything
+  // still blank follows on its own recency (lastMatrixUpdate, the same signal
+  // the Studios gallery sorts by), so the campaign most likely to need writing
+  // up next sits directly under the ones already written.
+  const sortedFilteredCampaigns = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return campaigns
+      .filter((c) => !q || c.title.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aAt = noteMeta[a.id], bAt = noteMeta[b.id];
+        if (aAt && bAt) return new Date(bAt) - new Date(aAt);
+        if (aAt) return -1;
+        if (bAt) return 1;
+        return (b.lastMatrixUpdate || 0) - (a.lastMatrixUpdate || 0);
+      });
+  }, [campaigns, search, noteMeta]);
+
+  const writtenUp = useMemo(
+    () => campaigns.filter((c) => noteMeta[c.id]).length,
+    [campaigns, noteMeta]
+  );
+
+  const selected = campaigns.find((c) => c.id === selectedCampaignId);
+  const parseDoc = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch { return null; } };
+
+  // Boxes in the bento, in reading order: the legacy shared note if this
+  // campaign has one, then everyone else's, then yours. Yours is last so it
+  // sits closest to where you stopped reading, and widest because it's the one
+  // you type into.
+  const teamNote = notes.find((n) => n.author_id === "" && hasNoteContent(n.content));
+  const otherNotes = notes
+    .filter((n) => n.author_id && n.author_id !== myId && hasNoteContent(n.content))
+    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+  return (
+    <section className="mt-10">
+      {/* A standing band rather than another collapsed card. It sits under the
+          team's notes because it's the same act — writing something down for
+          everyone — and a note nobody can see they're allowed to write in never
+          gets written in. */}
+      <div className="rounded-3xl border border-[#dce4ec] bg-white shadow-sm overflow-hidden">
+        <div className={`bg-gradient-to-br ${CANVAS_GRADIENT} px-6 py-5 flex items-center gap-4`}>
+          <div className="shrink-0 w-12 h-12 rounded-2xl bg-white/15 border border-white/20 backdrop-blur-sm flex items-center justify-center">
+            <FileText className="w-6 h-6 text-white" strokeWidth={1.75} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="font-display text-lg font-bold text-white tracking-tight">End of Campaign Notes</h2>
+            <p className="text-xs text-white/80 font-medium mt-0.5">
+              What we'd do differently next time. Everyone on the {department} team
+              writes their own — you'll see each other's side by side.
+            </p>
+          </div>
+          <div className="hidden sm:block shrink-0 text-right">
+            <p className="font-display text-2xl font-bold text-white tabular-nums leading-none">{writtenUp}</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-white/70 mt-1">
+              written up
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col lg:flex-row gap-5 p-5 sm:p-6 bg-slate-50 border-t border-[#dce4ec]">
+          {/* Film list — one list, not a "recently edited" strip repeating rows
+              that are in the list below it anyway. Each row carries its own
+              state, so written-up and blank are told apart at a glance. */}
+          <div className="lg:w-72 shrink-0 flex flex-col gap-2.5">
+            <div className="relative">
+              <Search className="w-4 h-4 text-[#768994] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search campaigns…"
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-[#dce4ec] bg-white outline-none text-sm font-semibold text-[#122027] focus:border-[#c2410d]/40"
+              />
+            </div>
+            <div className="rounded-2xl border border-[#dce4ec] bg-white overflow-hidden max-h-[560px] overflow-y-auto custom-scrollbar divide-y divide-slate-100">
+              {sortedFilteredCampaigns.length === 0 && (
+                <p className="p-4 text-xs font-bold text-[#768994]">No campaigns match.</p>
+              )}
+              {sortedFilteredCampaigns.map((c) => {
+                const at = noteMeta[c.id];
+                const isActive = c.id === selectedCampaignId;
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => setSelectedCampaignId(c.id)}
+                    className={`group w-full text-left px-3.5 py-3 flex items-center gap-3 transition-colors ${
+                      isActive ? "bg-[#c2410d]/10" : "hover:bg-[#f2f6f9]"
+                    }`}
+                  >
+                    {/* Filled = written up, hollow = still blank. */}
+                    <span
+                      className={`shrink-0 w-2 h-2 rounded-full border-2 ${
+                        at ? "bg-[#c2410d] border-[#c2410d]" : "border-[#c2d0da]"
+                      }`}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className={`block text-[13px] font-bold truncate ${isActive ? "text-[#c2410d]" : "text-[#122027]"}`}>
+                        {c.title}
+                      </span>
+                      <span className="block text-[10px] font-semibold text-[#94a3b8] mt-0.5">
+                        {at ? relativeTime(at) : "No notes yet"}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            {selectedCampaignId && loaded ? (
+              <>
+                <div className="flex items-center justify-between gap-3 mb-3 px-0.5">
+                  <p className="text-[13px] font-black text-[#122027] truncate">{selected?.title}</p>
+                  <SaveStatus state={saveState} lastSavedAt={lastSavedAt} />
+                </div>
+
+                {/* The bento. A box each, so adding your take never means
+                    editing over someone else's — the single shared note was a
+                    blank page with everyone's name on it, which is nobody's. */}
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-min">
+                  {teamNote && (
+                    <EocNoteBox
+                      className="xl:col-span-2"
+                      label="Team note"
+                      sublabel={`Written before individual notes · ${relativeTime(teamNote.updated_at)}`}
+                      accent="#768994"
+                      content={parseDoc(teamNote.content)}
+                    />
+                  )}
+
+                  {otherNotes.map((n) => (
+                    <EocNoteBox
+                      key={n.author_id}
+                      label={nameFor(n.author_id)}
+                      sublabel={relativeTime(n.updated_at)}
+                      accent={colorFor(n.author_id)}
+                      content={parseDoc(n.content)}
+                    />
+                  ))}
+
+                  <EocNoteBox
+                    className={writing ? "xl:col-span-2" : ""}
+                    label={myId ? "Your note" : "Notes"}
+                    sublabel={myId ? "Add your end of campaign notes here" : "Connect Wrike in your Profile to write"}
+                    accent={myId ? colorFor(myId) : "#c2410d"}
+                    mine
+                    expanded={writing}
+                    onActivity={noteActivity}
+                    content={parseDoc(myContent)}
+                    onChange={myId ? (json) => { noteActivity(); setMyContent(JSON.stringify(json)); } : undefined}
+                  />
+                </div>
+              </>
+            ) : selectedCampaignId ? (
+              <p className="text-center text-sm font-bold text-[#768994] py-24">Loading notes…</p>
+            ) : (
+              <div className="h-full min-h-[340px] rounded-2xl border border-dashed border-[#dce4ec] bg-white/60 flex flex-col items-center justify-center text-center px-6">
+                <FileText className="w-7 h-7 text-[#c2d0da] mb-3" strokeWidth={1.5} />
+                <p className="text-sm font-bold text-[#122027]">Pick a campaign to write it up</p>
+                <p className="text-xs font-medium text-[#768994] mt-1 max-w-xs">
+                  You get your own box on each campaign — write your side of it, and read everyone else's next to it.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// One box in the End of Campaign bento. `mine` is the only editable one: every
+// other box is somebody else's note, shown in full but read-only, so the grid
+// reads as a wall of takes rather than a document several people fight over.
+function EocNoteBox({ label, sublabel, accent, content, onChange, mine = false, expanded = false, onActivity, className = "" }) {
+  // Your box is only the big one while you're actually in it. Once you stop,
+  // it settles back to the size of everyone else's, so the grid reads as a
+  // wall of equal takes rather than yours permanently dominating it.
+  const roomy = mine && expanded;
+  return (
+    <div
+      // Every way of being active in the box, because the editor's own
+      // onChange is debounced 800ms and doesn't fire at all during continuous
+      // typing — relying on it alone collapsed the box mid-sentence.
+      // keydown catches typing, input catches paste and IME composition,
+      // pointerdown/focus catch arriving in the first place.
+      onFocusCapture={mine ? onActivity : undefined}
+      onPointerDown={mine ? onActivity : undefined}
+      onKeyDownCapture={mine ? onActivity : undefined}
+      onInputCapture={mine ? onActivity : undefined}
+      className={`rounded-2xl border bg-white overflow-hidden flex flex-col transition-[box-shadow,border-color] duration-300 ${className} ${
+        mine
+          ? roomy
+            ? "border-[#c2410d] shadow-md ring-2 ring-[#c2410d]/10"
+            : "border-[#c2410d]/35 shadow-sm"
+          : "border-[#dce4ec]"
+      }`}
+    >
+      <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-slate-100">
+        <span className="shrink-0 w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black text-white" style={{ background: accent }}>
+          {(label || "?").charAt(0).toUpperCase()}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[12px] font-black text-[#122027] truncate">{label}</span>
+          {sublabel && <span className="block text-[10px] font-semibold text-[#94a3b8] truncate">{sublabel}</span>}
+        </span>
+        {mine && onChange && (
+          <span className={`shrink-0 text-[9px] font-black uppercase tracking-widest transition-colors duration-300 ${roomy ? "text-[#c2410d]" : "text-[#c2d0da]"}`}>
+            {roomy ? "Editing" : "Your note"}
+          </span>
+        )}
+      </div>
+      {/* Height is what animates — the column span it sits in can't tween, so
+          the transition carries the change and the reflow lands under it. */}
+      <div
+        className={`transition-[max-height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-hidden ${
+          roomy ? "max-h-[460px]" : mine ? "max-h-[320px]" : "max-h-[320px]"
+        }`}
+      >
+        <RichNoteEditor
+          content={content}
+          onChange={onChange}
+          editable={!!mine && !!onChange}
+          accent={accent}
+          placeholder={mine ? "What would you do differently next time?" : ""}
+          className={`px-1 pt-2 overflow-y-auto ${roomy ? "min-h-[220px] max-h-[460px]" : "min-h-[140px] max-h-[320px]"}`}
+        />
+      </div>
+    </div>
+  );
+}
+
+// --- Reference > Notes Canvas: folders/topics of freeform pages, written
+// with RichNoteEditor (see src/components/shared/RichNoteEditor.jsx). ---
+
+// Accent palette for personal spaces. A teammate who hasn't picked a colour
+// yet gets a deterministic one from this set (hashed off their id) so their
+// section still reads consistently across sessions/devices.
+const CANVAS_COLOR_PALETTE = ["#c2410d", "#f97316", "#ec4899", "#8b5cf6", "#10b981", "#ef4444", "#eab308", "#0ea5e9"];
+const hashColor = (id) => {
+  let hash = 0;
+  const s = String(id || "");
+  for (let i = 0; i < s.length; i++) hash = s.charCodeAt(i) + ((hash << 5) - hash);
+  return CANVAS_COLOR_PALETTE[Math.abs(hash) % CANVAS_COLOR_PALETTE.length];
+};
+
+function FolderNameInput({ value, onChange, onSubmit, onCancel }) {
+  return (
+    <div className="flex items-center gap-1.5 mb-1">
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") onSubmit(); if (e.key === "Escape") onCancel(); }}
+        placeholder="Topic name…"
+        className="w-full px-2 py-1 rounded-lg border border-[#dce4ec] outline-none text-xs font-bold"
+      />
+      <button onClick={onSubmit} className="p-1 rounded hover:bg-black/5"><Check className="w-3.5 h-3.5 text-[#c2410d]" /></button>
+    </div>
+  );
+}
+
+function FolderTree({ folders, pages, selectedFolderId, selectedPageId, onToggleFolder, onSelectPage, onDeleteFolder, onDeletePage, onAddPage, accentColor }) {
+  if (!folders.length) return <p className="text-xs font-semibold text-[#768994] px-1">No topics yet.</p>;
+  return (
+    <div className="space-y-0.5">
+      {folders.map((folder) => {
+        const folderPages = pages.filter((p) => p.folder_id === folder.id);
+        const isExpanded = selectedFolderId === folder.id;
+        return (
+          <div key={folder.id}>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => onToggleFolder(folder.id)}
+              className="group/folder flex items-center gap-1.5 px-1.5 py-1 rounded-lg cursor-pointer hover:bg-black/5"
+            >
+              <ChevronRight className={`w-3 h-3 shrink-0 text-[#768994] transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+              <span className="text-xs font-bold text-[#122027] truncate flex-1">{folder.name}</span>
+              <span className="text-[10px] font-black text-[#768994]">{folderPages.length}</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDeleteFolder(folder.id); }}
+                className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+            {isExpanded && (
+              <div className="ml-4 mt-0.5 space-y-0.5">
+                {folderPages.map((page) => (
+                  <div
+                    key={page.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectPage(page.id)}
+                    className="group/page flex items-center gap-1.5 px-1.5 py-1 rounded-lg cursor-pointer hover:bg-black/5 text-[#122027]"
+                    style={page.id === selectedPageId ? { backgroundColor: `${accentColor}1a`, color: accentColor } : undefined}
+                  >
+                    <FileText className="w-3 h-3 shrink-0" />
+                    <span className="text-xs font-semibold truncate flex-1">{page.title || "Untitled"}</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onDeletePage(page.id); }}
+                      className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => onAddPage(folder.id)}
+                  className="flex items-center gap-1 px-1.5 py-1 text-[11px] font-black hover:opacity-80"
+                  style={{ color: accentColor }}
+                >
+                  <Plus className="w-3 h-3" /> New page
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Folders-only column for the three-pane drill-down (Folders → Pages →
+// Editor): a folder is just a selectable row here, its pages live in
+// PageList next to it instead of nesting inline underneath.
+function FolderList({ folders, pages, selectedFolderId, onSelectFolder, onDeleteFolder, accentColor }) {
+  if (!folders.length) return <p className="text-xs font-semibold text-[#768994] px-1">No topics yet.</p>;
+  return (
+    <div className="space-y-1">
+      {folders.map((folder) => {
+        const count = pages.filter((p) => p.folder_id === folder.id).length;
+        const isSelected = selectedFolderId === folder.id;
+        return (
+          <div
+            key={folder.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelectFolder(folder.id)}
+            className="group/folder flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors"
+            style={isSelected ? { backgroundColor: `${accentColor}1a` } : undefined}
+          >
+            <Folder className="w-3.5 h-3.5 shrink-0" style={{ color: accentColor }} />
+            <span
+              className="text-xs font-bold truncate flex-1"
+              style={{ color: isSelected ? accentColor : "#122027" }}
+            >
+              {folder.name}
+            </span>
+            <span className="text-[10px] font-black text-[#768994]">{count}</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDeleteFolder(folder.id); }}
+              className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 shrink-0"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Pages column: a folder's pages as cards rather than an indented list, so
+// they carry the same visual weight as the folder they belong to instead
+// of reading as a footnote underneath it.
+function PageList({ folder, pages, selectedPageId, onSelectPage, onDeletePage, onAddPage, accentColor }) {
+  if (!folder) {
+    return (
+      <p className="text-xs font-semibold text-[#768994] text-center px-4 py-8">
+        Pick a topic on the left to see its pages.
+      </p>
+    );
+  }
+  const folderPages = pages.filter((p) => p.folder_id === folder.id);
+  return (
+    <div>
+      <p className="text-[11px] font-black uppercase tracking-widest text-[#768994] px-1 mb-2 truncate">{folder.name}</p>
+      <div className="space-y-1.5">
+        {folderPages.map((page) => {
+          const isSelected = page.id === selectedPageId;
+          return (
+            <div
+              key={page.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelectPage(page.id)}
+              className="group/page flex items-center gap-2 px-2.5 py-2 rounded-xl border cursor-pointer transition-colors"
+              style={isSelected ? { borderColor: accentColor, backgroundColor: `${accentColor}14` } : { borderColor: "#dce4ec" }}
+            >
+              <FileText className="w-3.5 h-3.5 shrink-0" style={{ color: isSelected ? accentColor : "#768994" }} />
+              <span className="text-xs font-semibold truncate flex-1 text-[#122027]">{page.title || "Untitled"}</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDeletePage(page.id); }}
+                className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 shrink-0"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          );
+        })}
+        <button
+          onClick={() => onAddPage(folder.id)}
+          className="w-full flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl border border-dashed text-[11px] font-black hover:opacity-80"
+          style={{ borderColor: `${accentColor}55`, color: accentColor }}
+        >
+          <Plus className="w-3 h-3" /> New page
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Kill switch for live collaborative editing on text notes. Collaboration
+// rides Supabase Realtime, and this account has no egress headroom to spare —
+// if it ever starts costing more than it's worth, flip this off and notes fall
+// straight back to the previous single-editor save path with no deploy needed
+// beyond this constant. localStorage lets it be disabled per-browser without
+// touching everyone (e.g. from the console: localStorage.setItem("xyi_notes_collab","off")).
+//
+// Was OFF after the first version seeded a note's Yjs document by handing
+// TipTap the `content` option, which Collaboration ignores — it builds the
+// editor from the Y.Doc instead. Opening a note that had never been
+// collaborated on produced an empty editor, and the autosave then wrote that
+// emptiness over the real content, destroying a note (Toolbox Board) on
+// 2026-07-16. Re-enabled after a full save-path audit closed every gap that
+// surfaced: seeding happens in a deferred, race-guarded effect in
+// RichNoteEditor.jsx rather than synchronously in onCreate (two clients
+// opening the same virgin note at once both seeding was reproduced on the
+// live UI, not hypothesised); onUpdate refuses to persist an empty document
+// over a note that has content unless this editor has shown that content at
+// least once; a non-collab save nulls the stored ydoc so stale CRDT state
+// can't later revert a newer plain edit; ydoc is mirrored into local page
+// state so remounting a note mid-session can't resurrect its pre-edit self;
+// and CollaborativeNoteEditor refetches the authoritative ydoc at mount
+// rather than trusting the page-list snapshot, closing the same
+// stale-belief-of-"virgin" gap from a different angle.
+const NOTES_COLLAB =
+  typeof localStorage !== "undefined" && localStorage.getItem("xyi_notes_collab") === "off"
+    ? false
+    : true;
+
+export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds = [], onTogglePin, focusFolder, editorExpanded = false, onToggleEditorExpanded, bare = false }) {
   const [folders, setFolders] = useState([]);
   const [pages, setPages] = useState([]);
+  const [profiles, setProfiles] = useState([]);
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [selectedPageId, setSelectedPageId] = useState(null);
-  const [addingFolder, setAddingFolder] = useState(false);
+  const [folderDraft, setFolderDraft] = useState(null);
   const [newFolderName, setNewFolderName] = useState("");
+  const [pageSaveState, setPageSaveState] = useState("idle");
+  const [pageLastSavedAt, setPageLastSavedAt] = useState(null);
+  const savedTimerRef = useRef(null);
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  const [activeBoard, setActiveBoard] = useState("team");
+  const [showTeammates, setShowTeammates] = useState(false);
+  // Expand ("focus mode") is controlled by the parent so it can also hide the
+  // campaigns panel and let the note take the full page width.
+  const toggleEditorExpanded = onToggleEditorExpanded || (() => {});
+  // Separate from editorExpanded: that flag now auto-fires for ANY open note
+  // (see the effect below) purely to reclaim the campaigns column's width —
+  // it says nothing about whether THIS card's own topics/pages rail should
+  // hide. A sketch benefits from every pixel (railCollapsed defaults true for
+  // it); a text note doesn't need the rail gone just because a note is open,
+  // so it stays visible unless the user explicitly asks for full focus via
+  // the maximize button.
+  const [railCollapsed, setRailCollapsed] = useState(false);
+
+  const currentUserId = useMemo(() => localStorage.getItem("wrike_user_id") || null, []);
 
   useEffect(() => {
     if (!isOpen) return;
+    let cancelled = false;
     (async () => {
-      const [{ data: f }, { data: p }] = await Promise.all([
-        supabase.from("canvas_notes_folders").select("*").order("created_at", { ascending: true }),
-        supabase.from("canvas_notes_pages").select("*").order("created_at", { ascending: true }),
+      const [{ data: f }, { data: pr }] = await Promise.all([
+        supabase.from("canvas_notes_folders").select("*").eq("department", department).order("created_at", { ascending: true }),
+        supabase.from("profiles").select("wrike_user_id, first_name, last_name, canvas_color"),
       ]);
+      if (cancelled) return;
       setFolders(f || []);
-      setPages(p || []);
+      setProfiles(pr || []);
+      const folderIds = (f || []).map((x) => x.id);
+      if (folderIds.length) {
+        const { data: p } = await supabase.from("canvas_notes_pages").select("*").in("folder_id", folderIds).order("created_at", { ascending: true });
+        if (!cancelled) setPages(p || []);
+      } else {
+        setPages([]);
+      }
     })();
-  }, [isOpen]);
+    return () => { cancelled = true; };
+  }, [isOpen, department]);
+
+  // Keeps a live-updated set of this department's folder ids for the pages
+  // subscription below, which filters client-side (canvas_notes_pages has no
+  // department column of its own to filter on server-side, only folder_id).
+  const folderIdsRef = useRef(new Set());
+  // A per-instance suffix so this card's Realtime channel topic is unique.
+  // The topic used to be just `notes-canvas:${department}`, shared by every
+  // card on that board — so once a second NotesCanvasCard mounted (the global
+  // notes modal alongside the one already on the Canvas page), the second
+  // supabase.channel(topic) handed back the first card's already-subscribed
+  // channel, and calling .on() on a subscribed channel throws. Unique topics
+  // give each mount its own channel; Postgres changes fan out to all of them.
+  const channelIdRef = useRef(Math.random().toString(36).slice(2, 9));
+  useEffect(() => {
+    folderIdsRef.current = new Set(folders.map((f) => f.id));
+  }, [folders]);
+
+  // Without this, a folder or page someone else creates (or renames/edits with
+  // collab off) never appears here until the card is closed and reopened —
+  // the fetch above only runs once per (isOpen, department). This only ever
+  // adds/updates/removes list entries; it never touches the open editor's own
+  // content prop after mount, so it can't interrupt anyone's typing.
+  useEffect(() => {
+    if (!isOpen) return;
+    const channel = supabase
+      .channel(`notes-canvas:${department}:${channelIdRef.current}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "canvas_notes_folders", filter: `department=eq.${department}` },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            setFolders((prev) => prev.filter((f) => f.id !== payload.old.id));
+            return;
+          }
+          const row = payload.new;
+          setFolders((prev) =>
+            prev.some((f) => f.id === row.id) ? prev.map((f) => (f.id === row.id ? { ...f, ...row } : f)) : [...prev, row]
+          );
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "canvas_notes_pages" },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            setPages((prev) => prev.filter((p) => p.id !== payload.old.id));
+            return;
+          }
+          const row = payload.new;
+          if (!folderIdsRef.current.has(row.folder_id)) return; // belongs to another department
+          setPages((prev) =>
+            prev.some((p) => p.id === row.id) ? prev.map((p) => (p.id === row.id ? { ...p, ...row } : p)) : [...prev, row]
+          );
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [isOpen, department]);
+
+  const profileFor = (id) => profiles.find((pr) => pr.wrike_user_id === id);
+  const nameFor = (id) => {
+    const pr = profileFor(id);
+    const name = pr && [pr.first_name, pr.last_name].filter(Boolean).join(" ");
+    return name || "Teammate";
+  };
+  const colorFor = (id) => profileFor(id)?.canvas_color || hashColor(id);
+  const myColor = currentUserId ? colorFor(currentUserId) : CANVAS_COLOR_PALETTE[0];
+  // The person. Used wherever a human is named (presence, carets).
+  const myFirstName = (currentUserId && profileFor(currentUserId)?.first_name) || "Someone";
+  // The place. Used for the personal-board pill only — don't hand this to
+  // anything that says "<x> is here".
+  const myName = currentUserId && profileFor(currentUserId)?.first_name
+    ? `${profileFor(currentUserId).first_name}'s Space`
+    : "My Space";
+
+  const teamFolders = folders.filter((f) => !f.owner_wrike_id);
+  const myFolders = currentUserId ? folders.filter((f) => f.owner_wrike_id === currentUserId) : [];
+  const teammateIds = [...new Set(
+    folders.filter((f) => f.owner_wrike_id && f.owner_wrike_id !== currentUserId).map((f) => f.owner_wrike_id)
+  )];
+
+  const activeBoardFolders = activeBoard === "team"
+    ? teamFolders
+    : activeBoard === "mine"
+      ? myFolders
+      : folders.filter((f) => f.owner_wrike_id === activeBoard);
+
+  const setMyColor = async (hex) => {
+    if (!currentUserId) return;
+    setProfiles((prev) => {
+      const exists = prev.some((pr) => pr.wrike_user_id === currentUserId);
+      return exists
+        ? prev.map((pr) => (pr.wrike_user_id === currentUserId ? { ...pr, canvas_color: hex } : pr))
+        : [...prev, { wrike_user_id: currentUserId, canvas_color: hex }];
+    });
+    setColorPickerOpen(false);
+    await supabase.from("profiles").update({ canvas_color: hex }).eq("wrike_user_id", currentUserId);
+  };
 
   const addFolder = async () => {
     const name = newFolderName.trim();
-    if (!name) { setAddingFolder(false); return; }
-    const { data } = await supabase.from("canvas_notes_folders").insert({ name }).select().single();
+    if (!name || !folderDraft) { setFolderDraft(null); return; }
+    const { data } = await supabase
+      .from("canvas_notes_folders")
+      .insert({ name, owner_wrike_id: folderDraft.owner, department })
+      .select()
+      .single();
     if (data) setFolders((prev) => [...prev, data]);
     setNewFolderName("");
-    setAddingFolder(false);
+    setFolderDraft(null);
   };
 
   const deleteFolder = async (folderId) => {
@@ -296,10 +977,10 @@ function NotesCanvasCard({ isOpen, onToggle }) {
     if (selectedFolderId === folderId) { setSelectedFolderId(null); setSelectedPageId(null); }
   };
 
-  const addPage = async (folderId) => {
+  const addPage = async (folderId, kind = "text") => {
     const { data } = await supabase
       .from("canvas_notes_pages")
-      .insert({ folder_id: folderId, title: "Untitled", content: [] })
+      .insert({ folder_id: folderId, title: "Untitled", content: kind === "sketch" ? {} : [], kind })
       .select()
       .single();
     if (data) {
@@ -320,125 +1001,562 @@ function NotesCanvasCard({ isOpen, onToggle }) {
     await supabase.from("canvas_notes_pages").update({ title }).eq("id", pageId);
   };
 
-  const savePageContent = async (pageId, blocks) => {
-    setPages((prev) => prev.map((p) => (p.id === pageId ? { ...p, content: blocks } : p)));
-    await supabase.from("canvas_notes_pages").update({ content: blocks, updated_at: new Date().toISOString() }).eq("id", pageId);
+  const savePageContent = async (pageId, blocks, ydoc) => {
+    // ydoc is mirrored into local state too — an earlier version froze the
+    // local copy at fetch time out of fear that a changed prop would disrupt
+    // a live session. It can't (the editor reads ydoc once, at mount), and
+    // the frozen copy set a genuine trap: switch away from a note you'd been
+    // editing and back again, and the editor remounted from the stale
+    // pre-edit ydoc — showing (and on the next keystroke, persisting) content
+    // your own saves had already superseded.
+    setPages((prev) =>
+      prev.map((p) =>
+        p.id === pageId
+          ? { ...p, content: blocks, ...(ydoc !== undefined ? { ydoc } : {}) }
+          : p
+      )
+    );
+    setPageSaveState("saving");
+    const patch = { content: blocks, updated_at: new Date().toISOString() };
+    if (ydoc !== undefined) patch.ydoc = ydoc;
+    await supabase.from("canvas_notes_pages").update(patch).eq("id", pageId);
+    setPageSaveState("saved");
+    setPageLastSavedAt(new Date().toISOString());
+    clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = setTimeout(() => setPageSaveState("idle"), 2000);
   };
 
-  const selectedPage = pages.find((p) => p.id === selectedPageId);
+  useEffect(() => {
+    setPageSaveState("idle");
+    const p = pages.find((pg) => pg.id === selectedPageId);
+    setPageLastSavedAt(p?.updated_at || null);
+  }, [selectedPageId]);
 
+  // Opening ANY note reclaims the campaigns column's width automatically —
+  // once you're reading/writing a specific note, that list isn't doing
+  // anything for you. This only touches the OUTER (parent-controlled)
+  // editorExpanded flag; it says nothing about this card's own rail, which
+  // railCollapsed governs separately below. Symmetric on the way out
+  // regardless of kind: switching boards or deleting the open page clears
+  // selectedPageId, and without that branch editorExpanded stayed stuck
+  // true with no way back short of a page refresh. Keyed on selectedPageId
+  // itself (not editorExpanded) so toggling the parent flag manually doesn't
+  // immediately get overridden by this effect re-firing.
+  useEffect(() => {
+    if (selectedPageId && !editorExpanded) toggleEditorExpanded();
+    if (!selectedPageId && editorExpanded) toggleEditorExpanded();
+    // Rail stays visible for any newly-opened page, sketch or text — the
+    // user can still collapse it manually via the maximize button.
+    setRailCollapsed(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPageId]);
+
+  // Memoised: this is handed to the editor, which uses it to build the Yjs
+  // awareness state at mount. A fresh object literal each render would look
+  // like a changed identity to anything downstream keyed on it.
+  // myName is the *board pill's* label ("Antonio's Space" / "My Space") — a
+  // place, not a person. Presence and carets name a human, so they take the
+  // first name straight off the profile: "Antonio is here", not
+  // "Antonio's Space is here".
+  const collabUser = useMemo(
+    () => ({ name: myFirstName, color: myColor }),
+    [myFirstName, myColor]
+  );
+
+  // The live provider for the open note, handed up by the editor once its
+  // Y.Doc exists. Only used to read awareness for the presence chip; it's
+  // nulled on unmount, so switching notes can't leave a stale one behind.
+  const [collabProvider, setCollabProvider] = useState(null);
+
+  const selectedPage = pages.find((p) => p.id === selectedPageId);
+  // A text note's own editor column is already the wide 1fr side of the
+  // two-column grid regardless of whether the rail is collapsed — capping
+  // its prose at the same narrow 46rem either way just wastes the room a
+  // wide screen already has. So a normal (non-sketch) note gets the wider
+  // prose measure as soon as it's open; sketches don't use this at all
+  // (they skip the doc-head block entirely).
+  const proseWide = !!selectedPage && selectedPage.kind !== "sketch";
+  const selectedPageFolder = selectedPage ? folders.find((f) => f.id === selectedPage.folder_id) : null;
+  const selectedAccent = selectedPageFolder?.owner_wrike_id ? colorFor(selectedPageFolder.owner_wrike_id) : "#c2410d";
+  // One accent for the whole active board: terracotta for the team board, the
+  // owner's colour for a personal/teammate space — so the section reads as
+  // "whose space am I in" at a glance, not just a coloured pill.
+  const boardAccent = activeBoard === "team" ? "#c2410d" : activeBoard === "mine" ? myColor : colorFor(activeBoard);
+
+  // Pull plain text out of a stored TipTap document — powers the note-list
+  // preview snippet and the editor's live word count. Accepts either a full
+  // ProseMirror doc ({type:"doc", content:[...]}) or a bare content array.
+  const blocksText = (doc) => {
+    if (!doc) return "";
+    const nodes = Array.isArray(doc) ? doc : doc.content;
+    if (!Array.isArray(nodes)) return "";
+    const walk = (nodes) =>
+      (nodes || []).map((n) => {
+        if (typeof n?.text === "string") return n.text;
+        return Array.isArray(n?.content) ? walk(n.content) : "";
+      }).join(" ");
+    return walk(nodes).replace(/\s+/g, " ").trim();
+  };
+  const snippetOf = (page) => blocksText(page?.content).slice(0, 60);
+  const wordCountOf = (page) => {
+    const t = blocksText(page?.content);
+    return t ? t.split(/\s+/).filter(Boolean).length : 0;
+  };
+  const timeAgo = (iso) => {
+    if (!iso) return "not saved yet";
+    const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    if (d <= 0) return "today";
+    if (d === 1) return "yesterday";
+    if (d < 7) return `${d}d ago`;
+    if (d < 30) return `${Math.floor(d / 7)}w ago`;
+    return `${Math.floor(d / 30)}mo ago`;
+  };
+
+  const toggleFolder = (id) => setSelectedFolderId((prev) => (prev === id ? null : id));
+  const startDraft = (owner) => { setFolderDraft({ owner }); setNewFolderName(""); };
+
+  // A pinned-topic card on the shelf was clicked: jump to the board that owns
+  // the folder and open it. focusFolder bumps its `n` each click so re-clicking
+  // the same topic still re-triggers.
+  useEffect(() => {
+    if (!focusFolder?.id || !folders.length) return;
+    const folder = folders.find((f) => f.id === focusFolder.id);
+    if (!folder) return;
+    setActiveBoard(
+      !folder.owner_wrike_id ? "team" : folder.owner_wrike_id === currentUserId ? "mine" : folder.owner_wrike_id
+    );
+    setSelectedFolderId(folder.id);
+  }, [focusFolder, folders, currentUserId]);
+
+  // One-click "New note": drop a page into the active topic (the one whose note
+  // is open, else the first topic on this board). With no topic yet, start a
+  // topic draft instead so the user is never stuck at an empty board.
+  const handleNewNote = (kind = "text") => {
+    const target =
+      (selectedFolderId && activeBoardFolders.some((f) => f.id === selectedFolderId) && selectedFolderId) ||
+      activeBoardFolders[0]?.id;
+    if (target) {
+      setSelectedFolderId(target);
+      addPage(target, kind);
+    } else {
+      // No topic to hold the page yet — same starting-point regardless of
+      // kind; the first page added once the topic exists defaults to text.
+      startDraft(activeBoard === "mine" ? currentUserId : null);
+    }
+  };
+
+  // Surface bleeds to the card edges (covers the CollapsibleCard's cool
+  // slate-50 inner) and takes on the active board's accent, so the whole
+  // Notes Canvas reads as "whose space am I in". In `bare` mode (the
+  // quick-access Notes modal) the surrounding CollapsibleCard is dropped —
+  // the modal supplies its own chrome — so the content-bleed negative margins
+  // that tuck under the card's own padding would instead pull content past the
+  // modal's edges; they're dropped too.
+  const body = (
+      <div
+        className={`flex flex-col gap-4 ${bare ? "p-5 sm:p-6" : "-m-6 sm:-m-8 p-5 sm:p-6"} transition-colors duration-300`}
+        style={{ background: `linear-gradient(180deg, ${boardAccent}14, ${boardAccent}08 40%, ${boardAccent}05)` }}
+      >
+        {/* --- Board switcher: which space am I in --- */}
+        {/* This is the primary navigation for the whole panel — team board vs
+            personal vs a teammate's space — so it gets real visual weight
+            (solid colour fill + icon on the active pill) rather than reading
+            as a quiet segmented control. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => { setActiveBoard("team"); setSelectedPageId(null); }}
+            className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-all ${
+              activeBoard === "team" ? "text-white shadow-md" : "bg-white/80 border border-[#ece4d8] text-[#8a8073] hover:text-[#5a5147] hover:border-[#c2410d]/30"
+            }`}
+            style={activeBoard === "team" ? { background: `linear-gradient(135deg, #c2410d, #9a3412)` } : undefined}
+          >
+            <span
+              className="w-6 h-6 rounded-lg grid place-items-center shrink-0"
+              style={activeBoard === "team" ? { backgroundColor: "#ffffff2a" } : { backgroundColor: "#c2410d14", color: "#c2410d" }}
+            >
+              <Users className="w-3.5 h-3.5" />
+            </span>
+            {boardLabelFor(department)}
+          </button>
+
+          {currentUserId && (
+            <button
+              onClick={() => { setActiveBoard("mine"); setSelectedPageId(null); }}
+              className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-all ${
+                activeBoard === "mine" ? "text-white shadow-md" : "bg-white/80 border border-[#ece4d8] text-[#8a8073] hover:text-[#5a5147]"
+              }`}
+              style={activeBoard === "mine" ? { background: `linear-gradient(135deg, ${myColor}, ${myColor}cc)` } : { borderColor: `${myColor}30` }}
+            >
+              <span
+                className="w-6 h-6 rounded-lg grid place-items-center text-[10px] font-black shrink-0"
+                style={activeBoard === "mine" ? { backgroundColor: "#ffffff2a", color: "#fff" } : { backgroundColor: `${myColor}18`, color: myColor }}
+              >
+                {(myName || "M").charAt(0)}
+              </span>
+              {myName}
+            </button>
+          )}
+
+          {teammateIds.map((id) => {
+            const color = colorFor(id);
+            const isActive = activeBoard === id;
+            return (
+              <button
+                key={id}
+                onClick={() => { setActiveBoard(id); setSelectedPageId(null); }}
+                className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-all ${
+                  isActive ? "text-white shadow-md" : "bg-white/80 border border-[#ece4d8] text-[#8a8073] hover:text-[#5a5147]"
+                }`}
+                style={isActive ? { background: `linear-gradient(135deg, ${color}, ${color}cc)` } : { borderColor: `${color}30` }}
+              >
+                <span
+                  className="w-6 h-6 rounded-lg grid place-items-center text-[10px] font-black shrink-0"
+                  style={isActive ? { backgroundColor: "#ffffff2a", color: "#fff" } : { backgroundColor: `${color}18`, color }}
+                >
+                  {nameFor(id).charAt(0)}
+                </span>
+                <span className="truncate max-w-[90px]">{nameFor(id)}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* --- Main content: two-column layout --- */}
+        <div className={`grid gap-4 ${railCollapsed ? "grid-cols-1" : "grid-cols-[248px_1fr]"}`}>
+          {/* Notes rail — New note button, then topics as quiet section
+              headers with their notes listed flat beneath (no expand gate). */}
+          {!railCollapsed && (
+          <div
+            className="flex flex-col rounded-2xl border border-[#dce4ec] bg-white shadow-sm overflow-hidden max-h-[600px]"
+            /* Surface comes from the bg-white class, not an inline hex, so the
+               dark theme can remap it; only the personal-space accent tint stays
+               inline (it's derived from the member's own colour). */
+            style={activeBoard === "mine" ? { borderColor: `${myColor}44`, backgroundColor: `${myColor}08` } : undefined}
+          >
+            <div className="p-2.5 border-b border-slate-100 flex items-center gap-1.5">
+              <button
+                onClick={() => handleNewNote("text")}
+                className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-white text-[13px] font-bold shadow-sm transition-all hover:brightness-105 active:scale-[.98]"
+                style={{ background: `linear-gradient(135deg, ${boardAccent}, ${boardAccent}cc)` }}
+              >
+                <Plus className="w-4 h-4" /> New note
+              </button>
+              <button
+                onClick={() => handleNewNote("sketch")}
+                title="New sketch"
+                className="shrink-0 flex items-center justify-center w-10 h-10 rounded-xl border shadow-sm transition-all hover:brightness-105 active:scale-[.98]"
+                style={{ borderColor: `${boardAccent}55`, color: boardAccent }}
+              >
+                <PenTool className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 px-3 pt-2.5 pb-1">
+              <span className="text-[10px] font-black uppercase tracking-[0.13em] text-[#a79f93] flex-1 truncate">
+                {activeBoard === "mine" ? myName : boardLabelFor(department)}
+              </span>
+              {activeBoard === "mine" && (
+                <button
+                  onClick={() => setColorPickerOpen((v) => !v)}
+                  title="Change my colour"
+                  className="w-5 h-5 rounded-md flex items-center justify-center shrink-0"
+                  style={{ backgroundColor: `${myColor}22`, color: myColor }}
+                >
+                  <User className="w-3 h-3" />
+                </button>
+              )}
+              <button
+                onClick={() => startDraft(activeBoard === "mine" ? currentUserId : null)}
+                title="New topic"
+                className="p-1 rounded-md hover:bg-black/5 shrink-0"
+                style={{ color: boardAccent }}
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {activeBoard === "mine" && colorPickerOpen && (
+              <div className="flex items-center gap-1 mx-3 mb-2 p-1.5 rounded-lg border border-[#ece4d8] bg-white shadow-sm w-fit">
+                {CANVAS_COLOR_PALETTE.map((hex) => (
+                  <button
+                    key={hex}
+                    onClick={() => setMyColor(hex)}
+                    className="w-4 h-4 rounded-full ring-1 ring-black/5"
+                    style={{ backgroundColor: hex }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {folderDraft?.owner === (activeBoard === "mine" ? currentUserId : null) && (
+              <div className="flex items-center gap-1.5 mx-3 mb-2">
+                <input
+                  autoFocus
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") addFolder(); if (e.key === "Escape") setFolderDraft(null); }}
+                  placeholder="Topic name…"
+                  className="flex-1 px-2 py-1 rounded-lg border border-[#ece4d8] outline-none text-xs font-bold"
+                />
+                <button onClick={addFolder} className="p-1 rounded hover:bg-black/5"><Check className="w-3.5 h-3.5 text-[#c2410d]" /></button>
+              </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto px-2 pb-3">
+              {activeBoardFolders.length === 0 ? (
+                <p className="text-xs font-semibold text-[#a79f93] px-2 py-4">
+                  No topics yet — add one with the + above.
+                </p>
+              ) : (
+                activeBoardFolders.map((folder) => {
+                  const folderPages = pages.filter((p) => p.folder_id === folder.id);
+                  const isPinned = pinnedFolderIds.includes(folder.id);
+                  return (
+                    <div key={folder.id} className="mb-1.5">
+                      {/* Topic header */}
+                      <div className="group/folder flex items-center gap-1.5 px-2 pt-2.5 pb-1">
+                        <span className="text-[10px] font-black uppercase tracking-[0.12em] text-[#8a8073] truncate">{folder.name}</span>
+                        <span className="text-[10px] font-bold text-[#c4bcae] tabular-nums">{folderPages.length}</span>
+                        <div className="flex-1" />
+                        {onTogglePin && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onTogglePin(folder); }}
+                            title={isPinned ? "Unpin topic" : "Pin topic to shelf"}
+                            className={`p-0.5 rounded transition-all ${isPinned ? "text-amber-500" : "text-[#d5cdbf] opacity-0 group-hover/folder:opacity-100 hover:text-amber-500"}`}
+                          >
+                            <Pin className={`w-3 h-3 ${isPinned ? "fill-current" : ""}`} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => addPage(folder.id)}
+                          title="New note in this topic"
+                          className="p-0.5 rounded text-[#c4bcae] opacity-0 group-hover/folder:opacity-100 hover:text-[#c2410d] transition-all"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteFolder(folder.id); }}
+                          title="Delete topic"
+                          className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 transition-all"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      {/* Notes — always visible, no expand gate */}
+                      {folderPages.length === 0 ? (
+                        <div className="flex items-center gap-2 mx-1 px-1 py-1">
+                          <button
+                            onClick={() => addPage(folder.id, "text")}
+                            className="flex items-center gap-1.5 px-1 py-0.5 text-[11px] font-semibold text-[#b0a89a] hover:text-[#c2410d] transition-colors"
+                          >
+                            <Plus className="w-3 h-3" /> Add the first note
+                          </button>
+                          <button
+                            onClick={() => addPage(folder.id, "sketch")}
+                            title="Add a sketch"
+                            className="flex items-center gap-1 px-1 py-0.5 text-[11px] font-semibold text-[#b0a89a] hover:text-[#c2410d] transition-colors"
+                          >
+                            <PenTool className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        folderPages.map((page) => {
+                          const active = selectedPageId === page.id;
+                          const isSketch = page.kind === "sketch";
+                          const shapeCount = page.content?.elements?.length || 0;
+                          const snippet = isSketch
+                            ? (shapeCount ? `${shapeCount} shape${shapeCount === 1 ? "" : "s"}` : "")
+                            : snippetOf(page);
+                          return (
+                            <div
+                              key={page.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => { setSelectedFolderId(folder.id); setSelectedPageId(page.id); }}
+                              className={`group/page flex items-start gap-2.5 mx-1 px-2 py-2 rounded-lg cursor-pointer transition-colors ${
+                                active ? "bg-white shadow-sm" : "hover:bg-black/[0.03]"
+                              }`}
+                            >
+                              <span
+                                className="w-6 h-6 rounded-md grid place-items-center shrink-0 mt-0.5"
+                                style={{ backgroundColor: active ? `${boardAccent}18` : "#00000008", color: active ? boardAccent : "#b0a89a" }}
+                              >
+                                {isSketch ? <PenTool className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className={`block text-[13px] font-semibold truncate leading-tight ${active ? "" : "text-[#3a352e]"}`} style={active ? { color: boardAccent } : undefined}>
+                                  {page.title || "Untitled"}
+                                </span>
+                                <span className="block text-[11px] text-[#a79f93] truncate mt-0.5">
+                                  {snippet || (isSketch ? "Empty sketch" : "Empty note")}
+                                </span>
+                              </span>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); deletePage(page.id); }}
+                                className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 transition-all mt-0.5"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          )}
+
+          {/* Editor column */}
+          <div className="flex flex-col min-w-0 rounded-2xl border shadow-sm overflow-hidden bg-white"
+            style={selectedPage ? { borderColor: `${selectedAccent}33`, borderLeftWidth: 3, borderLeftColor: selectedAccent } : { borderColor: "#ece4d8" }}
+          >
+            {/* Slim top bar — orientation + save state + focus toggle */}
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-100 shrink-0">
+              <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.13em]" style={{ color: `${boardAccent}` }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: boardAccent }} />
+                {activeBoard === "mine" ? myName : activeBoard === "team" ? boardLabelFor(department) : nameFor(activeBoard)}
+              </span>
+              {selectedPage?.kind === "sketch" && (
+                <input
+                  value={selectedPage.title}
+                  onChange={(e) => renamePage(selectedPage.id, e.target.value)}
+                  placeholder="Untitled sketch"
+                  className="ml-2 min-w-0 max-w-[260px] text-[13px] font-bold text-[#3a352e] bg-transparent outline-none border-b border-transparent focus:border-[#d5cdbf] px-1 truncate placeholder:text-[#cdc5b7] placeholder:font-medium"
+                />
+              )}
+              <div className="flex-1" />
+              {selectedPage && <SaveStatus state={pageSaveState} lastSavedAt={pageLastSavedAt} />}
+              {selectedPage && (
+                <button
+                  onClick={() => setRailCollapsed((v) => !v)}
+                  title={railCollapsed ? "Show notes list" : "Hide notes list"}
+                  className="p-1.5 rounded-lg hover:bg-black/5 text-[#8a8073] shrink-0 transition-colors"
+                >
+                  {railCollapsed ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                </button>
+              )}
+            </div>
+
+            {selectedPage ? (
+              <>
+                {/* Cosy document head — title/breadcrumb/byline. A sketch has
+                    no title to read and no word count to show, so it skips
+                    straight to the canvas instead of reserving this space. */}
+                {selectedPage.kind !== "sketch" && (
+                <div className={`w-full mx-auto px-6 sm:px-12 pt-7 shrink-0 transition-[max-width] duration-200 ${proseWide ? "max-w-[62rem]" : "max-w-[46rem]"}`}>
+                  <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.12em] mb-3" style={{ color: boardAccent }}>
+                    <span>{activeBoard === "mine" ? myName : boardLabelFor(department)}</span>
+                    {selectedPageFolder && <><span className="opacity-40">/</span><span className="text-[#a79f93] truncate">{selectedPageFolder.name}</span></>}
+                  </div>
+                  <input
+                    value={selectedPage.title}
+                    onChange={(e) => renamePage(selectedPage.id, e.target.value)}
+                    className="w-full outline-none bg-transparent font-display font-bold tracking-tight text-[#221f1a] placeholder:text-[#cdc5b7] leading-tight"
+                    style={{ fontSize: "clamp(26px, 3.4vw, 34px)" }}
+                    placeholder="Untitled note"
+                  />
+                  <div className="flex items-center gap-2.5 mt-3 mb-1 text-[12px] text-[#a79f93]">
+                    <span className="w-6 h-6 rounded-full grid place-items-center text-[9px] font-black text-white shrink-0" style={{ backgroundColor: boardAccent }}>
+                      {(activeBoard === "mine" ? (myName || "M") : boardLabelFor(department)).charAt(0)}
+                    </span>
+                    <span className="text-[#8a8073] font-semibold">Edited {timeAgo(pageLastSavedAt || selectedPage.updated_at)}</span>
+                    <span className="w-1 h-1 rounded-full bg-[#d5cdbf]" />
+                    <span className="tabular-nums">{wordCountOf(selectedPage)} words</span>
+                    <PresenceStack awareness={collabProvider?.awareness} />
+                  </div>
+                </div>
+                )}
+
+                {selectedPage.kind === "sketch" ? (
+                  <div className="flex-1 min-h-[640px]">
+                    <Suspense fallback={<div className="h-full min-h-[640px] bg-[#faf7f2] animate-pulse" />}>
+                      <ExcalidrawPageEditor
+                        key={selectedPage.id}
+                        pageId={selectedPage.id}
+                        content={selectedPage.content}
+                        onChange={(scene) => savePageContent(selectedPage.id, scene)}
+                      />
+                    </Suspense>
+                  </div>
+                ) : (
+                  <RichNoteEditor
+                    key={selectedPage.id}
+                    content={selectedPage.content}
+                    ydoc={selectedPage.ydoc}
+                    collabRoom={NOTES_COLLAB ? selectedPage.id : null}
+                    collabUser={collabUser}
+                    fetchLatestYdoc={async () => {
+                      // Authoritative read at editor mount — the local ydoc
+                      // above is a snapshot from the page-list fetch, and
+                      // trusting a stale one made this client seed a note a
+                      // peer had already seeded (see CollaborativeNoteEditor).
+                      const { data } = await supabase
+                        .from("canvas_notes_pages")
+                        .select("ydoc")
+                        .eq("id", selectedPage.id)
+                        .maybeSingle();
+                      return data?.ydoc ?? null;
+                    }}
+                    onCollabReady={setCollabProvider}
+                    onChange={(json, ydoc) => savePageContent(selectedPage.id, json, ydoc)}
+                    accent={boardAccent}
+                    wide={proseWide}
+                    className={
+                      railCollapsed
+                        ? "min-h-[45vh] max-h-[60vh] overflow-y-auto pt-1 pb-8"
+                        : "min-h-[320px] max-h-[600px] overflow-y-auto pt-1 pb-8"
+                    }
+                  />
+                )}
+              </>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-center py-16 px-6 gap-4">
+                <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ backgroundColor: `${boardAccent}14`, color: boardAccent }}>
+                  <FileText className="w-8 h-8" />
+                </div>
+                <div>
+                  <p className="text-base font-bold text-[#221f1a]">A calm place to write</p>
+                  <p className="text-[13px] font-medium text-[#8a8073] mt-1 max-w-[280px]">
+                    Pick a note on the left, or start a new one and type <span className="font-mono font-bold text-[#3a352e]">/</span> for headings, checklists and more.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleNewNote("text")}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-[13px] font-bold shadow-sm transition-all hover:brightness-105 active:scale-95"
+                    style={{ background: `linear-gradient(135deg, ${boardAccent}, ${boardAccent}cc)` }}
+                  >
+                    <Plus className="w-4 h-4" /> New note
+                  </button>
+                  <button
+                    onClick={() => handleNewNote("sketch")}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl border text-[13px] font-bold transition-all hover:brightness-105 active:scale-95"
+                    style={{ borderColor: `${boardAccent}55`, color: boardAccent }}
+                  >
+                    <PenTool className="w-4 h-4" /> New sketch
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+  );
+
+  if (bare) return body;
   return (
     <CollapsibleCard
-      icon={<Folder className="w-5 h-5" />}
+      icon={Folder}
       title="Notes Canvas"
-      subtitle="Topics & pages · scratchpad"
+      subtitle={`${department} team board · personal spaces`}
       isOpen={isOpen}
       onToggle={onToggle}
     >
-      <div className="flex flex-col sm:flex-row gap-4">
-        {/* Sidebar: folders/topics + pages */}
-        <div className="sm:w-56 shrink-0 space-y-3">
-          <button
-            onClick={() => setAddingFolder(true)}
-            className="w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#12a0e1]/10 text-[#12a0e1] text-[11px] font-black uppercase tracking-widest hover:bg-[#12a0e1]/20"
-          >
-            <FolderPlus className="w-3.5 h-3.5" /> New Topic
-          </button>
-          {addingFolder && (
-            <div className="flex items-center gap-1.5">
-              <input
-                autoFocus
-                value={newFolderName}
-                onChange={(e) => setNewFolderName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") addFolder(); if (e.key === "Escape") { setAddingFolder(false); setNewFolderName(""); } }}
-                placeholder="Topic name…"
-                className="w-full px-2 py-1 rounded-lg border border-[#dce4ec] outline-none text-xs font-bold"
-              />
-              <button onClick={addFolder} className="p-1 rounded hover:bg-black/5"><Check className="w-3.5 h-3.5 text-[#12a0e1]" /></button>
-            </div>
-          )}
-          <div className="space-y-1 max-h-[520px] overflow-y-auto">
-            {folders.length === 0 && !addingFolder && (
-              <p className="text-xs font-semibold text-[#768994] px-1">No topics yet.</p>
-            )}
-            {folders.map((folder) => {
-              const folderPages = pages.filter((p) => p.folder_id === folder.id);
-              const isExpanded = selectedFolderId === folder.id;
-              return (
-                <div key={folder.id}>
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedFolderId(isExpanded ? null : folder.id)}
-                    className="group/folder flex items-center gap-1.5 px-1.5 py-1 rounded-lg cursor-pointer hover:bg-black/5"
-                  >
-                    <ChevronRight className={`w-3 h-3 shrink-0 text-[#768994] transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-                    <span className="text-xs font-bold text-[#122027] truncate flex-1">{folder.name}</span>
-                    <span className="text-[10px] font-black text-[#768994]">{folderPages.length}</span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); deleteFolder(folder.id); }}
-                      className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                  {isExpanded && (
-                    <div className="ml-4 mt-0.5 space-y-0.5">
-                      {folderPages.map((page) => (
-                        <div
-                          key={page.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => setSelectedPageId(page.id)}
-                          className={`group/page flex items-center gap-1.5 px-1.5 py-1 rounded-lg cursor-pointer ${page.id === selectedPageId ? "bg-[#12a0e1]/10 text-[#12a0e1]" : "hover:bg-black/5 text-[#122027]"}`}
-                        >
-                          <FileText className="w-3 h-3 shrink-0" />
-                          <span className="text-xs font-semibold truncate flex-1">{page.title || "Untitled"}</span>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); deletePage(page.id); }}
-                            className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
-                      <button
-                        onClick={() => addPage(folder.id)}
-                        className="flex items-center gap-1 px-1.5 py-1 text-[11px] font-black text-[#12a0e1] hover:text-[#0f88c0]"
-                      >
-                        <Plus className="w-3 h-3" /> New page
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Main pane: selected page's BlockNote editor */}
-        <div className="flex-1 min-w-0 rounded-xl border border-[#dce4ec] bg-white overflow-hidden">
-          {selectedPage ? (
-            <>
-              <input
-                value={selectedPage.title}
-                onChange={(e) => renamePage(selectedPage.id, e.target.value)}
-                className="w-full px-4 py-2.5 border-b border-[#dce4ec] outline-none text-sm font-black text-[#122027]"
-                placeholder="Untitled"
-              />
-              <NotesCanvasPageEditor
-                key={selectedPage.id}
-                page={selectedPage}
-                onSave={(blocks) => savePageContent(selectedPage.id, blocks)}
-              />
-            </>
-          ) : (
-            <p className="text-center text-sm font-bold text-[#768994] py-16 px-4">
-              Pick or create a topic, then a page, to start scribbling.
-            </p>
-          )}
-        </div>
-      </div>
+      {body}
     </CollapsibleCard>
   );
 }
@@ -483,7 +1601,7 @@ const STUDIO_MAP = [
 ];
 // Folder-tree detection (wrikeEnrich) may still return granular names like "Warner"
 // or "Sony" — those are NOT in STUDIO_ORDER so the grouping logic maps them → Others.
-const STUDIO_ORDER = ["Universal", "Paramount", "Others", "Misc"];
+const STUDIO_ORDER = ["Universal", "Paramount", "Others"];
 
 // --- STUDIO COVER ART ---
 const STUDIO_ART = {
@@ -517,18 +1635,538 @@ const parseFormatting = (text) => {
     .replace(/\*(.*?)\*/g, "<em>$1</em>") // Italic
     .replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener noreferrer" style="color: #12a0e1; text-decoration: underline; font-weight: 700;">$1</a>'
+      // A class, not an inline colour: this HTML goes through
+      // dangerouslySetInnerHTML, and an inline style is the one thing the dark
+      // theme's class overrides can't reach. Styled in Timesheeter.css.
+      '<a href="$2" target="_blank" rel="noopener noreferrer" class="rne-note-link">$1</a>'
     ) // Links
     .replace(/\n/g, "<br/>"); // Newlines
   return html;
 };
 
+// ---------------------------------------------------------------------------
+// Reference > Launch Tracker (Print): per-launch-wave market delivery grid.
+// Print coordinates each launch through a Wrike hub task ("*_Launch_Print_
+// Requests" / "*_Launch_Markets") whose subtasks are the per-market requests
+// ("AB3_INTL_Print_Teaser1SHT_Birds_CMYK_KR"). The hub description carries the
+// job-folder paths, OV master links, the shared GD sheet and the per-market
+// packaging checklist — all parsed into notesText by the sync (wrikeEnrich).
+// ---------------------------------------------------------------------------
+
+// Trailing market code from a per-market subtask title. Allows compound codes
+// (NL-ENG, IN-HI) and template placeholders (MARKET).
+const marketFromTitle = (title) => {
+  const m = (title || "").match(/_([A-Za-z]{2,6}(?:-[A-Za-z]{2,4})?)$/);
+  return m ? m[1].toUpperCase() : null;
+};
+
+// Hub titles come straight from Wrike as "ZAL_Print_Launch_Hub" etc — the
+// film-code prefix isn't user-friendly. Replace it with the full film title
+// from FILM_MAPPINGS when one exists; leave non-matching titles untouched.
+const prettifyHubTitle = (rawTitle) => {
+  if (!rawTitle) return "";
+  const parts = rawTitle.split(/_/);
+  const first = parts[0]?.toUpperCase();
+  if (FILM_MAPPINGS[first]) {
+    parts[0] = FILM_MAPPINGS[first];
+    return parts.join(" ");
+  }
+  return rawTitle.replace(/_/g, " ");
+};
+
+// Wrike market codes that aren't ISO 3166 (or aren't a single country at all).
+const MARKET_CODE_FIXUPS = { UK: "GB" };
+const NON_COUNTRY_MARKETS = new Set(["MARKET", "LAS", "CIS", "INT", "INTL", "OV"]);
+const marketFlagEmoji = (code) => {
+  if (!code || NON_COUNTRY_MARKETS.has(code)) return "";
+  const base = MARKET_CODE_FIXUPS[code] || code.split("-")[0];
+  return /^[A-Z]{2}$/.test(base) ? codeToFlag(base) : "";
+};
+
+// Traffic-light bucket for a subtask's workflow status name.
+const launchStatusStyle = (statusName) => {
+  const s = (statusName || "").toLowerCase();
+  if (/(complete|deliver|approved)/.test(s)) return { dot: "bg-[#1baf7a]", chip: "border-[#1baf7a]/30 bg-[#1baf7a]/5" };
+  if (/(hold|defer)/.test(s))                return { dot: "bg-amber-400", chip: "border-amber-300/60 bg-amber-50" };
+  if (/cancel/.test(s))                      return { dot: "bg-slate-300", chip: "border-slate-200 bg-slate-50 opacity-60" };
+  return { dot: "bg-[#12a0e1]", chip: "border-[#12a0e1]/30 bg-[#12a0e1]/5" };
+};
+const isLaunchDone = (statusName) => /(complete|deliver)/i.test(statusName || "");
+
+// Pull the reusable bits out of a hub's parsed description: server paths, the
+// shared Google-Sheet tracker link, and the packaging-checklist tail.
+const parseHubNotes = (notesText) => {
+  const text = notesText || "";
+  const gdLink = (text.match(/https:\/\/docs\.google\.com\/[^\s"']+/) || [])[0] || null;
+  const paths = [...new Set(text.match(/\/Volumes\/[^\s"']+/g) || [])];
+  const ckIdx = text.search(/PACKAGING\s*CHECKLIST/i);
+  const checklist = ckIdx >= 0
+    ? text.slice(ckIdx).split("\n").slice(1).map((l) => l.trim()).filter(Boolean)
+    : [];
+  return { gdLink, paths, checklist };
+};
+
+const wrikeTaskLink = (t) => t.permalink || `https://www.wrike.com/open.htm?id=${t.id}`;
+
+// One chip per MARKET (not per subtask — digital waves carry several requests
+// per market, and a wall of five separate DE chips read as noise). Aggregate
+// status decides the chip's colour; multi-request markets show a done/total
+// fraction and open a popover listing the individual Wrike tasks.
+const aggregateChipStyle = (m) => {
+  if (m.activeCount === 0)      return { chip: "border-slate-200 bg-slate-50 opacity-60", dot: "bg-slate-300" };   // all cancelled
+  if (m.done === m.activeCount) return { chip: "border-[#1baf7a]/30 bg-[#1baf7a]/5",      dot: "bg-[#1baf7a]" };   // delivered
+  if (m.allOnHold)              return { chip: "border-amber-300/60 bg-amber-50",          dot: "bg-amber-400" };   // parked
+  return { chip: "border-[#12a0e1]/30 bg-[#12a0e1]/5", dot: "bg-[#12a0e1]" };                                      // in flight
+};
+
+function MarketChip({ market }) {
+  const [open, setOpen] = useState(false);
+  const style = aggregateChipStyle(market);
+  const flag = marketFlagEmoji(market.code);
+  const label = market.code === "MARKET" ? "Template" : market.code === "OTHER" ? "Other" : market.code;
+  const single = market.items.length === 1;
+
+  const face = (
+    <>
+      {flag ? (
+        <CountryFlag flag={flag} imgClass="w-5 h-[14px]" textClass="text-[11px]" />
+      ) : (
+        <Globe className="w-3.5 h-3.5 text-[#768994]" />
+      )}
+      {label}
+      {!single && (
+        <span className="text-[10px] font-bold text-[#768994] tabular-nums">
+          {market.done}/{market.activeCount || market.items.length}
+        </span>
+      )}
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${style.dot}`} />
+    </>
+  );
+
+  // Single request → chip links straight to its Wrike task, same as before.
+  if (single) {
+    const { task, status } = market.items[0];
+    return (
+      <a
+        href={wrikeTaskLink(task)}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={`${task.title} — ${status}`}
+        className={`flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg border text-[11px] font-black text-[#122027] hover:shadow-sm transition-shadow ${style.chip}`}
+      >
+        {face}
+      </a>
+    );
+  }
+
+  // Several requests behind one market → popover lists each as its own link.
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title={`${market.items.length} requests — click to list`}
+        className={`flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg border text-[11px] font-black text-[#122027] hover:shadow-sm transition-shadow ${style.chip}`}
+      >
+        {face}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          <div className="absolute z-30 top-full left-0 mt-1.5 w-72 max-h-64 overflow-y-auto bg-white border border-[#dce4ec] rounded-xl shadow-xl p-1.5 space-y-0.5">
+            {market.items.map(({ task, status }) => {
+              const s = launchStatusStyle(status);
+              return (
+                <a
+                  key={task.id}
+                  href={wrikeTaskLink(task)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.dot}`} />
+                  <span className="text-[11px] font-semibold text-[#122027] truncate flex-1">{task.title.replace(/_/g, " ")}</span>
+                  <span className="text-[9px] font-bold text-[#768994] uppercase tracking-wide shrink-0">{status}</span>
+                </a>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function LaunchHubCard({ hub, subs }) {
+  const [expanded, setExpanded] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [copiedPath, setCopiedPath] = useState(null);
+  const { gdLink, paths, checklist } = parseHubNotes(hub.notesText);
+
+  // Group subtasks by market code; no-code strays pool into "OTHER" and
+  // template placeholders (_MARKET) keep their own bucket. Alphabetical for
+  // findability, Template and Other pinned last.
+  const byCode = new Map();
+  for (const s of subs) {
+    const code = marketFromTitle(s.title) || "OTHER";
+    if (!byCode.has(code)) byCode.set(code, []);
+    byCode.get(code).push({ task: s, status: s.customStatusName || s.status || "" });
+  }
+  const markets = [...byCode.entries()]
+    .map(([code, items]) => {
+      const cancelled = items.filter((i) => /cancel/i.test(i.status)).length;
+      const activeCount = items.length - cancelled;
+      const done = items.filter((i) => isLaunchDone(i.status)).length;
+      const allOnHold = activeCount > 0 && items.filter((i) => !/cancel/i.test(i.status)).every((i) => /(hold|defer)/i.test(i.status));
+      return { code, items, done, activeCount, allOnHold };
+    })
+    .sort((a, b) => {
+      const rank = (c) => (c === "OTHER" ? 2 : c === "MARKET" ? 1 : 0);
+      return rank(a.code) - rank(b.code) || a.code.localeCompare(b.code);
+    });
+
+  // Header + progress speak in MARKETS (the unit Print thinks in), not raw
+  // request-subtask counts: a market is done when every non-cancelled request
+  // in it is delivered. All-cancelled markets drop out of the denominator.
+  const countable = markets.filter((m) => m.code !== "MARKET" && m.activeCount > 0);
+  const done = countable.filter((m) => m.done === m.activeCount).length;
+  const totalRequests = subs.length;
+  const pct = countable.length > 0 ? Math.round((done / countable.length) * 100) : 0;
+  const allDone = done === countable.length && countable.length > 0;
+  const onHoldCount = markets.filter((m) => m.allOnHold).length;
+  const hasFlags = markets.some((m) => marketFlagEmoji(m.code));
+  const previewFlags = markets.filter((m) => marketFlagEmoji(m.code)).slice(0, 4);
+  const extraFlagCount = markets.filter((m) => marketFlagEmoji(m.code)).length - previewFlags.length;
+
+  const copyPath = (p) => {
+    navigator.clipboard?.writeText(p);
+    setCopiedPath(p);
+    setTimeout(() => setCopiedPath(null), 1500);
+  };
+
+  return (
+    <div
+      className={`group rounded-2xl border bg-white overflow-hidden transition-all duration-200 ${
+        allDone ? "border-[#1baf7a]/30 bg-gradient-to-br from-[#1baf7a]/[0.04] to-white"
+        : onHoldCount === countable.length && countable.length > 0 ? "border-amber-200"
+        : "border-[#dce4ec] hover:border-[#12a0e1]/40 hover:shadow-sm"
+      }`}
+    >
+      {/* Clickable header — collapsed shows everything scannable in one row */}
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className={`w-full flex items-center gap-3 p-3.5 text-left ${expanded ? "pb-3" : ""}`}
+      >
+        {/* Progress ring — replaces the small "done/countable" text */}
+        <span className="relative shrink-0 w-10 h-10 rounded-full flex items-center justify-center">
+          <svg viewBox="0 0 36 36" className="absolute inset-0 w-full h-full -rotate-90">
+            <circle cx="18" cy="18" r="15" fill="none" stroke="#eef1f5" strokeWidth="3.5" />
+            {countable.length > 0 && (
+              <circle
+                cx="18" cy="18" r="15" fill="none" stroke={allDone ? "#1baf7a" : "#c2410d"} strokeWidth="3.5"
+                strokeDasharray={`${(done / countable.length) * 94.25} 94.25`}
+                strokeLinecap="round"
+                className="transition-all duration-500"
+              />
+            )}
+          </svg>
+          <span className={`relative text-[10px] font-black tabular-nums ${allDone ? "text-[#1baf7a]" : "text-[#122027]"}`}>
+            {countable.length > 0 ? `${done}` : "--"}
+          </span>
+        </span>
+
+        <span className="flex-1 min-w-0">
+          {hub.projectName && (
+            <span className="block text-[9px] font-black uppercase tracking-[0.15em] text-[#c2410d] truncate mb-0.5">{hub.projectName}</span>
+          )}
+          <span className="block text-sm font-black text-[#122027] truncate leading-tight">{prettifyHubTitle(hub.title)}</span>
+          <span className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+            <span className="text-[10px] font-bold text-[#768994]">{hub.customStatusName || hub.status}</span>
+            {countable.length > 0 && (
+              <>
+                <span className="text-[#dce4ec]">·</span>
+                <span className={`text-[10px] font-black ${allDone ? "text-[#1baf7a]" : "text-[#122027]"}`}>
+                  {done}/{countable.length} markets
+                </span>
+                {totalRequests > countable.length && (
+                  <span className="text-[10px] font-semibold text-[#94a3b8]">· {totalRequests} requests</span>
+                )}
+              </>
+            )}
+            {onHoldCount > 0 && !allDone && (
+              <span className="text-[10px] font-black text-amber-500">· {onHoldCount} on hold</span>
+            )}
+          </span>
+        </span>
+
+        {/* Compact flag preview — collapses the wall of chips into 4 + "N" */}
+        {!expanded && hasFlags && (
+          <span className="hidden sm:flex items-center -space-x-1.5 shrink-0">
+            {previewFlags.map((m) => {
+              const st = aggregateChipStyle(m);
+              const flag = marketFlagEmoji(m.code);
+              return (
+                <span
+                  key={m.code}
+                  title={`${m.code} — ${m.done}/${m.activeCount} delivered`}
+                  className={`relative w-7 h-5 rounded-md overflow-hidden ring-2 ring-white ${st.dot} flex items-center justify-center`}
+                >
+                  <CountryFlag flag={flag} imgClass="w-full h-full" textClass="text-[9px]" />
+                </span>
+              );
+            })}
+            {extraFlagCount > 0 && (
+              <span className="relative w-7 h-5 rounded-md bg-slate-100 ring-2 ring-white flex items-center justify-center text-[9px] font-black text-[#768994] tabular-nums">
+                +{extraFlagCount}
+              </span>
+            )}
+          </span>
+        )}
+
+        <span className="flex items-center gap-1 shrink-0">
+          <a
+            href={wrikeTaskLink(hub)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title="Open in Wrike"
+            className="p-1.5 rounded-lg text-[#768994] hover:text-[#c2410d] hover:bg-slate-50 transition-colors inline-flex"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+          <ChevronRight className={`w-4 h-4 text-[#768994] transition-transform ${expanded ? "rotate-90" : ""}`} />
+        </span>
+      </button>
+
+      {/* Expanded body — market chips + paths + checklist, slides in */}
+      {expanded && (
+        <div className="px-3.5 pb-3.5 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+          {countable.length > 0 && (
+            <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${allDone ? "bg-[#1baf7a]" : "bg-gradient-to-r from-amber-500 to-orange-600"}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          )}
+
+          {markets.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {markets.map((m) => (
+                <MarketChip key={m.code} market={m} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] font-bold text-[#94a3b8]">No market subtasks synced yet.</p>
+          )}
+
+          {(paths.length > 0 || gdLink || checklist.length > 0) && (
+            <div className="pt-2 border-t border-[#eef1f5]">
+              <div className="flex items-center gap-3">
+                {(paths.length > 0 || checklist.length > 0) && (
+                  <button
+                    onClick={() => setShowDetails((v) => !v)}
+                    className="flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-[#768994] hover:text-[#122027]"
+                  >
+                    <ChevronRight className={`w-3 h-3 transition-transform ${showDetails ? "rotate-90" : ""}`} />
+                    Paths & checklist
+                  </button>
+                )}
+                {gdLink && (
+                  <a
+                    href={gdLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-[#c2410d] hover:text-[#9a3412]"
+                  >
+                    <ExternalLink className="w-3 h-3" /> GD Sheet
+                  </a>
+                )}
+              </div>
+              {showDetails && (
+                <div className="space-y-1.5 pt-2">
+                  {paths.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => copyPath(p)}
+                      title="Copy path"
+                      className="group flex items-center gap-1.5 max-w-full text-left"
+                    >
+                      {copiedPath === p
+                        ? <Check className="w-3 h-3 shrink-0 text-[#1baf7a]" />
+                        : <Copy className="w-3 h-3 shrink-0 text-[#94a3b8] group-hover:text-[#c2410d]" />}
+                      <span className="text-[10px] font-semibold text-[#768994] group-hover:text-[#122027] truncate font-mono">{p}</span>
+                    </button>
+                  ))}
+                  {checklist.length > 0 && (
+                    <ul className="space-y-0.5 pl-1 pt-1">
+                      {checklist.map((line, i) => (
+                        <li key={i} className="text-[11px] font-semibold text-[#4b5c68] leading-snug">{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PrintLaunchTrackerCard({ isOpen, onToggle, hubs, taskById }) {
+  // Hub subtasks that predate the widened sync filter aren't in the cache yet —
+  // hydrate them straight from Wrike for display. Attempted ids are remembered
+  // so tasks Wrike won't return don't trigger a refetch loop.
+  const [extraSubs, setExtraSubs] = useState({});
+  const attemptedRef = useRef(new Set());
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const missing = [];
+    for (const hub of hubs) {
+      for (const id of hub.subTaskIds || []) {
+        if (!taskById.has(id) && !attemptedRef.current.has(id)) {
+          attemptedRef.current.add(id);
+          missing.push(id);
+        }
+      }
+    }
+    if (!missing.length) return;
+    let alive = true;
+    fetchTasksByIds(missing).then((list) => {
+      if (!alive) return;
+      if (!list.length) {
+        // Whole fetch came back empty — a transient failure (rate limit,
+        // expired session), not "these tasks don't exist". Unmark so the
+        // next open/remount retries instead of writing the session off.
+        missing.forEach((id) => attemptedRef.current.delete(id));
+        return;
+      }
+      setExtraSubs((prev) => {
+        const next = { ...prev };
+        list.forEach((t) => { next[t.id] = t; });
+        return next;
+      });
+    });
+    return () => { alive = false; };
+  }, [isOpen, hubs, taskById]);
+
+  // Flat grid, freshest work first. Hubs whose own status is wrapped
+  // (Delivered / Completed / Cancelled) are months-old campaigns — hidden by
+  // default behind a toggle so the tracker opens on what's actually live.
+  // The same bucket catches hubs whose Wrike status hasn't flipped yet but
+  // every market IS delivered — those are work visually complete, just not
+  //yet reflected in Wrike.
+  const [showWrapped, setShowWrapped] = useState(false);
+  const { active, wrapped } = useMemo(() => {
+    const withSubs = hubs
+      .map((hub) => ({
+        hub,
+        subs: (hub.subTaskIds || [])
+          .map((id) => taskById.get(id) || extraSubs[id])
+          .filter(Boolean),
+      }))
+      .sort((a, b) => (b.hub.updatedDate || "").localeCompare(a.hub.updatedDate || ""));
+
+    // Status-rolled-up case: Wrike already says the whole hub is done.
+    const hubStatusWrapped = ({ hub }) =>
+      /(deliver|complete|cancel)/i.test(hub.customStatusName || hub.status || "");
+
+    // A hub is "all-markets-done" when it has ≥1 countable market and every
+    // one of those markets is fully delivered — guards against a null `subs`
+    // or a no-market hub being misclassified as wrapped.
+    const allMarketsDone = ({ subs }) => {
+      if (!subs || subs.length === 0) return false;
+      const byCode = new Map();
+      for (const s of subs) {
+        const code = marketFromTitle(s.title) || "OTHER";
+        (byCode.has(code) ? byCode.get(code) : byCode.set(code, []).get(code)).push(s);
+      }
+      let countable = 0, done = 0;
+      for (const [code, items] of byCode) {
+        if (code === "MARKET") continue;
+        const cancelled = items.filter((i) => /cancel/i.test(i.customStatusName || i.status || "")).length;
+        const activeCount = items.length - cancelled;
+        if (activeCount === 0) continue;
+        countable++;
+        if (items.filter((i) => isLaunchDone(i.customStatusName || i.status || "")).length === activeCount) done++;
+      }
+      return countable > 0 && done === countable;
+    };
+
+    const isWrapped = (h) => hubStatusWrapped(h) || allMarketsDone(h);
+    return {
+      active: withSubs.filter((h) => !isWrapped(h)),
+      wrapped: withSubs.filter(isWrapped),
+    };
+  }, [hubs, taskById, extraSubs]);
+  const visible = showWrapped ? [...active, ...wrapped] : active;
+
+  return (
+    <CollapsibleCard
+      icon={Printer}
+      title="Launch Tracker"
+      subtitle={`Per-market print requests · ${active.length} live`}
+      isOpen={isOpen}
+      onToggle={onToggle}
+    >
+      {hubs.length === 0 ? (
+        <p className="text-center text-sm font-bold text-[#768994] py-16">
+          No launch hubs synced yet — hit Sync to pull Print requests from Wrike.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          {wrapped.length > 0 && (
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowWrapped((v) => !v)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-colors ${
+                  showWrapped
+                    ? "border-[#c2410d]/40 bg-[#c2410d]/5 text-[#c2410d]"
+                    : "border-[#dce4ec] bg-white text-[#768994] hover:text-[#122027]"
+                }`}
+              >
+                <Check className={`w-3 h-3 ${showWrapped ? "" : "opacity-30"}`} />
+                Wrapped · {wrapped.length}
+              </button>
+            </div>
+          )}
+          {visible.length === 0 ? (
+            <p className="text-center text-sm font-bold text-[#768994] py-10">
+              Nothing live right now — {wrapped.length} wrapped launch{wrapped.length === 1 ? "" : "es"} hidden above.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4">
+              {visible.map(({ hub, subs }) => (
+                <LaunchHubCard key={hub.id} hub={hub} subs={subs} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </CollapsibleCard>
+  );
+}
+
 export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], triggerToast: _triggerToast, isLoading = false, syncNow, isSyncing = false, isAdmin = false, scanFilmMappings, isScanning = false, filmCodeMappings = {} }) {
   const triggerToast = _triggerToast ?? ((msg) => console.warn("Toast:", msg));
+  // Same null-falls-back-to-Motion convention used everywhere else
+  // department-gated (see src/lib/departments.js) — an unset profile
+  // department behaves like Motion rather than showing nothing.
+  const department = useDepartment() || "Motion";
   const [campaigns, setCampaigns] = useState(INITIAL_CAMPAIGNS);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMatrix, setSelectedMatrix] = useState(null);
   const [showMappingsPanel, setShowMappingsPanel] = useState(false);
+
+  const FILM_TABLE_COLS = [
+    { key: "code",   label: "Code",      px: 140 },
+    { key: "name",   label: "Film Name", px: 360 },
+    { key: "source", label: "Source",    px: 140 },
+  ];
+  const { widths: filmWidths, resizeHandle: filmHandle } = useColumnResize("canvas-filmmap-cols", FILM_TABLE_COLS);
 
   // --- COMMAND PALETTE STATE ---
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
@@ -536,6 +2174,20 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
 
   // --- ACCORDION ANIMATION & SCROLL STATE ---
   const [expandedCampId, setExpandedCampId] = useState(null);
+
+  // Workspace vs. gallery. Default view is the two-column workspace (Notes +
+  // Which tool is open, or null for none. Canvas hosts several independent
+  // surfaces (campaigns, notes, launch tracker, DOOH specs) and stacking them
+  // all in one scroll meant everything competed at once — the same reason
+  // Management drills down rather than listing every section. Each gets the
+  // full page, one at a time, with the switcher row always on top.
+  //
+  // Opens on Campaigns: the switcher alone over an empty page reads as a
+  // page that failed to load, and the art-wall is what this page is for.
+  const [canvasView, setCanvasView] = useState("campaigns");
+  const [collapsedStudios, setCollapsedStudios] = useState({}); // {studio: true} = folded
+  // Notes "expand" → full page width: hides the campaigns panel + the notes rail.
+  const [notesExpanded, setNotesExpanded] = useState(false);
 
   // --- SIDE PANEL STATE ---
   const [showFoldersPanel, setShowFoldersPanel] = useState(false);
@@ -551,6 +2203,13 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
 
   // --- PINNED CAMPAIGNS ---
   const [pinnedIds, setPinnedIds] = useState([]);
+  // Pinned notes topics (folders) live alongside campaigns on the shelf. Stored
+  // as full folder objects ({id, name, owner_wrike_id, department}) so the shelf
+  // can render + the child NotesCanvasCard can derive its own pinned-state.
+  const [pinnedFolders, setPinnedFolders] = useState([]);
+  // A pinned-topic card click asks the Notes panel to open that folder. Bumped
+  // each click so the child re-focuses even when the same folder is re-clicked.
+  const [focusFolder, setFocusFolder] = useState(null); // { id, n } | null
 
   // --- DOOH SPECS ---
   const [doohCountries, setDoohCountries] = useState([]);
@@ -560,7 +2219,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   const [newCountryName, setNewCountryName] = useState("");
   const [newCountryCode, setNewCountryCode] = useState("");
   const [countrySearch, setCountrySearch] = useState("");
-  const [doohViewMode, setDoohViewMode] = useState(() => localStorage.getItem("dooh_view_mode") || "grid");
+  const [doohViewMode, setDoohViewMode] = useState(() => localStorage.getItem("dooh_view_mode") || "list");
 
   // --- REFERENCE SECTION: collapsible region groups + free-text note cards ---
   const [expandedRegions, setExpandedRegions] = useState(() => {
@@ -579,6 +2238,13 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
     setExpandedRegions(next);
     localStorage.setItem("canvas_reference_expanded", JSON.stringify(next));
   };
+
+  // --- Launch Tracker (Print): hub tasks + id lookup for their subtasks ---
+  const taskById = useMemo(() => new Map(wrikeData.map((t) => [t.id, t])), [wrikeData]);
+  const printLaunchHubs = useMemo(
+    () => wrikeData.filter((t) => t.title && PRINT_HUB_RE.test(t.title)),
+    [wrikeData]
+  );
   const [uploadingCountry, setUploadingCountry] = useState(null);
   const [deletingAssetId, setDeletingAssetId] = useState(null);
   const [deletingCountryId, setDeletingCountryId] = useState(null);
@@ -654,6 +2320,16 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
       // Pinned campaigns
       const { data: pinData } = await supabase.from("canvas_pinned_campaigns").select("campaign_id");
       if (pinData?.length) setPinnedIds(pinData.map((r) => r.campaign_id));
+
+      // Pinned notes topics (folders) — joined with folder detail so the shelf
+      // can render them (name + which board they belong to) without a second
+      // round-trip. Stale pins auto-drop via the FK's ON DELETE CASCADE.
+      const { data: pinNoteData } = await supabase
+        .from("canvas_pinned_notes")
+        .select("folder_id, canvas_notes_folders(id, name, owner_wrike_id, department)");
+      if (pinNoteData?.length) {
+        setPinnedFolders(pinNoteData.map((r) => r.canvas_notes_folders).filter(Boolean));
+      }
 
       // DOOH Specs — countries + their assets
       const { data: countryData } = await supabase
@@ -745,6 +2421,13 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
     const wrikeGroupedCampaigns = {};
 
     wrikeData.forEach((task) => {
+      // The studio gallery is MATRIX-only. wrikeData also carries Print launch
+      // hubs + their per-market subtasks now (for the Launch Tracker card), and
+      // those must NOT be grouped into campaign/studio cards — the Launch
+      // Tracker reads them through its own derivation. Skip anything that isn't
+      // a MATRIX so the gallery keeps showing only the crafted matrices.
+      if (!task.title?.toUpperCase().includes("MATRIX")) return;
+
       let campaignTitle = task.projectName;
 
       // --- BULLETPROOF CAMPAIGN TITLE EXTRACTOR ---
@@ -784,10 +2467,22 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
           matrices: [],
           links: [],
           lastMatrixUpdate: 0,
+          // A campaign is live while any of its MATRIX tasks is still open in
+          // Wrike. Age is the wrong test — three campaigns marked Delivered
+          // were edited today, and a genuinely active one can sit untouched
+          // for a fortnight — so this reads Wrike's own status instead.
+          isLive: false,
           studioHint: task.studioName || null,
         };
       } else if (!wrikeGroupedCampaigns[campaignTitle].studioHint && task.studioName) {
         wrikeGroupedCampaigns[campaignTitle].studioHint = task.studioName;
+      }
+
+      // Wrike's own lifecycle field, not the workflow label: customStatusName
+      // is per-workflow free text ("Delivered", "Motion", "Completed"), while
+      // `status` is the fixed Active/Completed/Deferred/Cancelled underneath.
+      if (task.status !== "Completed" && task.status !== "Cancelled") {
+        wrikeGroupedCampaigns[campaignTitle].isLive = true;
       }
 
       const tableHtml = task.tableHtml || "";
@@ -883,6 +2578,11 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
           if (wrikeCamp.studioHint) {
             updatedList[existingIndex].studioHint = wrikeCamp.studioHint;
           }
+          // Recomputed from this pass, never OR'd with the stored value — a
+          // campaign that has since been delivered has to be able to go back
+          // to not-live, which is the whole point.
+          updatedList[existingIndex].isLive = wrikeCamp.isLive;
+          updatedList[existingIndex].lastMatrixUpdate = wrikeCamp.lastMatrixUpdate;
         } else {
           updatedList.push(wrikeCamp);
         }
@@ -1026,7 +2726,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
         triggerToast("Canvas data copied to clipboard!", "success");
       }
       if (result.id === "action-dark") {
-        document.documentElement.classList.toggle("dark-theme");
+        toggleDarkMode();
       }
       if (result.id === "action-sync") {
         triggerToast("Wrike Sync triggered! (Placeholder)");
@@ -1091,6 +2791,22 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
       await supabase.from("canvas_pinned_campaigns").delete().eq("campaign_id", campId);
     } else {
       await supabase.from("canvas_pinned_campaigns").insert({ campaign_id: campId });
+    }
+  };
+
+  // Pin/unpin a Notes topic (folder). Takes the whole folder object so the
+  // shelf has the detail it needs the moment it's pinned (no refetch). Called
+  // from NotesCanvasCard's topic rows via the onTogglePin prop.
+  const toggleNotePin = async (folder) => {
+    if (!folder?.id) return;
+    const isPinned = pinnedFolders.some((f) => f.id === folder.id);
+    setPinnedFolders((prev) =>
+      isPinned ? prev.filter((f) => f.id !== folder.id) : [...prev, folder]
+    );
+    if (isPinned) {
+      await supabase.from("canvas_pinned_notes").delete().eq("folder_id", folder.id);
+    } else {
+      await supabase.from("canvas_pinned_notes").insert({ folder_id: folder.id });
     }
   };
 
@@ -1448,7 +3164,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 text-[#122027] font-sans selection:bg-[#12a0e1]/30 selection:text-[#122027] pb-12">
+    <div className="min-h-screen bg-slate-100 text-[#122027] font-sans selection:bg-[#c2410d]/30 selection:text-[#122027] pb-12">
       <style>{`
         /* --- SMOOTH ACCORDION ANIMATIONS --- */
         @keyframes accordionOpen {
@@ -1471,8 +3187,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
         .wrike-matrix-render th { background-color: #122027; color: #ffffff; font-weight: 800; padding: 10px 14px; text-align: left; border: 1px solid #dce4ec; text-transform: uppercase; font-size: 11px; tracking: 0.05em; }
         .wrike-matrix-render td { padding: 10px 14px; border: 1px solid #dce4ec; font-weight: 500; color: #323b43; }
         .wrike-matrix-render tr:nth-child(even) { background-color: #f8fafc; }
-        .wrike-matrix-render tr:hover { background-color: #12a0e1/5; }
-        .wrike-matrix-render a { color: #12a0e1; font-weight: 700; text-decoration: underline; }
+        .wrike-matrix-render tr:hover { background-color: #c2410d/5; }
+        .wrike-matrix-render a { color: #c2410d; font-weight: 700; text-decoration: underline; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #dce4ec; border-radius: 10px; }
@@ -1490,7 +3206,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-4 border-b border-[#dce4ec] flex items-center gap-3 bg-slate-50/50">
-              <Search className="w-6 h-6 text-[#12a0e1]" />
+              <Search className="w-6 h-6 text-[#c2410d]" />
               <input
                 autoFocus
                 type="text"
@@ -1559,7 +3275,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                           )}
                         </div>
                         <div>
-                          <h4 className="text-base font-black text-[#122027] group-hover:text-[#12a0e1] tracking-tight transition-colors">
+                          <h4 className="text-base font-black text-[#122027] group-hover:text-[#c2410d] tracking-tight transition-colors">
                             {result.title}
                           </h4>
                           <p
@@ -1576,7 +3292,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                           </p>
                         </div>
                       </div>
-                      <span className="text-[10px] font-black uppercase tracking-widest text-[#768994] bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg group-hover:text-[#12a0e1] group-hover:border-[#12a0e1]/30 group-hover:bg-[#12a0e1]/5 transition-colors flex items-center gap-1.5 shadow-sm">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-[#768994] bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg group-hover:text-[#c2410d] group-hover:border-[#c2410d]/30 group-hover:bg-[#c2410d]/5 transition-colors flex items-center gap-1.5 shadow-sm">
                         {isAction ? "Run" : "Jump"}{" "}
                         <Layout className="w-3.5 h-3.5" />
                       </span>
@@ -1606,7 +3322,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
               {/* Header */}
               <div className="p-5 border-b border-[#dce4ec] flex items-center justify-between bg-slate-50/50 shrink-0">
                 <div className="flex items-center gap-3">
-                  <div className="bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] p-2.5 rounded-xl text-white shadow">
+                  <div className="bg-gradient-to-br from-[#c2410d] to-[#1cc1a5] p-2.5 rounded-xl text-white shadow">
                     <Film className="w-5 h-5" />
                   </div>
                   <div>
@@ -1622,12 +3338,15 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
               </div>
               {/* Table */}
               <div className="overflow-y-auto custom-scrollbar">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm [&_td]:overflow-hidden" style={{ tableLayout: "fixed", minWidth: `${FILM_TABLE_COLS.reduce((s, c) => s + filmWidths[c.key], 0)}px` }}>
+                  <colgroup>
+                    {FILM_TABLE_COLS.map(c => <col key={c.key} style={{ width: filmWidths[c.key] }} />)}
+                  </colgroup>
                   <thead className="sticky top-0 bg-white border-b border-[#dce4ec]">
                     <tr>
-                      <th className="text-left px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase w-28">Code</th>
-                      <th className="text-left px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase">Film Name</th>
-                      <th className="text-right px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase">Source</th>
+                      <th className="relative text-left px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase overflow-hidden">Code{filmHandle("code")}</th>
+                      <th className="relative text-left px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase overflow-hidden">Film Name{filmHandle("name")}</th>
+                      <th className="relative text-right px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase overflow-hidden">Source{filmHandle("source")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1705,11 +3424,11 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
         )}
       </PageHeader>
 
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8">
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-6">
         {/* --- PERFECTLY CENTERED ICON DOCK --- */}
         {isLoading && (
           <div className="flex items-center justify-center gap-2 py-3 text-xs font-bold text-[#768994]">
-            <div className="w-3.5 h-3.5 border-2 border-[#12a0e1] border-t-transparent rounded-full animate-spin" />
+            <div className="w-3.5 h-3.5 border-2 border-[#c2410d] border-t-transparent rounded-full animate-spin" />
             Loading campaigns from cache…
           </div>
         )}
@@ -1731,16 +3450,17 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
 
           const grouped = sortedCampaigns.reduce((acc, camp) => {
             const auto = detectStudio(camp.links);
-            const studio = studioOverrides[camp.id] || auto || camp.studioHint || "Misc";
+            const studio = studioOverrides[camp.id] || auto || camp.studioHint || "Others";
             const section = STUDIO_ORDER.includes(studio) ? studio : "Others";
             if (!acc[section]) acc[section] = [];
             acc[section].push(camp);
             return acc;
           }, {});
 
-          // Others and Misc always show — Others for Sony/Warner/etc., Misc for manual adds
+          // Others always shows — catches Sony/Warner/etc. plus anything unclassified
+          // (manual adds, campaigns with no detectable studio) instead of a separate Misc card.
           const gallerySections = STUDIO_ORDER.filter(
-            (s) => grouped[s]?.length > 0 || s === "Misc" || s === "Others"
+            (s) => grouped[s]?.length > 0 || s === "Others"
           );
 
           // Pinned campaigns (preserve pin order)
@@ -1754,7 +3474,10 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
             const isExpanded = expandedCampId === camp.id;
             const hasMatrix = camp.matrices?.length > 0;
             const updatedTs = camp.lastMatrixUpdate;
-            const isActive = updatedTs && (Date.now() - updatedTs) < 14 * 24 * 60 * 60 * 1000;
+            // Was "edited in the last 14 days", which marked three
+            // delivered campaigns as active because someone touched them
+            // today. isLive comes off Wrike's own status instead.
+            const isActive = camp.isLive;
 
             return (
               <div
@@ -1789,13 +3512,17 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   )}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
                   {isExpanded && (
-                    <div className="absolute inset-0 ring-4 ring-inset ring-[#12a0e1] rounded-2xl pointer-events-none" />
+                    <div className="absolute inset-0 ring-4 ring-inset ring-[#c2410d] rounded-2xl pointer-events-none" />
                   )}
                   {/* Top badges */}
                   <div className="absolute top-2.5 left-2.5 right-2.5 flex justify-between items-start">
-                    {hasMatrix && isActive
-                      ? <span className="w-2 h-2 rounded-full mt-0.5 bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.5)]" />
-                      : <span />}
+                    {hasMatrix && isActive ? (
+                      <span className="w-2 h-2 rounded-full mt-0.5 bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.5)]" />
+                    ) : !isActive ? (
+                      <span className="text-[9px] font-black uppercase tracking-widest bg-black/40 backdrop-blur-sm text-white/70 px-2 py-0.5 rounded-full">
+                        Delivered
+                      </span>
+                    ) : <span />}
                     {updatedTs ? (
                       <span className="text-[10px] font-bold bg-black/40 backdrop-blur-sm text-white/80 px-2 py-0.5 rounded-full">
                         {relativeDate(updatedTs)}
@@ -1804,7 +3531,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   </div>
                   {/* Title */}
                   <div className="absolute bottom-0 left-0 right-0 p-3">
-                    <p className={`text-sm font-black leading-tight text-white drop-shadow transition-colors line-clamp-2 ${isExpanded ? "text-[#12a0e1]" : ""}`}>
+                    <p className={`text-sm font-black leading-tight text-white drop-shadow transition-colors line-clamp-2 ${isExpanded ? "text-[#c2410d]" : ""}`}>
                       {camp.title}
                     </p>
                   </div>
@@ -1813,81 +3540,16 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
             );
           };
 
-          // ============ DETAIL VIEW (a studio is selected) ============
-          if (selectedStudio) {
-            const art = STUDIO_ART[selectedStudio] || STUDIO_ART.Misc;
-            const detailCamps = grouped[selectedStudio] || [];
-            const isMisc = selectedStudio === "Misc";
-
-            return (
-              <div key={`studio-${selectedStudio}`} className="mt-2 py-4 px-6 w-full">
-                {/* Studio banner — uses the same gradient/logo as the gallery card so
-                    the card appears to expand into the header (visual continuity). */}
-                <div
-                  className="relative rounded-3xl overflow-hidden p-6 sm:p-7 mb-8 shadow-md animate-in fade-in slide-in-from-top-4 zoom-in-95 duration-500"
-                  style={{ background: art.gradient }}
-                >
-                  {/* Full-bleed photo for cover-type studios */}
-                  {art.img && art.fit === "cover" && (
-                    <img
-                      src={art.img}
-                      alt=""
-                      onError={(e) => { e.currentTarget.style.display = "none"; }}
-                      className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-                    />
-                  )}
-                  {/* Watermark logo for contain-type studios */}
-                  {art.img && art.fit !== "cover" && (
-                    <img
-                      src={art.img}
-                      alt=""
-                      onError={(e) => { e.currentTarget.style.display = "none"; }}
-                      className="absolute -right-4 top-1/2 -translate-y-1/2 h-[150%] object-contain opacity-15 pointer-events-none"
-                    />
-                  )}
-                  <div className={`absolute inset-0 ${art.fit === "cover" ? "bg-gradient-to-r from-black/65 via-black/30 to-black/10" : "bg-gradient-to-r from-black/35 via-black/10 to-transparent"}`} />
-                  <div className="relative flex justify-between items-start gap-4">
-                    <div>
-                      <button
-                        onClick={() => setSelectedStudio(null)}
-                        className="group/back flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest text-white/70 hover:text-white transition-colors"
-                      >
-                        <span className="text-base leading-none transition-transform group-hover/back:-translate-x-0.5">←</span> All Studios
-                      </button>
-                      <p className="text-3xl sm:text-4xl font-black text-white tracking-tight drop-shadow-md leading-none mt-3">
-                        {selectedStudio}
-                      </p>
-                      <p className="text-[11px] font-bold text-white/70 uppercase tracking-widest mt-2">
-                        {art.label} · {detailCamps.length} {detailCamps.length === 1 ? "campaign" : "campaigns"}
-                      </p>
-                    </div>
-                    {/* New Campaign — only inside Misc */}
-                    {isMisc && (
-                      <button
-                        onClick={() => setIsModalOpen(true)}
-                        className="shrink-0 flex items-center gap-1.5 bg-white/15 hover:bg-white/25 backdrop-blur-md text-white px-4 py-2 rounded-xl font-bold text-xs border border-white/25 transition-colors active:scale-95"
-                      >
-                        <span className="text-base leading-none">+</span> New Campaign
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
-                  {detailCamps.map((camp, i) => renderCampaignCard(camp, i))}
-                </div>
-
-                {detailCamps.length === 0 && (
-                  <p className="text-center text-sm font-bold text-[#768994] py-16">
-                    {isMisc ? "No campaigns here yet — use “+ New Campaign” to add one." : "No campaigns in this studio."}
-                  </p>
-                )}
-              </div>
-            );
-          }
+          // Studio detail used to be a full early-return "page swap" here — it's
+          // now rendered inline inside the gallery view below (right under the
+          // card row) so clicking a studio expands in place instead of hiding
+          // Pinned / DOOH Specs / Reference.
 
           // ============ COUNTRY DETAIL VIEW (a DOOH country is open) ============
-          if (selectedCountry) {
+          // Tied to the DOOH tool being open: this is a full early return, so
+          // an un-cleared country would otherwise render over the hub after
+          // navigating back.
+          if (canvasView === "dooh" && selectedCountry) {
             const country = doohCountries.find((c) => c.id === selectedCountry);
             if (!country) { setSelectedCountry(null); return null; }
             const allAssets = countryAssets[selectedCountry] || [];
@@ -1969,7 +3631,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       <button
                         onClick={() => countryFileInputRef.current?.click()}
                         disabled={isUploading}
-                        className="flex items-center gap-2 bg-[#12a0e1] hover:bg-[#0f88c0] disabled:opacity-60 text-white px-4 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest border border-white/10 transition-colors active:scale-95 shadow-md"
+                        className="flex items-center gap-2 bg-[#c2410d] hover:bg-[#9a3412] disabled:opacity-60 text-white px-4 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest border border-white/10 transition-colors active:scale-95 shadow-md"
                       >
                         {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                         {isUploading ? "Uploading…" : "Add files"}
@@ -2012,7 +3674,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   const label = currentFolderId ? "Source" : "Country path";
                   return (
                     <div className="mb-6 flex items-center gap-2 bg-white border border-[#dce4ec] rounded-2xl px-4 py-2.5 shadow-sm">
-                      <Link2 className="w-4 h-4 text-[#12a0e1] shrink-0" />
+                      <Link2 className="w-4 h-4 text-[#c2410d] shrink-0" />
                       <span className="text-[10px] font-black text-[#768994] uppercase tracking-widest shrink-0">{label}</span>
                       {editing ? (
                         <>
@@ -2022,9 +3684,9 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                             onChange={(e) => setEditSourceText(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") handleSaveSource(editSourceText); if (e.key === "Escape") setEditingSourceFolderId(null); }}
                             placeholder="/Volumes/… or https://drive.google.com/…"
-                            className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-[#dce4ec] focus:border-[#12a0e1] outline-none text-sm font-medium text-[#122027]"
+                            className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-[#dce4ec] focus:border-[#c2410d] outline-none text-sm font-medium text-[#122027]"
                           />
-                          <button onClick={() => handleSaveSource(editSourceText)} className="p-1.5 bg-[#12a0e1] hover:bg-[#0f88c0] text-white rounded-lg transition-colors shrink-0"><Check className="w-4 h-4" /></button>
+                          <button onClick={() => handleSaveSource(editSourceText)} className="p-1.5 bg-[#c2410d] hover:bg-[#9a3412] text-white rounded-lg transition-colors shrink-0"><Check className="w-4 h-4" /></button>
                           <button onClick={() => setEditingSourceFolderId(null)} className="p-1.5 bg-slate-100 hover:bg-slate-200 text-[#122027] rounded-lg transition-colors shrink-0"><X className="w-4 h-4" /></button>
                         </>
                       ) : (
@@ -2035,15 +3697,15 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                           {src && (
                             <button
                               onClick={() => { navigator.clipboard?.writeText(src); triggerToast("Source path copied", "success"); }}
-                              title="Copy" className="p-1.5 text-[#768994] hover:text-[#12a0e1] hover:bg-slate-50 rounded-lg transition-colors shrink-0"
+                              title="Copy" className="p-1.5 text-[#768994] hover:text-[#c2410d] hover:bg-slate-50 rounded-lg transition-colors shrink-0"
                             ><Copy className="w-4 h-4" /></button>
                           )}
                           {src && isUrl && (
-                            <a href={src} target="_blank" rel="noopener noreferrer" title="Open" className="p-1.5 text-[#768994] hover:text-[#12a0e1] hover:bg-slate-50 rounded-lg transition-colors shrink-0"><ExternalLink className="w-4 h-4" /></a>
+                            <a href={src} target="_blank" rel="noopener noreferrer" title="Open" className="p-1.5 text-[#768994] hover:text-[#c2410d] hover:bg-slate-50 rounded-lg transition-colors shrink-0"><ExternalLink className="w-4 h-4" /></a>
                           )}
                           <button
                             onClick={() => { setEditSourceText(src); setEditingSourceFolderId(node.id); }}
-                            title={src ? "Edit" : "Add source path"} className="p-1.5 text-[#768994] hover:text-[#12a0e1] hover:bg-slate-50 rounded-lg transition-colors shrink-0"
+                            title={src ? "Edit" : "Add source path"} className="p-1.5 text-[#768994] hover:text-[#c2410d] hover:bg-slate-50 rounded-lg transition-colors shrink-0"
                           ><Edit2 className="w-4 h-4" /></button>
                         </>
                       )}
@@ -2062,7 +3724,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                         <div key={f.id} className="group relative">
                           <button
                             onClick={() => setCurrentFolderId(f.id)}
-                            className="w-full flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3.5 shadow-sm hover:border-[#12a0e1]/50 hover:shadow transition-all text-left"
+                            className="w-full flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3.5 shadow-sm hover:border-[#c2410d]/50 hover:shadow transition-all text-left"
                           >
                             <div className="shrink-0 w-10 h-10 rounded-xl bg-amber-100 text-amber-500 flex items-center justify-center">
                               <Folder className="w-5 h-5 fill-current" />
@@ -2092,8 +3754,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     <p className="text-sm font-black">This folder is empty</p>
                     <p className="text-xs">Use “New folder” to organise sites, or “Add files” to upload specs</p>
                     <div className="flex items-center gap-2 mt-2">
-                      <button onClick={() => { setNewFolderName(""); setIsAddFolderOpen(true); }} className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-[#dce4ec] hover:border-[#12a0e1] hover:text-[#12a0e1] text-xs font-black uppercase tracking-widest transition-colors"><FolderPlus className="w-4 h-4" /> New folder</button>
-                      <button onClick={() => countryFileInputRef.current?.click()} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#12a0e1] hover:bg-[#0f88c0] text-white text-xs font-black uppercase tracking-widest transition-colors"><Upload className="w-4 h-4" /> Add files</button>
+                      <button onClick={() => { setNewFolderName(""); setIsAddFolderOpen(true); }} className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-[#dce4ec] hover:border-[#c2410d] hover:text-[#c2410d] text-xs font-black uppercase tracking-widest transition-colors"><FolderPlus className="w-4 h-4" /> New folder</button>
+                      <button onClick={() => countryFileInputRef.current?.click()} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#c2410d] hover:bg-[#9a3412] text-white text-xs font-black uppercase tracking-widest transition-colors"><Upload className="w-4 h-4" /> Add files</button>
                     </div>
                   </div>
                 )}
@@ -2135,9 +3797,9 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {docs.map((asset) => (
-                        <div key={asset.id} className="group relative flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3 shadow-sm hover:border-[#12a0e1]/40 hover:shadow transition-all">
+                        <div key={asset.id} className="group relative flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3 shadow-sm hover:border-[#c2410d]/40 hover:shadow transition-all">
                           <button type="button" onClick={() => openPreview(asset, previewable)} className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer">
-                            <div className="shrink-0 w-10 h-10 rounded-xl bg-[#12a0e1]/10 text-[#12a0e1] flex items-center justify-center">
+                            <div className="shrink-0 w-10 h-10 rounded-xl bg-[#c2410d]/10 text-[#c2410d] flex items-center justify-center">
                               <FileText className="w-5 h-5" />
                             </div>
                             <div className="min-w-0">
@@ -2163,10 +3825,205 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
           }
 
           // ============ GALLERY VIEW (studio cards) ============
+          // Only the department's own tools are offered — Launch Tracker is
+          // Print's, DOOH Specs is Motion's — so the hub never shows a tile
+          // that opens onto nothing.
+          // Counted, not assumed: the tile used to read "18 live" because it
+          // showed every campaign ever cached. Only two of those are actually
+          // open in Wrike.
+          const liveCount = campaigns.filter((c) => c.isLive).length;
+          const canvasTools = [
+            { id: "campaigns", icon: Film,     label: "Campaigns",  desc: "Every campaign, by studio", count: liveCount === campaigns.length ? `${campaigns.length} live` : `${liveCount} live · ${campaigns.length - liveCount} delivered` },
+            { id: "notes",     icon: Folder,   label: "Notes Canvas", desc: `${department} team board · personal spaces`, count: null },
+            ...(department === "Print"  ? [{ id: "launch", icon: Printer, label: "Launch Tracker", desc: "Per-market print requests", count: `${printLaunchHubs.length} live` }] : []),
+            ...(department === "Motion" ? [{ id: "dooh",   icon: Globe,   label: "DOOH Specs", desc: "Screen specs by country", count: `${doohCountries.length} countries` }] : []),
+            // End of Campaign Notes has no tile: it lives at the foot of Notes
+            // Canvas, where the team is already writing things down for each
+            // other. Behind its own tile it read as one more admin surface
+            // nobody opened.
+          ];
+
           return (
             <div key="studio-gallery" className="mt-2 py-4 px-6 w-full">
+              {/* ============ TOOL SWITCHER ============ */}
+              {/* The tiles stay put and the page under them changes, rather
+                  than the row being replaced by whatever you picked. Clicking
+                  the open tool closes it again, so the row doubles as the way
+                  back — no separate breadcrumb to hunt for. */}
+              <section className="mb-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {canvasTools.map(({ id, icon: Icon, label, desc, count }) => {
+                    const active = canvasView === id;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => { setCanvasView(active ? null : id); setSelectedCountry(null); }}
+                        aria-expanded={active}
+                        className={`group text-left rounded-3xl border p-5 transition-all active:scale-[0.99] ${
+                          active
+                            ? "border-[#c2410d] bg-white shadow-md ring-2 ring-[#c2410d]/15"
+                            : "border-[#dce4ec] bg-white shadow-sm hover:shadow-md hover:border-[#c2410d]/40"
+                        }`}
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className={`shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
+                            active
+                              ? `bg-gradient-to-br ${CANVAS_GRADIENT} shadow-md scale-105`
+                              : `bg-gradient-to-br ${CANVAS_GRADIENT} shadow-sm opacity-90 group-hover:opacity-100`
+                          }`}>
+                            <Icon className="w-6 h-6 text-white" strokeWidth={1.75} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h3 className={`text-sm font-black transition-colors ${active ? "text-[#c2410d]" : "text-[#122027] group-hover:text-[#c2410d]"}`}>{label}</h3>
+                            <p className="text-[11px] font-medium text-[#768994] mt-0.5 leading-snug">{desc}</p>
+                            {count && (
+                              <p className="text-[10px] font-black uppercase tracking-widest text-[#c2410d] mt-2">{count}</p>
+                            )}
+                          </div>
+                          {/* Points right when closed, down when open — the
+                              chevron says where the content is. */}
+                          <ChevronRight
+                            className={`w-4 h-4 shrink-0 mt-1 transition-all duration-300 ${
+                              active ? "rotate-90 text-[#c2410d]" : "text-[#c2d0da] group-hover:text-[#c2410d] group-hover:translate-x-0.5"
+                            }`}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* ============ PINNED SHELF (top) — horizontal quick-access cards ============ */}
+              {/* Stays on the hub: pins are the shortcut past the tool grid. */}
+              {canvasView === null && (pinnedCamps.length > 0 || pinnedFolders.length > 0) && (
+                <section className="mb-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  <div className="flex items-center justify-between gap-2.5 mb-3 px-1">
+                    <p className="text-[11px] font-black text-[#768994] uppercase tracking-widest">Pinned</p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {pinnedCamps.map((camp) => {
+                      const cover = covers[camp.id] || CAMPAIGN_COVERS[camp.id];
+                      const ts = camp.lastMatrixUpdate;
+                      const isActive = ts && (Date.now() - ts) < 14 * 24 * 60 * 60 * 1000;
+                      const auto = detectStudio(camp.links);
+                      const studio = studioOverrides[camp.id] || auto || camp.studioHint || "Others";
+                      const assetCount = camp.links?.length || 0;
+                      return (
+                        <button
+                          key={`pin-${camp.id}`}
+                          onClick={() => handleToggleCamp(camp.id)}
+                          className="group/pin relative text-left rounded-2xl border border-[#dce4ec] bg-white p-3.5 hover:border-[#c2410d]/40 hover:shadow-md transition-all"
+                        >
+                          <span
+                            onClick={(e) => { e.stopPropagation(); togglePin(camp.id); }}
+                            title="Unpin"
+                            className="absolute top-2.5 right-2.5 p-1 rounded-lg text-amber-500 hover:bg-amber-50 transition-colors"
+                          >
+                            <Pin className="w-3.5 h-3.5 fill-current" />
+                          </span>
+                          <div className="flex items-center gap-3">
+                            <span
+                              className="relative w-10 h-10 rounded-xl overflow-hidden shrink-0 shadow-sm flex items-center justify-center"
+                              style={{ background: cover ? "#122027" : generateGradient(camp.title) }}
+                            >
+                              {cover ? (
+                                <img src={cover} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <Film className="w-4 h-4 text-white/50" />
+                              )}
+                            </span>
+                            <div className="min-w-0 pr-5">
+                              <p className="text-[9px] font-black uppercase tracking-widest text-[#94a3b8] truncate">{studio} · Campaign</p>
+                              <p className="text-sm font-black text-[#122027] truncate leading-tight mt-0.5">{camp.title}</p>
+                            </div>
+                          </div>
+                          <p className="flex items-center gap-1.5 text-[10px] font-bold text-[#768994] mt-2.5">
+                            {isActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />}
+                            {isActive ? "Live" : relativeDate(ts) || "No matrix"}
+                            {assetCount > 0 && <span className="text-[#c2d0da]">· {assetCount} asset{assetCount === 1 ? "" : "s"}</span>}
+                          </p>
+                        </button>
+                      );
+                    })}
+
+                    {/* Pinned Notes topics — sit alongside campaigns on the shelf.
+                        Clicking opens the topic in the Notes panel (focusFolder). */}
+                    {pinnedFolders.map((folder) => {
+                      const me = localStorage.getItem("wrike_user_id");
+                      const eyebrow = !folder.owner_wrike_id
+                        ? `${boardLabelFor(folder.department || department)} · Topic`
+                        : folder.owner_wrike_id === me
+                          ? "My Space · Topic"
+                          : "Shared · Topic";
+                      return (
+                        <button
+                          key={`pin-folder-${folder.id}`}
+                          onClick={() => setFocusFolder({ id: folder.id, n: Date.now() })}
+                          className="group/pin relative text-left rounded-2xl border border-[#dce4ec] bg-white p-3.5 hover:border-indigo-400/50 hover:shadow-md transition-all"
+                        >
+                          <span
+                            onClick={(e) => { e.stopPropagation(); toggleNotePin(folder); }}
+                            title="Unpin topic"
+                            className="absolute top-2.5 right-2.5 p-1 rounded-lg text-amber-500 hover:bg-amber-50 transition-colors"
+                          >
+                            <Pin className="w-3.5 h-3.5 fill-current" />
+                          </span>
+                          <div className="flex items-center gap-3">
+                            <span className="relative w-10 h-10 rounded-xl shrink-0 shadow-sm flex items-center justify-center bg-gradient-to-br from-indigo-500 to-slate-700">
+                              <FileText className="w-4 h-4 text-white/80" />
+                            </span>
+                            <div className="min-w-0 pr-5">
+                              <p className="text-[9px] font-black uppercase tracking-widest text-[#94a3b8] truncate">{eyebrow}</p>
+                              <p className="text-sm font-black text-[#122027] truncate leading-tight mt-0.5">{folder.name}</p>
+                            </div>
+                          </div>
+                          <p className="flex items-center gap-1.5 text-[10px] font-bold text-[#768994] mt-2.5">
+                            Open in Notes Canvas
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
+              {/* ============ NOTES + CAMPAIGN LIST ============ */}
+              {/* These used to sit side by side, each at half attention. They're
+                  now separate tools, so whichever is open takes the full width. */}
+              {/* Keyed on the open tool: switching remounts this panel so its
+                  entrance animation runs again. The switcher above never
+                  remounts, so the row itself stays perfectly still. */}
+              <div key={canvasView || "hub"} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+              {canvasView === "notes" && (
+                <div className="grid grid-cols-1 gap-6 mb-10 items-start">
+                  {(
+                  <div className="min-w-0">
+                    <NotesCanvasCard
+                      isOpen
+                      onToggle={undefined}
+                      department={department}
+                      pinnedFolderIds={pinnedFolders.map((f) => f.id)}
+                      onTogglePin={toggleNotePin}
+                      focusFolder={focusFolder}
+                      editorExpanded={notesExpanded}
+                      onToggleEditorExpanded={() => setNotesExpanded((v) => !v)}
+                    />
+                  </div>
+                  )}
+
+                </div>
+              )}
+
+              {/* ============ GALLERY — the studio art-wall ============ */}
+              {/* The only campaigns view. There used to be a compact list here
+                  too, with the gallery behind a "Browse gallery" button — two
+                  ways to see the same campaigns, and the art-wall is the one
+                  worth having on a page called Canvas. */}
+              {canvasView === "campaigns" && (
+              <>
               <div className="flex items-center gap-2.5 mb-4 px-1">
-                <div className="w-9 h-9 rounded-xl bg-[#12a0e1]/10 text-[#12a0e1] flex items-center justify-center shadow-sm">
+                <div className="w-9 h-9 rounded-xl bg-[#c2410d]/10 text-[#c2410d] flex items-center justify-center shadow-sm">
                   <Film className="w-5 h-5" />
                 </div>
                 <div>
@@ -2174,19 +4031,26 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   <p className="text-[11px] font-bold text-[#768994] uppercase tracking-widest mt-1">Campaign libraries</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-5">
+              {/* Fixed-size flex row, not a grid — with only a handful of studios,
+                  a wide grid reserves empty tracks that read as an accidental
+                  gap on the right. Cards flex to fill the row evenly (capped so
+                  they don't balloon on ultra-wide screens) with a fixed height
+                  rather than aspect-square, so stretching the width doesn't also
+                  stretch the height into something oversized. */}
+              <div className="flex flex-wrap justify-center gap-5">
                 {gallerySections.map((section, i) => {
                   const art = STUDIO_ART[section] || STUDIO_ART.Misc;
                   const count = grouped[section]?.length || 0;
+                  const isSelected = selectedStudio === section;
                   return (
                     <div
                       key={section}
-                      className="animate-in fade-in slide-in-from-bottom-4 zoom-in-95"
+                      className="flex-1 min-w-[280px] animate-in fade-in slide-in-from-bottom-4 zoom-in-95"
                       style={{ animationDelay: `${i * 60}ms`, animationFillMode: "both" }}
                     >
                     <button
-                      onClick={() => setSelectedStudio(section)}
-                      className="group relative w-full rounded-3xl overflow-hidden aspect-[5/6] sm:aspect-[4/5] shadow-md hover:shadow-2xl hover:-translate-y-1.5 outline-none [filter:saturate(0.4)_brightness(0.9)] hover:[filter:saturate(1.08)_brightness(1.05)]"
+                      onClick={() => setSelectedStudio((prev) => (prev === section ? null : section))}
+                      className={`group relative w-full rounded-3xl overflow-hidden h-64 sm:h-80 xl:h-96 shadow-md hover:shadow-2xl hover:-translate-y-1.5 outline-none [filter:saturate(0.4)_brightness(0.9)] hover:[filter:saturate(1.08)_brightness(1.05)] ${isSelected ? "ring-4 ring-[#c2410d]/50 [filter:saturate(1.08)_brightness(1.05)]" : ""}`}
                       style={{ background: art.gradient, transition: "filter 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1), box-shadow 0.6s cubic-bezier(0.16,1,0.3,1)" }}
                     >
                       {/* Studio art (best-effort; hides itself on load failure) */}
@@ -2203,26 +4067,23 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                           src={art.img}
                           alt={art.label}
                           onError={(e) => { e.currentTarget.style.display = "none"; }}
-                          className="absolute left-1/2 top-[44%] -translate-x-1/2 -translate-y-1/2 max-h-[38%] max-w-[64%] object-contain drop-shadow-lg transition-transform duration-500 ease-out group-hover:scale-110 group-hover:-translate-y-[55%]"
+                          className="absolute left-1/2 top-[44%] -translate-x-1/2 -translate-y-1/2 max-h-[34%] max-w-[60%] object-contain drop-shadow-lg transition-transform duration-500 ease-out group-hover:scale-110 group-hover:-translate-y-[55%]"
                         />
                       )}
                       {/* Legibility veil — stronger for cover photos */}
                       <div className={`absolute inset-0 ${art.fit === "cover" ? "bg-gradient-to-t from-black/80 via-black/25 to-black/20" : "bg-gradient-to-t from-black/60 via-black/5 to-black/10"}`} />
                       {/* Count */}
-                      <span className="absolute top-3.5 right-3.5 text-[11px] font-black bg-white/15 backdrop-blur-md text-white px-2.5 py-1 rounded-full border border-white/25 transition-transform duration-300 group-hover:scale-105">
+                      <span className="absolute top-3 right-3 text-[11px] font-black bg-white/15 backdrop-blur-md text-white px-2.5 py-1 rounded-full border border-white/25 transition-transform duration-300 group-hover:scale-105">
                         {count}
                       </span>
                       {/* Wordmark */}
-                      <div className="absolute bottom-0 left-0 right-0 p-5 text-left transition-transform duration-300 group-hover:-translate-y-1">
-                        <p className="text-xl font-black text-white tracking-tight drop-shadow-md leading-none">
+                      <div className="absolute bottom-0 left-0 right-0 p-5 sm:p-6 text-left transition-transform duration-300 group-hover:-translate-y-1">
+                        <p className="text-xl sm:text-2xl font-black text-white tracking-tight drop-shadow-md leading-none truncate">
                           {section}
                         </p>
-                        <p className="text-[11px] font-bold text-white/75 uppercase tracking-widest mt-1.5">
+                        <p className="text-[11px] font-bold text-white/75 uppercase tracking-widest mt-2 truncate">
                           {art.label}
                         </p>
-                        <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-white/0 group-hover:text-white/80 transition-colors duration-300 mt-2">
-                          View campaigns <span className="transition-transform group-hover:translate-x-0.5">→</span>
-                        </span>
                       </div>
                     </button>
                     </div>
@@ -2230,68 +4091,84 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 })}
               </div>
 
-              {/* ============ PINNED CAMPAIGNS ============ */}
-              {pinnedCamps.length > 0 && (
-                <section className="mt-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="flex items-center gap-2.5 mb-4 px-1">
-                    <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-sm">
-                      <Pin className="w-5 h-5 fill-current" />
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-black text-[#122027] tracking-tight leading-none">Pinned</h2>
-                      <p className="text-[11px] font-bold text-[#768994] uppercase tracking-widest mt-1">Quick access · {pinnedCamps.length}</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                    {pinnedCamps.map((camp, i) => (
-                      <div key={`pin-${camp.id}`} className="relative group/pin">
-                        {renderCampaignCard(camp, i)}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); togglePin(camp.id); }}
-                          title="Unpin"
-                          className="absolute top-2.5 left-2.5 z-20 p-1.5 rounded-lg bg-amber-400/95 hover:bg-amber-400 text-[#122027] shadow opacity-0 group-hover/pin:opacity-100 transition-opacity backdrop-blur-sm"
-                        >
-                          <Pin className="w-3.5 h-3.5 fill-current" />
-                        </button>
+              {/* Studio detail — expands in place below the cards instead of
+                  replacing the page, so Pinned / DOOH Specs / Reference stay
+                  put and a second click on the same card collapses it again. */}
+              <AnimatePresence initial={false}>
+                {selectedStudio && (() => {
+                  const detailCamps = grouped[selectedStudio] || [];
+                  return (
+                    <motion.div
+                      key={`studio-detail-${selectedStudio}`}
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+                      className="overflow-hidden"
+                    >
+                      {/* No repeat header here — the selected card above already
+                          shows the studio name/count and gets a ring highlight,
+                          so this just drops straight into its campaigns. */}
+                      <div className="mt-6">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+                          {detailCamps.map((camp, i) => renderCampaignCard(camp, i))}
+                        </div>
+
+                        {detailCamps.length === 0 && (
+                          <p className="text-center text-sm font-bold text-[#768994] py-16">
+                            No campaigns in this studio.
+                          </p>
+                        )}
                       </div>
-                    ))}
-                  </div>
-                </section>
+                    </motion.div>
+                  );
+                })()}
+              </AnimatePresence>
+              </>
               )}
 
+              {/* ============ LAUNCH TRACKER (PRINT) ============ */}
+              {/* Each reference surface is now a tool of its own, reached from
+                  the hub, so it opens expanded — there's nothing to collapse it
+                  against. */}
+              {canvasView === "launch" && department === "Print" && (
+                <PrintLaunchTrackerCard
+                  isOpen
+                  onToggle={undefined}
+                  hubs={printLaunchHubs}
+                  taskById={taskById}
+                />
+              )}
               {/* ============ DOOH SPECS ============ */}
-              <div className="mt-12 mb-8 flex items-center gap-4" aria-hidden="true">
-                <div className="h-px flex-1 bg-gradient-to-r from-transparent via-[#cdd7e1] to-[#cdd7e1]" />
-                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#94a3b8]">Reference</span>
-                <div className="h-px flex-1 bg-gradient-to-l from-transparent via-[#cdd7e1] to-[#cdd7e1]" />
-              </div>
-              <section className="rounded-3xl bg-white/60 border border-[#dce4ec] shadow-sm p-5 sm:p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex flex-wrap items-center gap-3 mb-5 px-1">
-                  <div className="w-9 h-9 rounded-xl bg-[#12a0e1]/10 text-[#12a0e1] flex items-center justify-center shadow-sm shrink-0">
-                    <Globe className="w-5 h-5" />
-                  </div>
-                  <div className="mr-auto">
-                    <h2 className="text-lg font-black text-[#122027] tracking-tight leading-none">DOOH Specs</h2>
-                    <p className="text-[11px] font-bold text-[#768994] uppercase tracking-widest mt-1">Screen specs by country · {doohCountries.length}</p>
-                  </div>
+              {/* DOOH specs are Motion-specific (out-of-home media specs) —
+                  other departments get different content here later. */}
+              {canvasView === "dooh" && department === "Motion" && (
+              <CollapsibleCard
+                icon={Globe}
+                title="DOOH Specs"
+                subtitle={`Screen specs by country · ${doohCountries.length}`}
+                isOpen
+                onToggle={undefined}
+              >
+                <div className="flex flex-wrap items-center gap-3 mb-5">
                   <div className="relative">
                     <Search className="w-4 h-4 text-[#768994] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
                       value={countrySearch}
                       onChange={(e) => setCountrySearch(e.target.value)}
                       placeholder="Search country…"
-                      className="w-44 sm:w-56 pl-9 pr-3 py-2 rounded-xl border border-[#dce4ec] focus:border-[#12a0e1] outline-none text-sm font-semibold text-[#122027] bg-white"
+                      className="w-44 sm:w-56 pl-9 pr-3 py-2 rounded-xl border border-[#dce4ec] focus:border-[#c2410d] outline-none text-sm font-semibold text-[#122027] bg-white"
                     />
                   </div>
                   <div className="flex items-center bg-white border border-[#dce4ec] rounded-xl p-0.5">
-                    <button onClick={() => setViewMode("grid")} title="Grid view" className={`p-1.5 rounded-lg transition-colors ${doohViewMode === "grid" ? "bg-[#12a0e1] text-white" : "text-[#768994] hover:text-[#122027]"}`}><LayoutGrid className="w-4 h-4" /></button>
-                    <button onClick={() => setViewMode("list")} title="List view" className={`p-1.5 rounded-lg transition-colors ${doohViewMode === "list" ? "bg-[#12a0e1] text-white" : "text-[#768994] hover:text-[#122027]"}`}><List className="w-4 h-4" /></button>
+                    <button onClick={() => setViewMode("grid")} title="Grid view" className={`p-1.5 rounded-lg transition-colors ${doohViewMode === "grid" ? "bg-[#c2410d] text-white" : "text-[#768994] hover:text-[#122027]"}`}><LayoutGrid className="w-4 h-4" /></button>
+                    <button onClick={() => setViewMode("list")} title="List view" className={`p-1.5 rounded-lg transition-colors ${doohViewMode === "list" ? "bg-[#c2410d] text-white" : "text-[#768994] hover:text-[#122027]"}`}><List className="w-4 h-4" /></button>
                   </div>
-                  <button onClick={() => setIsAddCountryOpen(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#12a0e1] hover:bg-[#0f88c0] text-white text-xs font-black uppercase tracking-widest transition-colors active:scale-95">
+                  <button onClick={() => setIsAddCountryOpen(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#c2410d] hover:bg-[#9a3412] text-white text-xs font-black uppercase tracking-widest transition-colors active:scale-95">
                     <Plus className="w-4 h-4" /> Add
                   </button>
                   <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                    <button onClick={() => setAllRegionsExpanded(true)} className="text-[10px] font-black uppercase tracking-widest text-[#12a0e1] hover:text-[#0f88c0] px-1">Expand all</button>
+                    <button onClick={() => setAllRegionsExpanded(true)} className="text-[10px] font-black uppercase tracking-widest text-[#c2410d] hover:text-[#9a3412] px-1">Expand all</button>
                     <span className="text-[#dce4ec]">·</span>
                     <button onClick={() => setAllRegionsExpanded(false)} className="text-[10px] font-black uppercase tracking-widest text-[#768994] hover:text-[#122027] px-1">Collapse all</button>
                   </div>
@@ -2325,7 +4202,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   const Row = (country) => {
                     const count = countryCount(country.id);
                     return (
-                      <div key={country.id} className="flex items-center gap-3 bg-white border border-[#dce4ec] rounded-xl pl-2.5 pr-2 py-2 shadow-sm hover:border-[#12a0e1]/40 hover:shadow transition-all">
+                      <div key={country.id} className="flex items-center gap-3 bg-white border border-[#dce4ec] rounded-xl pl-2.5 pr-2 py-2 shadow-sm hover:border-[#c2410d]/40 hover:shadow transition-all">
                         <button onClick={(e) => { e.stopPropagation(); togglePinCountry(country); }} title={country.pinned ? "Unpin" : "Pin"} className={`shrink-0 p-1 rounded-lg transition-colors ${country.pinned ? "text-amber-400" : "text-slate-300 hover:text-amber-400"}`}>
                           <Star className={`w-4 h-4 ${country.pinned ? "fill-current" : ""}`} />
                         </button>
@@ -2367,7 +4244,9 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       {REGION_ORDER.map((region) => {
                         const items = unpinned.filter((c) => regionOf(c.name) === region);
                         if (items.length === 0) return null;
-                        const isOpen = q ? true : !!expandedRegions[region];
+                        // Europe starts expanded by default; every other region
+                        // (and Europe itself, once toggled) respects the saved state.
+                        const isOpen = q ? true : (region === "Europe" ? expandedRegions[region] ?? true : !!expandedRegions[region]);
                         return (
                           <div key={region}>
                             <div role="button" tabIndex={0} onClick={() => toggleRegion(region)}
@@ -2384,18 +4263,13 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     </div>
                   );
                 })()}
-              </section>
+              </CollapsibleCard>
+              )}
 
-              <div className="mt-6 space-y-6">
-                <EndOfCampaignNotesCard
-                  isOpen={expandedRegions["eocNotes"] ?? true}
-                  onToggle={() => toggleRegion("eocNotes")}
-                  campaigns={campaigns}
-                />
-                <NotesCanvasCard
-                  isOpen={expandedRegions["notesCanvas"] ?? true}
-                  onToggle={() => toggleRegion("notesCanvas")}
-                />
+              {/* Sits at the foot of Notes Canvas — see canvasTools. */}
+              {canvasView === "notes" && !notesExpanded && (
+                <EndOfCampaignNotesCard campaigns={campaigns} department={department} />
+              )}
               </div>
             </div>
           );
@@ -2491,18 +4365,18 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                               className="px-2 py-1 bg-white/10 hover:bg-white/20 rounded-md transition-colors text-[9px] flex items-center gap-1 border border-white/10"
                               title="Change studio"
                             >
-                              <Film className="w-3 h-3" /> {studioOverrides[activeCamp.id] || detectStudio(activeCamp.links) || activeCamp.studioHint || "Misc"}
+                              <Film className="w-3 h-3" /> {studioOverrides[activeCamp.id] || detectStudio(activeCamp.links) || activeCamp.studioHint || "Others"}
                             </button>
                             {studioPickerCampId === activeCamp.id && (
                               <div className="absolute top-full left-0 mt-1.5 bg-white rounded-2xl shadow-2xl border border-[#dce4ec] py-1.5 z-[9999] min-w-[140px] animate-in zoom-in-95 duration-100">
                                 {STUDIO_ORDER.map((s) => {
-                                  const cur = studioOverrides[activeCamp.id] || detectStudio(activeCamp.links) || activeCamp.studioHint || "Misc";
+                                  const cur = studioOverrides[activeCamp.id] || detectStudio(activeCamp.links) || activeCamp.studioHint || "Others";
                                   return (
                                     <button
                                       key={s}
                                       onClick={(e) => { e.stopPropagation(); handleSetStudio(activeCamp.id, s); }}
                                       className={`w-full text-left px-3 py-1.5 text-xs font-bold normal-case tracking-normal transition-colors ${
-                                        cur === s ? "bg-[#12a0e1]/10 text-[#12a0e1]" : "text-[#122027] hover:bg-slate-50"
+                                        cur === s ? "bg-[#c2410d]/10 text-[#c2410d]" : "text-[#122027] hover:bg-slate-50"
                                       }`}
                                     >
                                       {s}
@@ -2544,7 +4418,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0 transition-all duration-500">
                     <div className="flex justify-between items-center mb-5 pb-4 border-b border-slate-100 shrink-0">
                       <h4 className="text-sm font-black text-[#122027] flex items-center gap-2">
-                        <FileText className="w-5 h-5 text-[#12a0e1]" /> Notes &
+                        <FileText className="w-5 h-5 text-[#c2410d]" /> Notes &
                         Context
                       </h4>
                       <div className="flex items-center gap-2 pr-2">
@@ -2552,8 +4426,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                           onClick={() => setShowFoldersPanel((prev) => !prev)}
                           className={`px-4 py-2 rounded-xl transition-colors flex items-center gap-2 text-xs font-bold border ${
                             showFoldersPanel
-                              ? "bg-indigo-100 text-indigo-700 border-indigo-200"
-                              : "text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border-indigo-100"
+                              ? "bg-[#c2410d]/10 text-[#c2410d] border-[#c2410d]/20"
+                              : "text-[#c2410d] bg-[#c2410d]/5 hover:bg-[#c2410d]/10 border-[#c2410d]/10"
                           }`}
                         >
                           <Folder className="w-4 h-4" />{" "}
@@ -2564,7 +4438,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                             setAddingNoteCampId(activeCamp.id);
                             setNewNoteText("");
                           }}
-                          className="text-white bg-[#12a0e1] hover:bg-[#0f88c0] px-4 py-2 rounded-xl transition-colors flex items-center gap-2 text-xs font-bold shadow-sm"
+                          className="text-white bg-[#c2410d] hover:bg-[#9a3412] px-4 py-2 rounded-xl transition-colors flex items-center gap-2 text-xs font-bold shadow-sm"
                         >
                           <Plus className="w-4 h-4" /> Add Note
                         </button>
@@ -2694,7 +4568,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                   onClick={() =>
                                     startEditing(activeCamp.id, note, note.text)
                                   }
-                                  className="p-2 text-[#768994] hover:text-[#12a0e1] hover:bg-slate-50 rounded-lg transition-colors"
+                                  className="p-2 text-[#768994] hover:text-[#c2410d] hover:bg-slate-50 rounded-lg transition-colors"
                                 >
                                   <Edit2 className="w-4 h-4" />
                                 </button>
@@ -2772,7 +4646,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                             <div className="flex flex-col gap-2 shrink-0">
                               <button
                                 onClick={() => handleAddNote(activeCamp.id)}
-                                className="p-2 bg-[#12a0e1] text-white hover:bg-[#0f88c0] rounded-xl transition-colors shadow-sm"
+                                className="p-2 bg-[#c2410d] text-white hover:bg-[#9a3412] rounded-xl transition-colors shadow-sm"
                               >
                                 <Check className="w-4 h-4" />
                               </button>
@@ -2984,7 +4858,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                         !activeCamp.matrices || activeCamp.matrices.length === 0
                       }
                       onClick={() => setSelectedMatrix(activeCamp.matrices[0])}
-                      className="flex-1 flex items-center justify-center gap-2 bg-[#12a0e1] hover:bg-[#0f88c0] text-white py-4 rounded-2xl text-sm font-black uppercase tracking-widest transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
+                      className="flex-1 flex items-center justify-center gap-2 bg-[#c2410d] hover:bg-[#9a3412] text-white py-4 rounded-2xl text-sm font-black uppercase tracking-widest transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
                     >
                       <FileText className="w-5 h-5" /> View Asset Matrix
                     </button>
@@ -3036,8 +4910,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
             <div className="bg-white rounded-[24px] shadow-2xl w-full max-w-md overflow-hidden border border-[#dce4ec] animate-in zoom-in-95 duration-200">
               <div className="p-6 border-b border-[#dce4ec] flex justify-between items-center bg-slate-50/50">
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2 bg-[#12a0e1]/10 rounded-lg">
-                    <Layout className="w-4 h-4 text-[#12a0e1]" />
+                  <div className="p-2 bg-[#c2410d]/10 rounded-lg">
+                    <Layout className="w-4 h-4 text-[#c2410d]" />
                   </div>
                   <h3 className="text-lg font-black text-[#122027] tracking-tight">
                     Add New Item
@@ -3059,7 +4933,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     autoFocus
                     value={newCampaignTitle}
                     onChange={(e) => setNewCampaignTitle(e.target.value)}
-                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 text-sm font-medium text-[#122027] focus:outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 transition-all placeholder:text-slate-400"
+                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 text-sm font-medium text-[#122027] focus:outline-none focus:border-[#c2410d] focus:ring-2 focus:ring-[#c2410d]/20 transition-all placeholder:text-slate-400"
                     placeholder="e.g., Scary Movie 6..."
                   />
                 </div>
@@ -3070,7 +4944,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   <input
                     value={newCampaignLink}
                     onChange={(e) => setNewCampaignLink(e.target.value)}
-                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 text-sm font-medium text-[#122027] focus:outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 transition-all placeholder:text-slate-400"
+                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 text-sm font-medium text-[#122027] focus:outline-none focus:border-[#c2410d] focus:ring-2 focus:ring-[#c2410d]/20 transition-all placeholder:text-slate-400"
                     placeholder="Paste Wrike URL here..."
                   />
                 </div>
@@ -3084,7 +4958,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 </button>
                 <button
                   onClick={handleSaveNewCampaign}
-                  className="px-6 py-2.5 bg-[#12a0e1] hover:bg-[#0f88c0] text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md hover:shadow-[#12a0e1]/20 transition-all active:scale-95"
+                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md hover:shadow-[#c2410d]/20 transition-all active:scale-95"
                 >
                   Save Campaign
                 </button>
@@ -3116,7 +4990,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     onChange={(e) => setNewCountryName(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") handleAddCountry(); }}
                     placeholder="e.g. United Kingdom"
-                    className="mt-1.5 w-full px-4 py-2.5 rounded-xl border border-[#dce4ec] focus:border-[#12a0e1] outline-none text-sm font-bold text-[#122027]"
+                    className="mt-1.5 w-full px-4 py-2.5 rounded-xl border border-[#dce4ec] focus:border-[#c2410d] outline-none text-sm font-bold text-[#122027]"
                   />
                 </div>
                 <div>
@@ -3127,7 +5001,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     onKeyDown={(e) => { if (e.key === "Enter") handleAddCountry(); }}
                     placeholder="GB"
                     maxLength={2}
-                    className="mt-1.5 w-full px-4 py-2.5 rounded-xl border border-[#dce4ec] focus:border-[#12a0e1] outline-none text-sm font-bold text-[#122027] uppercase"
+                    className="mt-1.5 w-full px-4 py-2.5 rounded-xl border border-[#dce4ec] focus:border-[#c2410d] outline-none text-sm font-bold text-[#122027] uppercase"
                   />
                 </div>
               </div>
@@ -3141,7 +5015,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 <button
                   onClick={handleAddCountry}
                   disabled={!newCountryName.trim()}
-                  className="px-6 py-2.5 bg-[#12a0e1] hover:bg-[#0f88c0] disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md transition-all active:scale-95"
+                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md transition-all active:scale-95"
                 >
                   Add Country
                 </button>
@@ -3179,7 +5053,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   onChange={(e) => setNewFolderName(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAddFolder(); if (e.key === "Escape") setIsAddFolderOpen(false); }}
                   placeholder="e.g. LAGOH, Specs, Render Examples"
-                  className="mt-1.5 w-full px-4 py-2.5 rounded-xl border border-[#dce4ec] focus:border-[#12a0e1] outline-none text-sm font-bold text-[#122027]"
+                  className="mt-1.5 w-full px-4 py-2.5 rounded-xl border border-[#dce4ec] focus:border-[#c2410d] outline-none text-sm font-bold text-[#122027]"
                 />
               </div>
               <div className="px-6 sm:px-7 pb-6 flex justify-end gap-2">
@@ -3192,7 +5066,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 <button
                   onClick={handleAddFolder}
                   disabled={!newFolderName.trim()}
-                  className="px-6 py-2.5 bg-[#12a0e1] hover:bg-[#0f88c0] disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md transition-all active:scale-95"
+                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md transition-all active:scale-95"
                 >
                   Create Folder
                 </button>

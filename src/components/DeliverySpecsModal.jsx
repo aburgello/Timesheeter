@@ -1,5 +1,5 @@
 import React from "react";
-import { X, FileSpreadsheet, Monitor, Ruler, Clock, Volume2, HardDrive, Zap, Film } from "lucide-react";
+import { X, FileSpreadsheet, Monitor, Ruler, Clock, Volume2, HardDrive, Zap, Film, Download } from "lucide-react";
 
 const COL_META = [
   { key: "mediaSiteName", label: "Media Site",                      icon: Monitor },
@@ -17,7 +17,7 @@ function activeColumns(rows) {
   return COL_META.filter((col) => rows.some((r) => r[col.key]?.trim()));
 }
 
-export default function DeliverySpecsModal({ specs, pdfName, onClose }) {
+export default function DeliverySpecsModal({ specs, pdfName, onClose, onExportCsv }) {
   if (!specs) return null;
 
   const cols = activeColumns(specs);
@@ -40,15 +40,26 @@ export default function DeliverySpecsModal({ specs, pdfName, onClose }) {
             <p className="text-xs font-black uppercase tracking-widest text-[#12a0e1]">Delivery Checklist</p>
             <p className="text-[11px] text-slate-400 font-medium truncate">{pdfName}</p>
           </div>
-          <span className="ml-auto text-[10px] font-bold text-slate-400 shrink-0">
-            {specs.length} {specs.length === 1 ? "format" : "formats"}
-          </span>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="ml-auto flex items-center gap-3 shrink-0">
+            <span className="text-[10px] font-bold text-slate-400">
+              {specs.length} {specs.length === 1 ? "format" : "formats"}
+            </span>
+            {onExportCsv && (
+              <button
+                onClick={onExportCsv}
+                title="Reshape into a batch-delivery CSV (Artwork/Campaign/Size/Duration/Country) — same export the task modal's attachments use"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest transition-colors shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" /> Export CSV
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Table */}

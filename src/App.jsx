@@ -33,19 +33,24 @@ import {
 } from "lucide-react";
 import "./Timesheeter.css";
 import Rail from "./components/shared/Rail";
-import ThemeToggle from "./components/shared/ThemeToggle";
+import QuickActions from "./components/shared/QuickActions";
+import AppErrorBoundary from "./components/shared/AppErrorBoundary";
 import ToastHost from "./components/shared/ToastHost";
 import ConfirmHost from "./components/shared/ConfirmHost";
 import DepartmentPreviewBanner from "./components/shared/DepartmentPreviewBanner";
 import { notify } from "./lib/toast";
 import { confirmAction } from "./lib/confirm";
+import { toggleDarkMode } from "./lib/theme";
 import Home from "./components/Home";
 import { useWrikeCache } from "./hooks/useWrikeCache";
+import { PRINT_HUB_RE } from "./lib/wrikeEnrich";
 import { PAGES, pagesFor, boardLabelFor } from "./lib/departments";
 import { useDepartment } from "./hooks/useDepartment";
 import { MANAGEMENT_IDS } from "./lib/access";
 import { setWrikeUserId } from "./lib/supabaseClient";
 import { startWrikeOAuth } from "./lib/wrikeApi";
+import { warmCountryFields } from "./lib/countryField";
+import { loadCountryAliases } from "./lib/countryAliases";
 
 // ── Route-level code splitting ───────────────────────────────────────────────
 // Every page except Home is its own chunk, so first paint only carries the
@@ -72,6 +77,18 @@ const Profile = lazy(PAGE_LOADERS.profile);
 const Management = lazy(PAGE_LOADERS.management);
 const JobBook = lazy(PAGE_LOADERS.jobbook);
 const AdminModal = lazy(() => import("./components/AdminModal"));
+// Lazy — NotesModal pulls in the whole Canvas module (NotesCanvasCard) and the
+// TipTap editor, none of which belong in the always-loaded app entry chunk.
+const NotesModal = lazy(() => import("./components/shared/NotesModal"));
+const DeliverySpecsModal = lazy(() => import("./components/DeliverySpecsModal"));
+// CsvPreviewModal is a named export of the (heavy) TaskDetailModal module —
+// lazy-load it so the bubble's Scan-PDF → Export-CSV path doesn't pull TipTap
+// et al. into the entry chunk.
+const CsvPreviewModal = lazy(() =>
+  import("./components/TaskDetailModal").then((m) => ({
+    default: m.CsvPreviewModal,
+  }))
+);
 
 // Suspense fallback for a still-downloading page chunk. The spinner fades in
 // after a beat (CSS delay) so the common case — chunk already prefetched,
@@ -127,6 +144,12 @@ export default function App() {
   // so the overlay lifts and reveals the settled destination.
   const [washGradient, setWashGradient] = useState(null);
   const [profileSection, setProfileSection] = useState(null);
+  // Quick-actions overlays (bottom-right bubble): the Notes Canvas modal, and
+  // ad-hoc PDF delivery-spec scanning. Both render over whatever page is up.
+  const [notesModalOpen, setNotesModalOpen] = useState(false);
+  const [pdfSpecs, setPdfSpecs] = useState(null);
+  const [pdfName, setPdfName] = useState("");
+  const [csvOpen, setCsvOpen] = useState(false);
   const [hasToken, setHasToken] = useState(
     () => !!localStorage.getItem("wrike_user_id")
   );
@@ -161,6 +184,16 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("home-page", activePage === "home");
   }, [activePage]);
+
+  // Which custom field names a market, discovered once per session. Warmed here
+  // rather than per-page because the readers are synchronous and live in two
+  // different components (the Tracker's guessFieldsFromTask and Legacy's), and
+  // both are pinned or neither is. Costs one /customfields call; failing it is
+  // survivable — see lib/countryField.js.
+  useEffect(() => {
+    warmCountryFields();
+    loadCountryAliases();
+  }, []);
 
   // Reset scroll on page swap — AnimatePresence swaps the content but the
   // window scroll survives it, so navigating from deep in one page would
@@ -242,6 +275,23 @@ export default function App() {
   // palette's nav entries; Home and the Rail read the same registry).
   const department = useDepartment();
 
+  // pageFromHash validates against every page that EXISTS, not against the ones
+  // this member has — so a bookmark or a back-button entry for #timesheet would
+  // still render the Tracker for a department that no longer lists it.
+  //
+  // Kept narrow on purpose: a blanket "not in your department's pages → home"
+  // would also lock admins out of #management, which they reach without it
+  // being in any department list. And it waits for `department`, which is
+  // undefined until profiles loads — bouncing on that would send Motion home
+  // mid-load. Declared here rather than up with the other page effects because
+  // it reads `department`, which is a const above only from this line down.
+  useEffect(() => {
+    if (department && department !== "Motion" && activePage === "timesheet") {
+      window.location.hash = "";
+      setActivePage("home");
+    }
+  }, [department, activePage]);
+
   // Warm this member's page chunks once the browser is idle, so the first
   // click on a Home row resolves from cache instead of hitting the network
   // mid-transition. import() dedupes, so re-runs (department resolving from
@@ -273,14 +323,48 @@ export default function App() {
     []
   );
 
-  // Only MATRIX tasks go to the Canvas
-  const filteredData = useMemo(
-    () =>
-      globalWrikeData.filter((task) =>
-        task.title?.toUpperCase().includes("MATRIX")
-      ),
-    [globalWrikeData]
-  );
+  // Ad-hoc PDF delivery-spec scan from the quick-actions bubble. Same parser +
+  // checklist UI the task modal and Profile use, but reachable from any page.
+  // The parser (and its heavy pdfjs dependency) is imported dynamically so it
+  // only loads the first time someone actually scans, never at app start.
+  // Nothing is uploaded or stored — the PDF is parsed in-browser and discarded.
+  const scanPdf = useCallback(async (file) => {
+    if (!file) return;
+    setPdfName(file.name);
+    setCsvOpen(false);
+    notify("Reading PDF…", "info");
+    try {
+      const { parsePdfDeliverySpecs } = await import("./utils/pdfTableParser");
+      const specs = await parsePdfDeliverySpecs(file);
+      if (specs?.length) setPdfSpecs(specs);
+      else notify("No spec table found in that PDF.", "error");
+    } catch (e) {
+      console.error(e);
+      notify("Couldn't read that PDF.", "error");
+    }
+  }, []);
+
+  // Only Canvas-relevant tasks go to the Canvas: MATRIX tasks (the campaign
+  // gallery) plus Print launch hubs + their per-market request subtasks (the
+  // Print Launch Tracker tab). Hub subtasks are included BY MEMBERSHIP, not
+  // just by title — digital/online launch waves' per-market subtasks carry no
+  // "_Print_" marker, so a title-only filter starved the Launch Tracker of
+  // exactly those hubs' markets ("No market subtasks synced yet") even though
+  // the cache layer (sync/webhook/backfill, which already use this membership
+  // rule) had every one of them loaded in memory.
+  const filteredData = useMemo(() => {
+    const hubSubIds = new Set(
+      globalWrikeData
+        .filter((t) => t.title && PRINT_HUB_RE.test(t.title))
+        .flatMap((t) => t.subTaskIds || [])
+    );
+    return globalWrikeData.filter(
+      (task) =>
+        task.title?.toUpperCase().includes("MATRIX") ||
+        (task.title && PRINT_HUB_RE.test(task.title)) ||
+        hubSubIds.has(task.id)
+    );
+  }, [globalWrikeData]);
 
   // --- Global command palette ---
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
@@ -437,7 +521,7 @@ export default function App() {
       setActivePage(action.id.replace("nav-", ""));
       closePalette();
     } else if (action.id === "action-dark") {
-      document.documentElement.classList.toggle("dark-theme");
+      toggleDarkMode();
       closePalette();
     } else if (action.id === "action-copy-ts") {
       const data = localStorage.getItem("xyi_timesheet_tasks_v5");
@@ -580,8 +664,10 @@ export default function App() {
       )}
 
       {/* ── 5:30pm reminder ───────────────────────────────────────────────── */}
+      {/* Sits above the quick-actions bubble rather than on top of it — this
+          corner is the bubble's home, and the reminder is the transient guest. */}
       {showReminder && (
-        <div className="fixed bottom-6 right-6 z-[9998] w-80 bg-white border border-[#dce4ec] rounded-2xl shadow-xl overflow-hidden">
+        <div className="fixed bottom-24 right-6 z-[9998] w-80 bg-white border border-[#dce4ec] rounded-2xl shadow-xl overflow-hidden">
           <div className="h-1 bg-gradient-to-r from-amber-400 to-orange-400" />
           <div className="p-4">
             <div className="flex items-start gap-3">
@@ -784,7 +870,50 @@ export default function App() {
         </div>
       )}
 
-      <ThemeToggle />
+      {/* Shortcut bubble — bottom-right. Dark mode used to float here as its
+          own button; it now lives in Profile → Settings (which this bubble
+          links straight to), so the corner carries one affordance instead of
+          two stacked in the same spot. */}
+      <QuickActions
+        activePage={activePage}
+        department={department}
+        onNavigate={(page, section) => {
+          setProfileSection(section ?? null);
+          setActivePage(page);
+        }}
+        onOpenNotes={() => setNotesModalOpen(true)}
+        onScanPdf={scanPdf}
+      />
+
+      {/* Quick-actions overlays. Both are lazy, so their code (and pdfjs /
+          the TipTap editor) only downloads when first opened. */}
+      <Suspense fallback={null}>
+        {notesModalOpen && (
+          <NotesModal
+            department={department}
+            onClose={() => setNotesModalOpen(false)}
+            onOpenFull={() => {
+              setNotesModalOpen(false);
+              setActivePage("canvas");
+            }}
+          />
+        )}
+        {pdfSpecs && (
+          <DeliverySpecsModal
+            specs={pdfSpecs}
+            pdfName={pdfName}
+            onClose={() => setPdfSpecs(null)}
+            onExportCsv={() => setCsvOpen(true)}
+          />
+        )}
+        {csvOpen && pdfSpecs && (
+          <CsvPreviewModal
+            rawSpecs={pdfSpecs}
+            pdfName={pdfName}
+            onClose={() => setCsvOpen(false)}
+          />
+        )}
+      </Suspense>
 
       <ToastHost />
 
@@ -836,6 +965,12 @@ export default function App() {
             exit="exit"
             className={activePage === "home" ? "" : "pl-20"}
           >
+            {/* The boundary sits around the page content, not the whole app,
+                so a page that throws leaves the Rail mounted and navigable —
+                a white screen with the reason only in the console is the
+                alternative, and that's what used to happen. Keyed on
+                activePage so navigating away clears a caught error. */}
+            <AppErrorBoundary resetKey={activePage} onGoHome={() => setActivePage("home")}>
             {/* Suspense sits INSIDE the motion.div: a still-loading chunk
                 suspends to the quiet PageLoading fallback within the entrance
                 animation, instead of unmounting the AnimatePresence tree. */}
@@ -901,6 +1036,7 @@ export default function App() {
             )}
             {activePage === "jobbook" && <JobBook />}
             </Suspense>
+            </AppErrorBoundary>
           </motion.div>
         )}
       </AnimatePresence>
