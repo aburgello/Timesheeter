@@ -612,7 +612,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
             value={search}
             onChange={e => { setSearch(e.target.value); setLetter(null); }}
             placeholder={`Search ${label.toLowerCase()}…`}
-            className="w-full pl-9 pr-8 py-2 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white"
+            className="w-full pl-9 pr-8 py-2.5 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white placeholder-[#b0bec5] transition-colors"
           />
           {search && (
             <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
@@ -624,7 +624,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {/* Sort toggle */}
         <button
           onClick={() => setSort(s => s === "asc" ? "desc" : "asc")}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-[#768994] bg-white border border-[#dce4ec] rounded-xl hover:border-slate-300 hover:text-[#122027] transition-all shrink-0"
+          className="flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-[#768994] bg-white border border-[#dce4ec] rounded-xl hover:border-slate-300 hover:text-[#122027] transition-all shrink-0"
           title={sort === "asc" ? "Sorted A → Z" : "Sorted Z → A"}
         >
           {sort === "asc"
@@ -636,7 +636,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {/* Seed button (only when table is empty) */}
         {seedArr && items.length === 0 && !loading && (
           <button onClick={() => seedData(seedArr)} disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition-all shrink-0 disabled:opacity-50">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition-all shrink-0 disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${saving ? "animate-spin" : ""}`} />
             Seed ({seedArr.length})
           </button>
@@ -646,17 +646,25 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {wrikeFilmSync && (
           <button onClick={() => setShowFilmSync(true)}
             title="Pull film projects from a studio folder in Wrike into this list"
-            className="flex items-center gap-1.5 px-3 py-2 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-xs font-bold rounded-xl transition-all shrink-0">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-xs font-bold rounded-xl transition-all shrink-0">
             <Download className="w-3.5 h-3.5" /> Sync from Wrike
           </button>
         )}
 
-        {/* Add */}
+        {/* Add — the primary action on every one of these lists, so it carries
+            real weight: wider, a size up, and the only control here that lifts
+            on hover. It previously sat at the same px-3 py-2 text-xs as the
+            sort toggle, leaving colour to do all the work of signalling
+            "this is the thing you came to do" (and nothing at all for anyone
+            who can't separate the blue from the grey). */}
         <button onClick={() => setAdding(a => !a)}
-          className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl transition-all shrink-0 ${
-            adding ? "bg-slate-100 text-[#768994] border border-[#dce4ec]" : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white"
+          className={`flex items-center gap-1.5 px-5 py-2.5 text-sm font-bold rounded-xl shrink-0
+                      transition-[transform,box-shadow,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            adding
+              ? "bg-slate-100 text-[#768994] border border-[#dce4ec]"
+              : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-sm hover:shadow-[0_6px_16px_-6px_rgba(18,160,225,0.7)] hover:-translate-y-px"
           }`}>
-          <Plus className="w-3.5 h-3.5" /> Add
+          <Plus className="w-4 h-4" /> Add
         </button>
       </div>
 
@@ -778,13 +786,15 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
 
       {/* ── Item rendering ── */}
       {loading ? (
-        <div className="flex items-center justify-center py-16 gap-2 text-[#768994]">
-          <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
+        <div className="flex items-center justify-center py-20 gap-2.5 text-[#768994]">
+          <RefreshCw className="w-4 h-4 animate-spin text-[#12a0e1]" />
+          <span className="text-sm font-bold">Loading…</span>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-2 text-[#768994]">
-          <Search className="w-8 h-8 opacity-20" />
-          <p className="text-sm font-medium">No {label.toLowerCase()} found</p>
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-[#768994]">
+          <Search className="w-9 h-9 opacity-20" />
+          <p className="font-display text-base font-bold text-[#122027]">No {label.toLowerCase()} found</p>
+          <p className="text-xs">Try a different search, or clear the filters above.</p>
         </div>
       ) : groups.length > 0 ? (
         /* ── Grouped mode (first-match-wins) ── */
@@ -811,7 +821,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                     {/* Editable, collapsible group header */}
                     <div role="button" tabIndex={0} onClick={() => toggleGroup(group.label)}
                       onKeyDown={e => { if (e.key === "Enter" || e.key === " ") toggleGroup(group.label); }}
-                      className={`flex items-center gap-2.5 mb-3 px-3 py-2 rounded-xl border cursor-pointer select-none ${group.color}`}>
+                      className={`flex items-center gap-2.5 mb-3 px-3.5 py-2.5 rounded-xl border cursor-pointer select-none transition-colors ${group.color}`}>
                       {editingGrp === group.label ? (
                         <>
                           <input autoFocus value={editingGrpVal} onClick={e => e.stopPropagation()}
@@ -828,8 +838,8 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                       ) : (
                         <>
                           <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-                          <span className="text-[11px] font-black uppercase tracking-widest">{displayLabel}</span>
-                          <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-black/10">{groupItems.length}</span>
+                          <span className="text-xs font-black uppercase tracking-[0.14em]">{displayLabel}</span>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-black/10 tabular-nums">{groupItems.length}</span>
                           <button onClick={e => { e.stopPropagation(); setEditingGrp(group.label); setEditingGrpVal(displayLabel); }}
                             className="ml-auto p-1 rounded hover:bg-black/10 opacity-40 hover:opacity-100 transition-opacity">
                             <Pencil className="w-2.5 h-2.5" />
@@ -838,15 +848,18 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                       )}
                     </div>
                     {!isOpen ? null : (<>
-                    <div className={isLong ? "space-y-1.5" : "grid grid-cols-2 xl:grid-cols-3 gap-2"}>
+                    <div className={isLong ? "space-y-2" : "grid grid-cols-2 xl:grid-cols-3 gap-2.5"}>
                       {visibleItems.map(item => {
                         const text        = item[labelField] || "";
                         const displayText = group.stripPrefix ? text.replace(group.stripPrefix, "") : text;
                         const isEditing   = editId === item.id;
                         return (
                           <div key={item.id}
-                            className={`group/item flex items-center gap-2.5 px-3 py-2.5 bg-white border rounded-xl hover:shadow-sm transition-all ${
-                              isEditing ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15" : "border-[#dce4ec] hover:border-slate-300"
+                            className={`group/item flex items-center gap-2.5 px-3.5 py-3 bg-white border rounded-xl
+                                        transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                              isEditing
+                                ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15"
+                                : "border-[#dce4ec] hover:border-slate-300 hover:-translate-y-px hover:shadow-[0_6px_18px_-8px_rgba(18,32,39,0.18)]"
                             }`}>
                             {isEditing ? (
                               <>
@@ -864,7 +877,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                               </>
                             ) : (
                               <>
-                                <span className={`flex-1 min-w-0 text-xs font-medium text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>{displayText}</span>
+                                <span className={`flex-1 min-w-0 text-sm font-semibold text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>{displayText}</span>
                                 <div className="flex items-center gap-0.5 opacity-0 group-hover/item:opacity-100 transition-opacity shrink-0">
                                   <button onClick={() => { setEditId(item.id); setEditVal(text); }}
                                     className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-[#122027]">
@@ -896,7 +909,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         })()
       ) : (
         /* ── Flat mode ── */
-        <div className={isLong ? "space-y-1.5" : "grid grid-cols-2 xl:grid-cols-3 gap-2"}>
+        <div className={isLong ? "space-y-2" : "grid grid-cols-2 xl:grid-cols-3 gap-2.5"}>
           {paginated.map(item => {
             const text   = item[labelField] || "";
             const first  = text.charAt(0).toUpperCase() || "?";
@@ -904,11 +917,14 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
             const isEditing = editId === item.id;
             return (
               <div key={item.id}
-                className={`group flex items-center gap-3 p-3 bg-white border rounded-2xl hover:shadow-sm transition-all ${
-                  isEditing ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15" : "border-[#dce4ec] hover:border-slate-300"
+                className={`group flex items-center gap-3 p-3.5 bg-white border rounded-2xl
+                            transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  isEditing
+                    ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15"
+                    : "border-[#dce4ec] hover:border-slate-300 hover:-translate-y-px hover:shadow-[0_6px_18px_-8px_rgba(18,32,39,0.18)]"
                 }`}>
                 {!isEditing && (
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-[11px] font-black border ${avatarCls} ${borderCls}`}>
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-display text-xs font-black border ${avatarCls} ${borderCls}`}>
                     {first}
                   </div>
                 )}
@@ -932,12 +948,12 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                       <button
                         onClick={() => onItemClick(text)}
                         title={`Open “${text}”`}
-                        className={`flex-1 min-w-0 text-left text-sm font-medium text-[#122027] hover:text-[#12a0e1] transition-colors ${isLong ? "leading-snug" : "truncate"}`}
+                        className={`flex-1 min-w-0 text-left text-[15px] font-semibold text-[#122027] hover:text-[#12a0e1] transition-colors ${isLong ? "leading-snug" : "truncate"}`}
                       >
                         {text}
                       </button>
                     ) : (
-                      <span className={`flex-1 min-w-0 text-sm font-medium text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>
+                      <span className={`flex-1 min-w-0 text-[15px] font-semibold text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>
                         {text}
                       </span>
                     )}
