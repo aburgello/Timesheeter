@@ -991,12 +991,12 @@ function OverviewSection({
                       {a.label}
                     </p>
                     {a.live && (
-                      <span className="text-[9px] font-black text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
+                      <span className="text-[10px] font-black text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
                         Live timer
                       </span>
                     )}
                     {!a.live && a.pending && (
-                      <span className="text-[9px] font-black text-orange-600 bg-orange-50 border border-orange-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
+                      <span className="text-[10px] font-black text-orange-600 bg-orange-50 border border-orange-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
                         Not pulled
                       </span>
                     )}
@@ -1735,7 +1735,7 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
               <div className="font-display text-2xl sm:text-3xl font-bold text-white leading-none">
                 {value}
               </div>
-              <div className="text-[9px] font-black text-white/70 uppercase tracking-widest mt-1">
+              <div className="text-[10px] font-black text-white/70 uppercase tracking-widest mt-1">
                 {label}
               </div>
             </div>

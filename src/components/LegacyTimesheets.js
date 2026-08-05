@@ -2355,17 +2355,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                             >
                                               {label}
                                               {isOverdue && (
-                                                <span className="text-[9px] font-black uppercase tracking-wider text-rose-500">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-rose-500">
                                                   overdue
                                                 </span>
                                               )}
                                               {isToday && (
-                                                <span className="text-[9px] font-black uppercase tracking-wider text-amber-500">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-amber-500">
                                                   today
                                                 </span>
                                               )}
                                               {isTomorrow && (
-                                                <span className="text-[9px] font-black uppercase tracking-wider text-yellow-500">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-yellow-500">
                                                   tmrw
                                                 </span>
                                               )}
@@ -2521,7 +2521,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             >
               <Layers className="w-3.5 h-3.5" />
               Consolidated
-              <span className={`ml-0.5 text-[9px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-400"}`}>
+              <span className={`ml-0.5 text-[10px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-600"}`}>
                 {consolidatedView ? "ON" : "OFF"}
               </span>
             </button>
@@ -2621,7 +2621,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                               />
                             </div>
                           )}
-                          <span className="text-[9px] font-black text-[#768994] bg-white border border-slate-200 rounded-full px-1.5 py-0.5 shrink-0">
+                          <span className="text-[10px] font-black text-[#768994] bg-white border border-slate-200 rounded-full px-1.5 py-0.5 shrink-0">
                             {g._subRows.length}
                           </span>
                           {rowsAreEditable && (
@@ -2657,7 +2657,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                       <Plus className="w-3.5 h-3.5" /> One blank entry
                                     </button>
                                     <div className="my-1.5 border-t border-slate-100" />
-                                    <p className="px-1.5 py-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                                    <p className="px-1.5 py-1 text-[10px] font-black uppercase tracking-widest text-slate-500">
                                       One entry, several countries
                                     </p>
                                     <input
