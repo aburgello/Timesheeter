@@ -43,6 +43,42 @@
   }
 }
 
+/* ── Analytics chart reveal ──────────────────────────────────────────────────
+   Bars grow from their baseline the first time a chart is scrolled into view.
+   The growth IS the quantity — a bar sweeping out to its value reads as data
+   being drawn, not as decoration — which is the whole justification for
+   animating a report at all.
+
+   Deliberately decelerating, never springy: an overshoot would carry the bar
+   past its own value and settle back, so for a couple of hundred milliseconds
+   the chart would be showing a number that isn't the number. Same curve as the
+   KPI tiles above them (0.16, 1, 0.3, 1).
+
+   The transform rules live inside prefers-reduced-motion: no-preference, so
+   under reduced motion none of them apply and the bars simply render at full
+   size — no animation, and crucially no scale(0) start state left behind. */
+@keyframes barGrowX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes barGrowY { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* fill-box resolves transform-origin against the bar's own box rather than
+     the whole SVG viewport; HTML bars use the default border-box. */
+  svg .chart-bar { transform-box: fill-box; }
+
+  .chart-bar--x { transform-origin: left center; transform: scaleX(0); }
+  .chart-bar--y { transform-origin: center bottom; transform: scaleY(0); }
+
+  .is-revealed .chart-bar--x,
+  .is-revealed .chart-bar--y {
+    animation-duration: 0.6s;
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+    animation-fill-mode: both;
+    animation-delay: var(--bar-delay, 0ms);
+  }
+  .is-revealed .chart-bar--x { animation-name: barGrowX; }
+  .is-revealed .chart-bar--y { animation-name: barGrowY; }
+}
+
 /* Thin, quiet horizontal scrollbar for content tracks (Motion Board's lanes,
    Riccardo's Slate, the Files panel) — the default OS scrollbar is a thick
    grey bar that reads as a UI glitch sitting under a row of cards. Firefox
