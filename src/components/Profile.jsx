@@ -41,7 +41,7 @@ import TaskDetailModal, { CsvPreviewModal } from "./TaskDetailModal";
 import DeliverySpecsModal from "./DeliverySpecsModal";
 import { parsePdfDeliverySpecs } from "../utils/pdfTableParser";
 import { formatDurationText } from "../utils/timeHelpers";
-import { getTagStyle, getBorderColorClass } from "../utils/tagStyles";
+import { getTagStyle } from "../utils/tagStyles";
 import { TERRITORY_FLAGS } from "../constants";
 import { splitTerritories, territoryFlags } from "../utils/territories";
 import {
@@ -316,13 +316,30 @@ function Empty({ icon: Icon, message }) {
 // 4.5:1. On the stock gradient white lands at 2.94:1 (blue) / 2.28:1 (teal),
 // and the meta sits at the teal end — the worst of it. These are the same hue
 // family at 5.5:1 / 5.3:1.
-function TaskRow({ edgeClass, dimmed, onClick, cascadeRef, children }) {
+//
+// No coloured rail down the left edge, deliberately. Both lists had one and
+// neither carried information:
+//
+//   • A history row's rail was DAY_COLORS[dayOfWeek], inside a card grouped by
+//     day, under a header already showing a day chip, the weekday name and the
+//     date. Every row in a card got the same colour, so it could not vary
+//     within its own container — it had nothing left to tell you.
+//   • A job row's rail was getBorderColorClass(status), duplicating the status
+//     pill sitting beside it with the status written out.
+//
+// Together that was seventeen unrelated hues carrying nothing, which is why it
+// read as generic: the 4px coloured rail is the device every admin template
+// ships with, applied without asking what it encodes. The colour a row does
+// need is already in the one element that means something — the status pill on
+// a job, the duration on a timesheet entry — and the sweep supplies the rest on
+// hover. Type and spacing carry the resting state.
+function TaskRow({ dimmed, onClick, cascadeRef, children }) {
   const interactive = !!onClick;
   return (
     <div
       ref={cascadeRef}
       onClick={onClick}
-      className={`group relative overflow-hidden flex items-center gap-3 px-4 py-3 border-y border-r border-l-4 rounded-xl bg-white border-y-[#dce4ec] border-r-[#dce4ec] ${edgeClass} ${
+      className={`group relative overflow-hidden flex items-center gap-3 px-4 py-3 rounded-xl bg-white border border-[#dce4ec] shadow-[0_1px_2px_rgba(18,32,39,0.03)] ${
         dimmed ? "opacity-60" : ""
       } ${
         interactive
@@ -340,14 +357,13 @@ function TaskRow({ edgeClass, dimmed, onClick, cascadeRef, children }) {
 
 function WrikeTaskCard({ task, filter, onClick, cascadeRef }) {
   const statusName = task.customStatusName || task.status;
-  const borderColor = getBorderColorClass(statusName);
   const isMatrix = task.title?.toUpperCase().includes("MATRIX");
   const updatedStr = fmtDate(task.updatedDate);
   const completedStr = fmtDate(task.completedDate);
   const dueStr = fmtDate(task.dueDate);
 
   return (
-    <TaskRow edgeClass={borderColor} dimmed={isMatrix} onClick={onClick} cascadeRef={cascadeRef}>
+    <TaskRow dimmed={isMatrix} onClick={onClick} cascadeRef={cascadeRef}>
       {/* One row: title leads, status + dates ride the right edge. Stacking
           them cost ~100px of height per job for ~15 characters of content —
           with most campaigns holding a single job, the list was mostly air. */}
@@ -1257,9 +1273,8 @@ function HistorySection({ tasks }) {
                     campaign cards' job-list body. */}
                 <div className="p-2.5 space-y-1.5 bg-slate-50/50">
                   {rows.map((t, i) => {
-                    const dc = DAY_COLORS[t.dayOfWeek] || DEFAULT_DAY;
                     return (
-                      <TaskRow key={t.id} edgeClass={dc.border} cascadeRef={getCascadeRef(t.id, i)}>
+                      <TaskRow key={t.id} cascadeRef={getCascadeRef(t.id, i)}>
                         {/* Job number leads, exactly as the title does on a job
                             row. The date stamp this used to carry is redundant
                             now the whole card sits under a dated header. */}
