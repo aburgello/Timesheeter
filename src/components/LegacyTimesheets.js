@@ -179,6 +179,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     updateRow,
     deleteRow,
     weekStart,
+    justSaved,
   } = useLegacyRows(showToast, wrikeUserId);
 
   // "dd/mm/yyyy" -> "yyyy-mm-dd", for comparing against weekStart (ISO)
@@ -2714,6 +2715,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   } ${isSub ? "bg-white" : ""}`}
                 >
                   <td className={`p-2 border-r border-slate-100 align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
+                    {/* Save confirmation. Absolute against the row (the <tr> is
+                        position:relative), so it sweeps the full width from
+                        inside the first cell — a <tr> can only hold cells, so it
+                        can't live directly on the row.
+                        Keyed by the nonce: React remounts it on each save, which
+                        restarts the animation. Re-applying a class would not,
+                        and a fast tab across cells saves the same row twice in
+                        well under a second. */}
+                    {justSaved?.[row.id] && (
+                      <span key={justSaved[row.id]} className="row-saved-flash" aria-hidden="true" />
+                    )}
                     <div className="flex items-start gap-2 pl-1">
                       <button
                         onClick={() => handleDeleteRow(row.id)}
