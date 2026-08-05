@@ -4965,14 +4965,9 @@ function PositionsAndRatesSection() {
   return (
     <div className="space-y-10">
       <div>
-        <p className="text-[13px] leading-relaxed text-[#768994] mb-4 max-w-2xl">
-          What an hour of each position's time bills at. Everyone holding the
-          position bills at this rate — it follows the position, not the person,
-          so someone changing role changes what their time costs on its own.
-          <span className="block mt-1 text-[#9aa8b4]">
-            A dashed rate means none is set: it bills at the studio default.
-          </span>
-        </p>
+        {/* No explainer paragraph here: this page is used by colleagues who
+            already know how rates work. The dashed-vs-solid rate convention
+            lives in RateInput's own tooltip instead of a standing legend. */}
         <SimpleListSection
           table="positions"
           labelField="title"
@@ -5067,7 +5062,7 @@ function ItemCategoryOverrides() {
         </p>
         {visibleCategories.length === 0 ? (
           <p className="text-sm text-[#768994] bg-slate-50 border border-dashed border-[#dce4ec] rounded-2xl px-4 py-8 text-center">
-            {search.trim() ? "No item category matches that." : "No overrides set — every category bills at the logger's own position rate."}
+            {search.trim() ? "No item category matches that." : "No overrides set."}
           </p>
         ) : (
           <div className="space-y-1.5">
