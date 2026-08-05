@@ -36,12 +36,22 @@ export default {
           "0%, 100%": { filter: "brightness(1) drop-shadow(0 0 1px currentColor)" },
           "50%":      { filter: "brightness(2) drop-shadow(0 0 4px currentColor)" },
         },
+        // Analytics' KPI tiles rise into place — the same fade-up-and-deblur
+        // shape as Home's masked reveal, so both entrances read as one
+        // language. Callers stagger it with an inline animationDelay.
+        kpiRise: {
+          "0%":   { opacity: "0", transform: "translateY(14px)", filter: "blur(6px)" },
+          "100%": { opacity: "1", transform: "translateY(0)", filter: "blur(0)" },
+        },
       },
       animation: {
         "star-fall": "starFall 1.1s ease-in forwards",
         // Comma-separated — CSS's animation shorthand natively supports
         // running multiple named animations on one element at once.
         "glitter-twinkle": "glitterFall 1s ease-in-out forwards, glitterShimmer 0.35s ease-in-out infinite",
+        // `both` so the staggered tiles hold their pre-animation state during
+        // their delay instead of flashing in at full opacity first.
+        "kpi-rise": "kpiRise 0.65s cubic-bezier(0.16, 1, 0.3, 1) both",
       },
       fontFamily: {
         sans: [
