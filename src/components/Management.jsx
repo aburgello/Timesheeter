@@ -4851,7 +4851,10 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
           treatment PeopleSection's department cards already use, so a
           manager sees three distinct destinations, not one dense block
           that happens to have three rows. */}
-      <div className="space-y-4">
+      {/* Card gap tightens while a group is open, for the same reason its
+          siblings condense: every pixel above the open group pushes its
+          children further down the page. */}
+      <div className={`transition-[gap] duration-300 ease-out flex flex-col ${expandedGroup ? "gap-2.5" : "gap-4"}`}>
         {NAV_GROUPS.map((group) => {
           const isOpen = expandedGroup === group.id;
           // A group with exactly one destination has nothing to unfold —
@@ -4859,12 +4862,20 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
           // pure friction. Go straight there, and read as navigation (no
           // `open` prop) rather than as an expand/collapse toggle.
           const singleItem = group.items.length === 1;
+          // Once any group is open, every other top-level row shrinks and
+          // drops its description. Supporting Content alone has seven
+          // children, and at full height the siblings above/below it pushed
+          // those off the bottom of the viewport — the html{zoom:1.1} in
+          // tailwind.css makes the effective viewport ~10% shorter again, so
+          // there was less room than a 1080p screen suggests.
+          const isCondensed = !!expandedGroup && !isOpen;
           return (
             <div key={group.id} className="bg-white rounded-3xl border border-[#dce4ec] shadow-sm overflow-hidden">
               <HubRow
                 section={group}
                 onClick={() => (singleItem ? onOpenItem(group.items[0].id) : onToggleGroup(group.id))}
                 open={singleItem ? undefined : isOpen}
+                condensed={isCondensed}
                 first
               />
               <AnimatePresence initial={false}>

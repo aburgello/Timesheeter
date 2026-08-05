@@ -17,13 +17,23 @@ import { ChevronRight } from "lucide-react";
 // keeping the exact same gradient-sweep/hover behavior — so a submenu row
 // and its parent row feel like the same control at two sizes, not two
 // different components that happen to look similar.
-export default function HubRow({ section, onClick, badge, first, open, compact }) {
+//
+// `condensed` is for the OTHER top-level rows once one of them is open: still
+// a parent row (no indent, so the hierarchy still reads) but shorter, with the
+// description dropped. A hub whose open group has seven children can't afford
+// to keep three full-height rows and their descriptions above it — the
+// children end up below the fold, which is the one thing an accordion is
+// supposed to avoid.
+export default function HubRow({ section, onClick, badge, first, open, compact, condensed }) {
   const { label, desc, icon: Icon, gradient } = section;
+  const small = compact || condensed;
   return (
     <button
       onClick={onClick}
-      className={`group relative w-full flex items-center text-left border-b border-[#dce4ec] last:border-b-0 focus:outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white/70 ${
-        compact ? "gap-4 pl-9 pr-5 sm:pl-12 sm:pr-7 py-4" : "gap-4 sm:gap-5 px-5 sm:px-7 py-5"
+      className={`group relative w-full flex items-center text-left border-b border-[#dce4ec] last:border-b-0 focus:outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white/70 transition-[padding] duration-300 ease-out ${
+        compact ? "gap-4 pl-9 pr-5 sm:pl-12 sm:pr-7 py-4"
+        : condensed ? "gap-4 sm:gap-5 px-5 sm:px-7 py-3.5"
+        : "gap-4 sm:gap-5 px-5 sm:px-7 py-5"
       }`}
     >
       <div
@@ -33,35 +43,41 @@ export default function HubRow({ section, onClick, badge, first, open, compact }
       {/* Icon chip: gradient-filled at rest, translucent-white once the row
           it sits on has itself gone gradient. */}
       <div
-        className={`relative z-10 shrink-0 rounded-2xl bg-gradient-to-br ${gradient} group-hover:bg-none group-hover:bg-white/20 group-focus:bg-none group-focus:bg-white/20 flex items-center justify-center text-white transition-colors duration-300 ${
-          compact ? "w-9 h-9" : "w-11 h-11"
+        className={`relative z-10 shrink-0 rounded-2xl bg-gradient-to-br ${gradient} group-hover:bg-none group-hover:bg-white/20 group-focus:bg-none group-focus:bg-white/20 flex items-center justify-center text-white transition-[colors,width,height] duration-300 ${
+          small ? "w-9 h-9" : "w-11 h-11"
         }`}
       >
-        <Icon className={compact ? "w-4 h-4" : "w-5 h-5"} />
+        <Icon className={small ? "w-4 h-4" : "w-5 h-5"} />
       </div>
 
       <div className="relative z-10 min-w-0 flex-1 overflow-hidden">
         <div data-hub-rise>
           <p
-            className={`font-display font-bold tracking-tight leading-none text-[#122027] group-hover:text-white group-focus:text-white transition-colors duration-300 ${
-              compact ? "text-sm sm:text-base" : first ? "text-2xl sm:text-3xl" : "text-xl sm:text-2xl"
+            className={`font-display font-bold tracking-tight leading-none text-[#122027] group-hover:text-white group-focus:text-white transition-[color,font-size] duration-300 ${
+              compact ? "text-sm sm:text-base"
+              : condensed ? "text-lg sm:text-xl"
+              : first ? "text-2xl sm:text-3xl" : "text-xl sm:text-2xl"
             }`}
           >
             {label}
           </p>
-          <p className={`text-[#768994] group-hover:text-white/80 group-focus:text-white/80 mt-1 truncate transition-colors duration-300 ${compact ? "text-xs" : "text-xs sm:text-sm"}`}>
-            {desc}
-          </p>
+          {/* Dropped entirely when condensed rather than hidden with a class:
+              the height it occupies is the space this is trying to reclaim. */}
+          {!condensed && (
+            <p className={`text-[#768994] group-hover:text-white/80 group-focus:text-white/80 mt-1 truncate transition-colors duration-300 ${compact ? "text-xs" : "text-xs sm:text-sm"}`}>
+              {desc}
+            </p>
+          )}
         </div>
       </div>
 
       <div className="relative z-10 flex items-center gap-3 shrink-0">
         {badge}
         {open === undefined ? (
-          <ChevronRight className={`text-[#768994] group-hover:text-white group-focus:text-white group-hover:translate-x-1 transition-all duration-300 ${compact ? "w-4 h-4" : "w-5 h-5"}`} />
+          <ChevronRight className={`text-[#768994] group-hover:text-white group-focus:text-white group-hover:translate-x-1 transition-all duration-300 ${small ? "w-4 h-4" : "w-5 h-5"}`} />
         ) : (
           <ChevronRight
-            className={`text-[#768994] group-hover:text-white group-focus:text-white transition-transform duration-300 ${open ? "rotate-90" : ""} ${compact ? "w-4 h-4" : "w-5 h-5"}`}
+            className={`text-[#768994] group-hover:text-white group-focus:text-white transition-transform duration-300 ${open ? "rotate-90" : ""} ${small ? "w-4 h-4" : "w-5 h-5"}`}
           />
         )}
       </div>
