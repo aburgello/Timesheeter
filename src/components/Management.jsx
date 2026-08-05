@@ -4914,6 +4914,11 @@ function RateInput({ value, onCommit }) {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const shown = editing ? draft : (value == null ? String(DEFAULT_HOURLY_RATE) : String(Number(value)));
+  // Presentation only, derived from the prop that already drives `shown`: a
+  // position with no rate of its own bills at the studio default, and until now
+  // looked identical to one deliberately set to that same number. Dashed and
+  // muted reads as "inherited", solid as "set here".
+  const isDefault = value == null;
 
   const commit = () => {
     setEditing(false);
@@ -4924,7 +4929,9 @@ function RateInput({ value, onCommit }) {
 
   return (
     <div className="relative">
-      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#768994] text-xs font-bold select-none pointer-events-none">$</span>
+      <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold select-none pointer-events-none transition-colors ${
+        isDefault ? "text-[#cbd5e1]" : "text-[#b0bec5]"
+      }`}>$</span>
       <input
         type="number" min="0" step="0.01"
         value={shown}
@@ -4932,8 +4939,12 @@ function RateInput({ value, onCommit }) {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-        title="Hourly rate"
-        className="w-full pl-6 pr-2 py-1.5 border border-[#dce4ec] rounded-xl text-xs font-bold text-[#122027] outline-none focus:border-[#12a0e1] bg-white"
+        title={isDefault ? `No rate set — bills at the studio default of $${DEFAULT_HOURLY_RATE}/hr` : "Hourly rate"}
+        className={`w-full pl-7 pr-2 py-2 rounded-xl border bg-white outline-none
+                    font-display text-[15px] font-bold tabular-nums tracking-tight
+                    transition-colors focus:border-[#12a0e1] ${
+          isDefault ? "border-dashed border-[#dce4ec] text-[#9aa8b4]" : "border-[#dce4ec] text-[#122027]"
+        }`}
       />
     </div>
   );
@@ -4954,10 +4965,13 @@ function PositionsAndRatesSection() {
   return (
     <div className="space-y-10">
       <div>
-        <p className="text-xs text-[#768994] mb-3">
+        <p className="text-[13px] leading-relaxed text-[#768994] mb-4 max-w-2xl">
           What an hour of each position's time bills at. Everyone holding the
           position bills at this rate — it follows the position, not the person,
           so someone changing role changes what their time costs on its own.
+          <span className="block mt-1 text-[#9aa8b4]">
+            A dashed rate means none is set: it bills at the studio default.
+          </span>
         </p>
         <SimpleListSection
           table="positions"
@@ -4965,7 +4979,7 @@ function PositionsAndRatesSection() {
           label="Positions"
           placeholder="e.g. Creative Director…"
           renderRowExtra={(item, patchItem) => (
-            <div className="w-28 shrink-0">
+            <div className="w-32 shrink-0">
               <RateInput
                 value={item.hourly_rate}
                 onCommit={async (v) => {
@@ -5022,7 +5036,7 @@ function ItemCategoryOverrides() {
     [positions]
   );
 
-  if (loading) return <p className="text-sm text-[#768994] py-8 text-center">Loading…</p>;
+  if (loading) return <p className="text-sm font-bold text-[#768994] py-10 text-center">Loading…</p>;
 
   return (
     <div>
@@ -5031,7 +5045,7 @@ function ItemCategoryOverrides() {
           <div className="flex items-center gap-2">
             <button type="button"
               onClick={() => { setShowAllCategories(s => !s); setSearch(""); }}
-              className={`shrink-0 px-3 py-2 rounded-xl border text-[11px] font-bold transition-all ${
+              className={`shrink-0 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
                 showAllCategories && !search.trim()
                   ? "bg-[#12a0e1]/10 border-[#12a0e1] text-[#12a0e1]"
                   : "bg-white border-[#dce4ec] text-[#768994] hover:border-slate-300"
@@ -5042,7 +5056,7 @@ function ItemCategoryOverrides() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#b0bec5]" />
               <input value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Search item categories…"
-                className="w-full pl-9 pr-3 py-2 border border-[#dce4ec] rounded-xl text-xs text-[#122027] outline-none focus:border-[#1cc1a5] bg-white" />
+                className="w-full pl-9 pr-3 py-2.5 border border-[#dce4ec] rounded-xl text-sm text-[#122027] placeholder-[#b0bec5] outline-none focus:border-[#1cc1a5] bg-white transition-colors" />
             </div>
           </div>
         </div>
@@ -5052,19 +5066,28 @@ function ItemCategoryOverrides() {
             : "Categories that don't bill at the logger's own position rate. Show all or search to add another."}
         </p>
         {visibleCategories.length === 0 ? (
-          <p className="text-sm text-[#768994]">
-            {search.trim() ? "No item category matches that." : "No overrides set."}
+          <p className="text-sm text-[#768994] bg-slate-50 border border-dashed border-[#dce4ec] rounded-2xl px-4 py-8 text-center">
+            {search.trim() ? "No item category matches that." : "No overrides set — every category bills at the logger's own position rate."}
           </p>
         ) : (
           <div className="space-y-1.5">
             {visibleCategories.map(c => (
-              <div key={c.id} className="flex items-center gap-3 p-3 bg-white border border-[#dce4ec] rounded-2xl">
-                <span className="flex-1 min-w-0 text-sm font-medium text-[#122027] truncate">{c.name}</span>
+              <div key={c.id}
+                className={`flex items-center gap-3 p-3.5 bg-white border rounded-2xl
+                            transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]
+                            hover:-translate-y-px hover:shadow-[0_6px_18px_-8px_rgba(18,32,39,0.18)] ${
+                  c.unbilled ? "border-[#f4b740]/40" : "border-[#dce4ec] hover:border-slate-300"
+                }`}>
+                <span className="flex-1 min-w-0 text-[15px] font-semibold text-[#122027] truncate">{c.name}</span>
+                {/* The comment below has always said the select goes muted when
+                    a category is unbilled, but nothing ever applied it — the
+                    override sat at full strength next to the badge overriding
+                    it. Now it actually dims. */}
                 <FeedSelect
                   value={c.rate_position_id ? String(c.rate_position_id) : ""}
                   onChange={(v) => patchCategory(c.id, { rate_position_id: v ? Number(v) : null })}
                   allLabel="Logger's own position"
-                  className="w-[220px] shrink-0"
+                  className={`w-[220px] shrink-0 transition-opacity duration-300 ${c.unbilled ? "opacity-40" : ""}`}
                   options={positionOptions}
                 />
                 {/* Unbilled wins over any rate override, so the select goes
