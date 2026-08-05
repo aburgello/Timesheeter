@@ -5665,6 +5665,43 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
+  // Escape goes up one level — an open item back to the hub, the same as the
+  // breadcrumb (so it pushes history and Forward returns).
+  //
+  // It defers to anything with a stronger claim on the key. Modals, the command
+  // palette and StrictSelect's click-catcher are all high-z layers that cover
+  // the viewport, and while one is up Escape belongs to it, not to navigation —
+  // closing a half-filled import or job form by unmounting the whole section
+  // would throw away typed input. Likewise a focused field, where Escape means
+  // "cancel this edit".
+  //
+  // Both halves of the test matter. z alone isn't enough: QuickActions' bubble
+  // is a permanent fixed z-[100], so height alone would mean Escape never
+  // fired. Coverage alone isn't enough either, since the page itself is
+  // full-height. An overlay is both.
+  useEffect(() => {
+    if (!activeTab) return;
+    const overlayOnScreen = () => {
+      for (const el of document.querySelectorAll('[class*="z-["]')) {
+        const z = /z-\[(\d+)\]/.exec(el.getAttribute("class") || "");
+        if (!z || Number(z[1]) < 50) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width >= window.innerWidth * 0.8 && r.height >= window.innerHeight * 0.8) return true;
+      }
+      return false;
+    };
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const t = e.target;
+      if (t?.isContentEditable) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(t?.tagName)) return;
+      if (overlayOnScreen()) return;
+      backToHub();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // One-shot deep link: another page (e.g. Jobs Setup's "Manage films") can stash
   // a section id before switching to #management, and we open it straight away.
   useEffect(() => {
