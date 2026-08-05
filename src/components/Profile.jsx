@@ -333,13 +333,20 @@ function Empty({ icon: Icon, message }) {
 // need is already in the one element that means something — the status pill on
 // a job, the duration on a timesheet entry — and the sweep supplies the rest on
 // hover. Type and spacing carry the resting state.
-function TaskRow({ dimmed, onClick, cascadeRef, children }) {
+// `align` is baseline for the ledger-style rows, where a dotted leader has to
+// sit on the type's baseline rather than float at the vertical centre of the
+// row. A zero-height flex item has no baseline of its own, so the spec aligns it
+// by its bottom edge — which lands the rule exactly on the baseline with no
+// magic offset.
+function TaskRow({ dimmed, onClick, cascadeRef, align = "center", children }) {
   const interactive = !!onClick;
   return (
     <div
       ref={cascadeRef}
       onClick={onClick}
-      className={`group relative overflow-hidden flex items-center gap-3 px-4 py-3 rounded-xl bg-white border border-[#dce4ec] shadow-[0_1px_2px_rgba(18,32,39,0.03)] ${
+      className={`group relative overflow-hidden flex ${
+        align === "baseline" ? "items-baseline" : "items-center"
+      } gap-3 px-4 py-3 rounded-xl bg-white border border-[#dce4ec] shadow-[0_1px_2px_rgba(18,32,39,0.03)] ${
         dimmed ? "opacity-60" : ""
       } ${
         interactive
@@ -1274,20 +1281,24 @@ function HistorySection({ tasks }) {
                 <div className="p-2.5 space-y-1.5 bg-slate-50/50">
                   {rows.map((t, i) => {
                     return (
-                      <TaskRow key={t.id} cascadeRef={getCascadeRef(t.id, i)}>
-                        {/* Job number leads, exactly as the title does on a job
-                            row. The date stamp this used to carry is redundant
-                            now the whole card sits under a dated header. */}
-                        <p className="relative z-10 flex-1 min-w-0 font-display font-bold tracking-tight leading-snug text-[15px] text-[#122027] truncate">
+                      <TaskRow key={t.id} align="baseline" cascadeRef={getCascadeRef(t.id, i)}>
+                        {/* A timesheet entry is a ledger line: a label on the
+                            left, a figure on the right, and a leader binding
+                            them. Setting it as one — job number, then quiet
+                            metadata, then a dotted rule running to a large
+                            right-aligned duration — is the typographic answer to
+                            the actual problem of a wide row, which is that the
+                            eye loses which label the far-right number belongs
+                            to. It also reads as what it is. An invoice, not a
+                            dashboard card.
+                            Baseline-aligned rather than centred, so the leader
+                            sits on the type's baseline the way it does in a
+                            printed table of contents. */}
+                        <p className="relative z-10 shrink-0 font-display font-bold tracking-tight leading-none text-[17px] text-[#122027]">
                           {t.jobNumber || "Unknown job"}
                         </p>
 
-                        {/* Everything else is muted text at one weight,
-                            separated by dots — the job rows' treatment of
-                            "Updated · Due". The category was a bordered pill
-                            and the notes were italic; neither encodes a state,
-                            so neither earns a decoration of its own. */}
-                        <div className="relative z-10 hidden sm:flex items-center gap-2 min-w-0 text-[11px] font-semibold text-[#768994] whitespace-nowrap">
+                        <div className="relative z-10 hidden sm:flex items-baseline gap-2 min-w-0 text-[11px] font-semibold text-[#768994] whitespace-nowrap">
                           {t.territory && (
                             <span className="shrink-0">
                               {territoryFlags(t.territory, 4) || "🌍"} {t.territory}
@@ -1301,15 +1312,26 @@ function HistorySection({ tasks }) {
                           {t.notes && <span className="truncate font-normal">{t.notes}</span>}
                         </div>
 
-                        {/* The duration is this row's one coloured element —
-                            the equivalent of the status tag on a job row, since
-                            the logged time is the whole point of the entry.
-                            Supplementary time joins it as a muted suffix rather
-                            than arriving in a second unrelated hue. */}
-                        <p className="relative z-10 shrink-0 font-display text-[15px] font-bold tracking-tight tabular-nums text-[#0f766e]">
-                          {formatDurationText(totalSecs(t))}
+                        {/* The leader. A dotted rule on its own baseline, taking
+                            whatever width is left — so short rows get a long
+                            run and busy rows get almost none, and the row's
+                            density becomes visible at a glance. Hidden with the
+                            metadata on mobile, where there is no gap to span. */}
+                        <span
+                          aria-hidden="true"
+                          className="relative z-10 hidden sm:block flex-1 min-w-[1.5rem] border-b border-dotted border-[#cbd5e1] transition-colors duration-300 group-hover:border-[#94a3b8]"
+                        />
+
+                        {/* The figure the whole row exists to report, set like
+                            one: display weight, tabular, deep teal — the single
+                            colour in the row. Supplementary time rides beneath
+                            it as a muted note rather than in a hue of its own. */}
+                        <p className="relative z-10 shrink-0 text-right leading-none">
+                          <span className="font-display text-[19px] font-bold tracking-[-0.02em] tabular-nums text-[#0f766e]">
+                            {formatDurationText(totalSecs(t))}
+                          </span>
                           {(t.additionalSeconds ?? 0) > 0 && (
-                            <span className="ml-1.5 font-sans text-[11px] font-semibold text-[#768994]">
+                            <span className="block mt-1 text-[10px] font-semibold text-[#768994] tabular-nums">
                               incl. +{formatDurationText(t.additionalSeconds)}
                             </span>
                           )}
