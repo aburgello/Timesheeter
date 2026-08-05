@@ -5266,7 +5266,9 @@ function PeopleSection() {
     const initials = `${cleanFirst[0] || ""}${cleanLast[0] || ""}`.toUpperCase() || "?";
     const fullName = [cleanFirst, cleanLast].filter(Boolean).join(" ") || "Unknown";
     return (
-      <div className="flex items-stretch bg-white border border-[#dce4ec] rounded-2xl overflow-hidden hover:border-slate-300 hover:shadow-sm transition-all">
+      <div className="flex items-stretch bg-white border border-[#dce4ec] rounded-2xl overflow-hidden
+                      hover:border-slate-300 hover:-translate-y-px hover:shadow-[0_8px_22px_-10px_rgba(18,32,39,0.22)]
+                      transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]">
         {/* Flush to the card's own edges (top/bottom/left), full height —
             clipped to the card's rounded-2xl by the parent's overflow-hidden
             rather than rounding the image itself, so it reads as one card
@@ -5275,7 +5277,7 @@ function PeopleSection() {
         {p.avatar_url ? (
           <img src={p.avatar_url} alt={fullName} className="w-28 sm:w-32 shrink-0 object-cover" />
         ) : (
-          <div className="w-28 sm:w-32 shrink-0 bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center font-display font-bold text-lg">
+          <div className="w-28 sm:w-32 shrink-0 bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center font-display font-bold text-2xl tracking-tight">
             {initials}
           </div>
         )}
@@ -5320,7 +5322,7 @@ function PeopleSection() {
                 title="Rename"
                 className="group/name flex items-center gap-1.5 max-w-full text-left"
               >
-                <span className="font-display text-base font-bold text-[#122027] tracking-tight truncate">{fullName}</span>
+                <span className="font-display text-[17px] font-bold text-[#122027] tracking-tight truncate">{fullName}</span>
                 <Pencil className="w-3 h-3 shrink-0 text-slate-300 opacity-0 group-hover/name:opacity-100 transition-opacity" />
               </button>
             )}
@@ -5358,7 +5360,7 @@ function PeopleSection() {
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           {!loading && (
-            <span className="text-[10px] font-black text-[#768994] shrink-0">
+            <span className="text-[10px] font-black text-[#768994] uppercase tracking-widest shrink-0 tabular-nums">
               {search.trim() ? `${filteredPeople.length} of ${people.length}` : people.length} people
             </span>
           )}
@@ -5369,7 +5371,7 @@ function PeopleSection() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search people…"
-              className="w-full pl-9 pr-8 py-2 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white"
+              className="w-full pl-9 pr-8 py-2.5 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white placeholder-[#b0bec5] transition-colors"
             />
             {search && (
               <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
@@ -5379,9 +5381,9 @@ function PeopleSection() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {syncMsg && <span className="text-[11px] font-medium text-[#768994]">{syncMsg}</span>}
+          {syncMsg && <span className="text-[11px] font-medium text-[#768994] bg-slate-50 border border-[#dce4ec] rounded-lg px-2.5 py-1.5 max-w-md">{syncMsg}</span>}
           <button onClick={syncFromWrike} disabled={syncing}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-all disabled:opacity-50">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-all disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Syncing…" : "Sync from Wrike"}
           </button>
@@ -5389,16 +5391,21 @@ function PeopleSection() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-16 gap-2 text-[#768994]">
-          <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
+        <div className="flex items-center justify-center py-20 gap-2.5 text-[#768994]">
+          <RefreshCw className="w-4 h-4 animate-spin text-[#12a0e1]" />
+          <span className="text-sm font-bold">Loading…</span>
         </div>
       ) : people.length === 0 ? (
-        <div className="py-16 text-center text-[#768994] text-sm">
-          No people yet — click "Sync from Wrike" to pull everyone in the workspace.
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-[#768994]">
+          <Users className="w-9 h-9 opacity-20" />
+          <p className="font-display text-base font-bold text-[#122027]">No people yet</p>
+          <p className="text-xs">Use “Sync from Wrike” above to pull everyone in the workspace.</p>
         </div>
       ) : filteredPeople.length === 0 ? (
-        <div className="py-16 text-center text-[#768994] text-sm">
-          No one matches "{search}".
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-[#768994]">
+          <Search className="w-9 h-9 opacity-20" />
+          <p className="font-display text-base font-bold text-[#122027]">No one matches “{search}”</p>
+          <p className="text-xs">Try a shorter search, or clear it to see everyone.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -5439,7 +5446,7 @@ function PeopleSection() {
                       style={{ overflow: settled[group.label] ? "visible" : "hidden" }}
                       className="bg-slate-50 border-t border-[#dce4ec] rounded-b-2xl"
                     >
-                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5 p-3">
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 p-3.5">
                         {items.map(p => <PersonCard key={p.wrike_user_id} p={p} />)}
                       </div>
                     </motion.div>
