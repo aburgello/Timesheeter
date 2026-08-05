@@ -5626,6 +5626,10 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
   // The accordion stays exactly as it was — going back doesn't collapse
   // the group you were just looking at.
   const backToHub = () => { setNavDirection(-1); setActiveTab(null); };
+  // Same, but guarantees the group is open on arrival. Identical to backToHub
+  // when you drilled in through the accordion; the difference shows on a deep
+  // link (sessionStorage openAdminSection), where no group was ever expanded.
+  const backToGroup = (groupId) => { setNavDirection(-1); setExpandedGroup(groupId); setActiveTab(null); };
 
   // One-shot deep link: another page (e.g. Jobs Setup's "Manage films") can stash
   // a section id before switching to #management, and we open it straight away.
@@ -5682,12 +5686,53 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
         )}
       </PageHeader>
 
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-6 pb-6 overflow-hidden">
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-6 pb-6">
+        {/* Breadcrumb bar. This is page chrome, not panel content, so it sits
+            outside the sliding panel — and it has to sit outside the
+            overflow-hidden that clipping the slide requires, because
+            position:sticky does nothing inside a clipped ancestor. Being
+            sticky is the point: Films and Studio Analytics are both long
+            enough that the way back used to scroll off the top, leaving no
+            exit without scrolling all the way up again.
+            The negative margins let the blurred background bleed to the
+            content column's edges while the padding keeps the crumbs aligned
+            with the panel below. */}
+        {nav && (
+          <div className="sticky top-0 z-30 -mx-4 sm:-mx-6 mb-4 px-4 sm:px-6 py-3
+                          bg-slate-100/85 supports-[backdrop-filter]:bg-slate-100/70 backdrop-blur-md
+                          border-b border-[#dce4ec]">
+            <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+              <button
+                onClick={backToHub}
+                className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-all shrink-0"
+              >
+                <ChevronLeft className="w-4 h-4" /> Administration
+              </button>
+              {/* The group crumb goes back to the hub with that group open —
+                  which is where you came from, except on a deep link, where
+                  nothing was expanded yet. */}
+              <ChevronRight className="w-3.5 h-3.5 text-[#b0bec5] shrink-0 hidden sm:block" />
+              <button
+                onClick={() => backToGroup(nav.group.id)}
+                className="hidden sm:block text-xs font-bold text-[#768994] hover:text-[#122027] transition-colors shrink-0 truncate"
+              >
+                {nav.group.label}
+              </button>
+              <ChevronRight className="w-3.5 h-3.5 text-[#b0bec5] shrink-0 hidden sm:block" />
+              <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${nav.group.gradient} flex items-center justify-center text-white shadow-sm shrink-0`}>
+                <nav.item.icon className="w-4 h-4" />
+              </div>
+              <h2 className="font-display text-lg sm:text-xl font-bold text-[#122027] tracking-tight truncate">{nav.item.label}</h2>
+            </div>
+          </div>
+        )}
+
         {/* The hub (with its accordion) and an open item's content are the
             only two panels that ever swap — the accordion itself doesn't
             trigger this, it's a height animation inside the hub panel.
-            overflow-hidden on the parent clips the 28px travel so nothing
-            peeks past the edge mid-transition. */}
+            overflow-hidden clips the 28px travel so nothing peeks past the
+            edge mid-transition. */}
+        <div className="overflow-hidden">
         <AnimatePresence mode="wait" custom={navDirection} initial={false}>
           <motion.div
             key={nav ? `item:${nav.item.id}` : "hub"}
@@ -5705,24 +5750,10 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
               />
             )}
 
-            {/* The item's actual content */}
+            {/* The item's actual content. Its heading and the way back now
+                live in the sticky breadcrumb above, outside this panel. */}
             {nav && (
               <div>
-                <div className="flex items-center gap-3 mb-4">
-                  <button
-                    onClick={backToHub}
-                    className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-all"
-                  >
-                    <ChevronLeft className="w-4 h-4" /> Administration
-                  </button>
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${nav.group.gradient} flex items-center justify-center text-white shadow-sm shrink-0`}>
-                      <nav.item.icon className="w-4 h-4" />
-                    </div>
-                    <h2 className="font-display text-xl font-bold text-[#122027] tracking-tight truncate">{nav.item.label}</h2>
-                  </div>
-                </div>
-
                 <div className="bg-white border border-[#dce4ec] rounded-2xl p-6 shadow-sm">
                   {/* Project/Time is the logged-time-per-job feed — same
                       component Job Book uses (JobsFeedSection), not a separate
@@ -5754,6 +5785,7 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
             )}
           </motion.div>
         </AnimatePresence>
+        </div>
       </div>
 
       {campaignFilm && (
