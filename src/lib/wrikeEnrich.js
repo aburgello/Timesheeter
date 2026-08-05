@@ -1,4 +1,6 @@
-import { FILM_MAPPINGS, motionTeamShortName, TERRITORIES, REGION_ALIASES } from "../constants.js";
+import { FILM_MAPPINGS, motionTeamShortName, TERRITORIES, REGION_ALIASES, MAGI_MARKET_CODES, COUNTRY_SUFFIX_EXCEPTIONS } from "../constants.js";
+import { countriesFromFolderNames } from "../utils/countryCodes";
+import { countryFieldIds } from "./countryField";
 
 // Resolve a film-code folder/name (e.g. "ZAL", "ody", "DDA") to its full
 // title via FILM_MAPPINGS; returns the title-cased input untouched when no
@@ -18,8 +20,22 @@ const resolveFilmCode = (name) => {
 // AE/AUS), uppercased — used below to decide which customFields values are
 // worth keeping in the cache. Mirrors guessFieldsFromTask's own sources so
 // the cache keeps exactly what that guesser could ever match on.
+// _Multiple_ and the agreed exception words are included here even though the
+// old guesser refused to infer them: this set decides what survives into the
+// cache, and a Country field reading "Markets" has to reach the resolver to be
+// read as one. Deciding whether a value counts is countryCodes.js's job now.
+// MAGI's own codes are in here too. They were missed first time round, and the
+// gap is invisible until it bites: a Country field reading "BEL-FL" survives
+// only because "BEL" happens to also be a REGION_ALIAS, while a MAGI-only code
+// would be dropped from the cache before the resolver — which CAN read it —
+// ever saw it. Whatever the resolver can read, the cache has to keep.
 const TERRITORY_TOKENS = new Set(
-  [...TERRITORIES, ...Object.keys(REGION_ALIASES)].map((t) => String(t).toUpperCase())
+  [
+    ...TERRITORIES,
+    ...Object.keys(REGION_ALIASES),
+    ...Object.keys(MAGI_MARKET_CODES),
+    ...Object.keys(COUNTRY_SUFFIX_EXCEPTIONS),
+  ].map((t) => String(t).toUpperCase())
 );
 
 const isTerritoryValue = (v) =>
@@ -207,6 +223,43 @@ export function getStudioName(task, folderDictionary, childToParent = {}) {
   return null;
 }
 
+// The market folder a task sits in, resolved to countries. Localisation
+// campaigns carry the market in the tree rather than the task name — see
+// countriesFromFolderNames — so the climb walks outward from the task's own
+// folders and stops at the first one that names a country. Nearest wins, so a
+// "Chile" folder beats the "..._Markets" campaign root above it.
+//
+// Depth is capped: the market folder and its campaign root sit one or two
+// levels up, and climbing to the top of the account only risks a distant
+// ancestor (a studio or archive folder named after a country) claiming a task
+// that nobody labelled.
+const FOLDER_COUNTRY_MAX_DEPTH = 4;
+
+export function getFolderCountries(task, folderDictionary, childToParent = {}) {
+  if (!task.parentIds?.length || !folderDictionary) return [];
+  let level = [...task.parentIds];
+  const visited = new Set(level);
+
+  for (let depth = 0; depth < FOLDER_COUNTRY_MAX_DEPTH && level.length; depth++) {
+    // Whole level before climbing, so "nearest folder first" holds even when a
+    // task sits in several folders at once.
+    const names = level.map((id) => folderDictionary[id]?.title || "");
+    const found = countriesFromFolderNames(names);
+    if (found.length) return found;
+
+    const next = [];
+    for (const id of level) {
+      const parentId = childToParent[id];
+      if (parentId && !visited.has(parentId)) {
+        visited.add(parentId);
+        next.push(parentId);
+      }
+    }
+    level = next;
+  }
+  return [];
+}
+
 // ---------------------------------------------------------------------------
 // Print launch-tracking relevance (Print Canvas / Launch Tracker)
 // ---------------------------------------------------------------------------
@@ -270,6 +323,17 @@ export function filterToMotionTeam(tasks, folderDictionary, contactDictionary) {
 // Enrich raw Wrike tasks with computed fields (film name, paths, status, etc.)
 // ---------------------------------------------------------------------------
 export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statusDictionary, childToParent = {}, extraMappings = {}) {
+  // Country codes live at the end of a task name, and production writes them
+  // on the parent task — the one people record time against — not always on
+  // every subtask. Wrike gives us subTaskIds but not superTaskIds, so invert
+  // the former once per batch to get each subtask its parent's title. Only the
+  // title is carried (countryCodes.js reads nothing else), so this costs a
+  // string per subtask rather than a second pass over the API.
+  const parentTitleById = {};
+  for (const t of rawTasks) {
+    for (const childId of t.subTaskIds || []) parentTitleById[childId] = t.title;
+  }
+
   return rawTasks.map((task) => {
     // Only MATRIX tasks need the parsed description — that's where the tableHtml
     // the Canvas renders lives. For every other task the derived notes/path text
@@ -299,8 +363,14 @@ export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statu
     // (verified against the live data: the one territory-bearing field held
     // codes like AE/AUS; everything else dropped is rates, dates, Wrike user
     // ids, statuses and comment HTML the app never reads).
+    // The pinned Country field is kept whatever it holds — value-shape tests
+    // decide what's worth caching from the fields we can't identify, and that
+    // reasoning doesn't apply to the one field we can. Dropping a value the
+    // resolver is entitled to read would turn a correct answer into a blank.
+    const countryIds = new Set(countryFieldIds());
     const customFields = Array.isArray(task.customFields)
       ? task.customFields.filter((cf) => {
+          if (countryIds.has(cf?.id)) return true;
           const v = cf?.value || "";
           return /XY\d{5,6}/i.test(v) || v.includes("/Volumes/") || isTerritoryValue(v);
         })
@@ -309,6 +379,8 @@ export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statu
     return {
       ...task,
       customFields,
+      parentTaskTitle: parentTitleById[task.id] || "",
+      folderCountries: getFolderCountries(task, folderDictionary, childToParent),
       extractedPathData: parsed.extractedPathData,
       tableHtml: parsed.tableHtml,
       notesText: parsed.notesText,

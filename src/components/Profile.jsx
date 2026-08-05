@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { isDarkMode, toggleDarkMode } from "../lib/theme";
+import { fullName, cleanNamePart } from "../lib/formatName";
 import PageHeader from "./shared/PageHeader";
 import HubRow from "./shared/HubRow";
 import { useTasks } from "../hooks/useTasks";
@@ -42,6 +43,7 @@ import { parsePdfDeliverySpecs } from "../utils/pdfTableParser";
 import { formatDurationText } from "../utils/timeHelpers";
 import { getTagStyle, getBorderColorClass } from "../utils/tagStyles";
 import { TERRITORY_FLAGS } from "../constants";
+import { splitTerritories, territoryFlags } from "../utils/territories";
 import {
   BarChart,
   Bar,
@@ -845,7 +847,10 @@ function OverviewSection({
   const territories = useMemo(() => {
     const counts = {};
     tasks.forEach((t) => {
-      if (t.territory) counts[t.territory] = (counts[t.territory] || 0) + 1;
+      // A task can cover several markets — count each one separately.
+      splitTerritories(t.territory).forEach((terr) => {
+        counts[terr] = (counts[terr] || 0) + 1;
+      });
     });
     return Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
@@ -1189,7 +1194,7 @@ function HistorySection({ tasks }) {
                           <div className="hidden sm:flex items-center gap-2 shrink-0">
                             {t.territory && (
                               <span className="text-[11px] font-semibold text-[#768994] whitespace-nowrap">
-                                {TERRITORY_FLAGS[t.territory] || "🌍"}{" "}
+                                {territoryFlags(t.territory, 4) || "🌍"}{" "}
                                 {t.territory}
                               </span>
                             )}
@@ -1233,14 +1238,31 @@ function HistorySection({ tasks }) {
 // ── Analytics ─────────────────────────────────────────────────────────────────
 
 function AnalyticsSection({ tasks }) {
+  // Recharts paints into SVG from literal JS values, so none of it is reachable
+  // by the .dark-theme class overrides — the gridlines were drawing near-white
+  // across a dark card and the tooltip flashed as a white slab. Read the theme
+  // once and derive the chrome from it. Re-read on the theme event so toggling
+  // dark mode repaints the charts without a reload.
+  const [chartDark, setChartDark] = useState(isDarkMode);
+  useEffect(() => {
+    const el = document.documentElement;
+    const obs = new MutationObserver(() => setChartDark(isDarkMode()));
+    obs.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+
+  const gridStroke = chartDark ? "#334155" : "#f1f5f9";
+  const axisTick = chartDark ? "#94a3b8" : "#768994";
   const tooltipStyle = {
-    backgroundColor: "#ffffff",
-    borderColor: "#dce4ec",
+    backgroundColor: chartDark ? "#1e293b" : "#ffffff",
+    borderColor: chartDark ? "#334155" : "#dce4ec",
     borderRadius: "12px",
-    color: "#323b43",
+    color: chartDark ? "#e2e8f0" : "#323b43",
     fontSize: "11px",
     fontWeight: 600,
-    boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
+    boxShadow: chartDark
+      ? "0 10px 15px -3px rgb(0 0 0 / 0.5)"
+      : "0 10px 15px -3px rgb(0 0 0 / 0.1)",
   };
 
   const timePerJob = useMemo(() => {
@@ -1297,13 +1319,13 @@ function AnalyticsSection({ tasks }) {
                   <CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
-                    stroke="#f1f5f9"
+                    stroke={gridStroke}
                   />
                   <XAxis
                     dataKey="name"
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fill: "#768994", fontSize: 9, fontWeight: 600 }}
+                    tick={{ fill: axisTick, fontSize: 9, fontWeight: 600 }}
                     angle={-30}
                     textAnchor="end"
                     dy={10}
@@ -1311,7 +1333,7 @@ function AnalyticsSection({ tasks }) {
                   <YAxis
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fill: "#768994", fontSize: 10, fontWeight: 600 }}
+                    tick={{ fill: axisTick, fontSize: 10, fontWeight: 600 }}
                   />
                   <Tooltip
                     contentStyle={tooltipStyle}
@@ -1569,9 +1591,12 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
       });
   }, [wrikeUser?.id]);
 
+  // Through the shared helper, not raw concatenation — Wrike names carry emoji
+  // ("Trott ⚡️") and this is the page header, the most prominent place one
+  // could show up.
   const displayName = profile
-    ? `${profile.first_name || ""} ${profile.last_name || ""}`.trim()
-    : wrikeUser?.firstName || "Your profile";
+    ? fullName(profile.first_name, profile.last_name) || "Your profile"
+    : cleanNamePart(wrikeUser?.firstName) || "Your profile";
 
   const totalSeconds = tasks.reduce(
     (s, t) => s + (t.rawSeconds ?? 0) + (t.additionalSeconds ?? 0),

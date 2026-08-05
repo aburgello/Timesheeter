@@ -63,6 +63,38 @@ export async function discoverJobNumberField() {
   return field ? { id: field.id, title: field.title } : null;
 }
 
+// The per-slot price carried on each JOBNUMBER folder in the studio templates.
+// Discovered by title like the Job Number field above, for the same reason.
+// Note it's permissioned to project managers in Wrike, so a member without
+// that visibility gets no field back — callers must treat "not found" as
+// "leave the cost empty", never as an error.
+export async function discoverItemPriceField() {
+  const fields = await wrikeGet("/customfields");
+  const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const exact = fields.find((f) => norm(f.title) === "itemprice");
+  const loose = fields.find((f) => /item/.test(norm(f.title)) && /(price|cost|rate)/.test(norm(f.title)));
+  const field = exact || loose || null;
+  return field ? { id: field.id, title: field.title } : null;
+}
+
+// The Item Price on one template folder, as a number, or null when the folder
+// carries no value (or the caller can't see the field). Folders return
+// customFields by default on the by-id endpoint, same as `project`/`scope`.
+export async function fetchFolderItemPrice(folderId, fieldId) {
+  if (!folderId || !fieldId) return null;
+  try {
+    const rows = await wrikeGet(`/folders/${folderId}`);
+    const raw = (rows?.[0]?.customFields || []).find((c) => c.id === fieldId)?.value;
+    if (raw == null || raw === "") return null;
+    // Currency and Numeric fields come back as strings; Text ones may carry a
+    // symbol or thousands separators.
+    const n = parseFloat(String(raw).replace(/[^0-9.\-]/g, ""));
+    return isNaN(n) ? null : n;
+  } catch {
+    return null; // never block staging a job on a price lookup
+  }
+}
+
 // ── Folder / project discovery ────────────────────────────────────────────────
 
 // Pull the whole flat folder list once (id, title, childIds) so callers can walk
@@ -160,6 +192,42 @@ const STUDIO_CLIENT = {
 
 const deUnderscore = (s) => (s || "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
 
+// Region qualifiers that mark a regional studio folder (e.g. "UNIVERSAL AUSTRALIA")
+// as a variant of a base studio ("UNIVERSAL"). Used both to pick a sensible
+// default territory (findFilmLocation) and to label scanned jobs by region.
+const REGION_QUALIFIER = /\b(AUSTRALIA|UK|US|USA|NEW MEDIA|INTERNATIONAL|INTL|EU|EMEA|APAC|CANADA|GERMANY|FRANCE|SPAIN|ITALY|JAPAN|KOREA|LATAM|NORDIC|BENELUX)\b/i;
+
+// The same slot exists under several studio folders — "Sky VIP" under UNIVERSAL
+// UK is a different job from the one under UNIVERSAL — and the timesheet site
+// distinguishes them by prefixing the description with a short region code
+// ("UK - Sky VIP Assets", "NM - Digital - Packshots"). Without this every
+// territory's copy of a slot scans in under one indistinguishable label.
+const REGION_SHORT = {
+  AUSTRALIA: "AUS", UK: "UK", US: "US", USA: "US", "NEW MEDIA": "NM",
+  INTERNATIONAL: "INT", INTL: "INT", EU: "EU", EMEA: "EMEA", APAC: "APAC",
+  CANADA: "CAN", GERMANY: "GER", FRANCE: "FRA", SPAIN: "SPA", ITALY: "ITA",
+  JAPAN: "JPN", KOREA: "KOR", LATAM: "LATAM", NORDIC: "NORDIC", BENELUX: "BENELUX",
+};
+
+// A studio folder with no qualifier ("UNIVERSAL") is the international arm —
+// that's the site's convention ("INT - DOOH Outdoor Campaign") and Management's
+// own STUDIO_CLIENT map agrees ("Universal International"). XYi is excluded: its
+// internal jobs have no territory at all.
+const regionOf = (studioTitle, studioKw) => {
+  const m = REGION_QUALIFIER.exec(studioTitle || "");
+  if (!m) {
+    return studioKw && studioKw.toLowerCase() !== "xyi"
+      ? { short: "INT", name: "International" }
+      : null;
+  }
+  const word = m[0].toUpperCase();
+  return {
+    short: REGION_SHORT[word] || word,
+    // "UK"/"US"/"EU" stay upper-case; longer names read as words.
+    name: word.length <= 3 ? word : word.charAt(0) + word.slice(1).toLowerCase(),
+  };
+};
+
 // Scan the whole visible folder tree and return one candidate Job Book row per
 // unique XY code found.
 //
@@ -181,9 +249,15 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   const totalFolders = Object.keys(byId).length;
 
   // Upward parent map (fetchAllFolders only gives childIds, i.e. downward).
-  const parentOf = {};
+  // ALL parents, not one: Wrike shares a single folder into several places — the
+  // whole territory feature in findFilmLocation depends on it. A last-writer-wins
+  // `parentOf[c] = f.id` map silently picks one arbitrary parent, so a film also
+  // filed under _Archive (or a master-template tree) climbs the wrong path and
+  // the job comes back archived, film-less and region-less — which hides it from
+  // the scan's default "Active only" view entirely.
+  const parentsOf = {};
   Object.values(byId).forEach((f) =>
-    (f.childIds || []).forEach((c) => { parentOf[c] = f.id; })
+    (f.childIds || []).forEach((c) => { (parentsOf[c] || (parentsOf[c] = [])).push(f.id); })
   );
 
   const studioKwOf = (title) =>
@@ -201,10 +275,8 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // studio and the job — but studios often insert a "2026" year folder in
   // between, so we take the DEEPEST non-year folder on that stretch (closest to
   // the job) rather than blindly the child-of-studio, which would be the year.
-  const ancestryOf = (startId) => {
-    const chain = [];
-    let cur = parentOf[startId], guard = 0;
-    while (cur && guard++ < 40) { chain.push(byId[cur]); cur = parentOf[cur]; }
+  // Read one ancestry chain (job → … → root) into the fields a Job Book row needs.
+  const describeChain = (chain) => {
     const si = chain.findIndex((n) => n && studioKwOf(n.title));
     const studioKw = si >= 0 ? studioKwOf(chain[si].title) : "";
     let filmNode = null;
@@ -214,9 +286,40 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
       }
       if (!filmNode) filmNode = chain[si - 1]; // all year folders — fall back
     }
-    const filmTitle = filmNode ? deUnderscore(filmNode.title) : "";
-    const archived = chain.some((n) => isArchiveNode(n && n.title));
-    return { studioKw, filmTitle, archived };
+    return {
+      studioKw,
+      // The studio node's FULL title, not just the matched keyword: "UNIVERSAL UK"
+      // and "UNIVERSAL" both match `Universal`, and the qualifier is the only
+      // thing that tells the two territories' jobs apart.
+      studioTitle: si >= 0 ? chain[si].title || "" : "",
+      filmTitle: filmNode ? deUnderscore(filmNode.title) : "",
+      archived: chain.some((n) => isArchiveNode(n && n.title)),
+      hasStudio: si >= 0,
+    };
+  };
+
+  // Walk EVERY path from a job folder up to a root and describe the best one.
+  // A job is only archived if it has no live home: one path through _Archive
+  // doesn't archive a job that also sits in a live campaign folder. Preference
+  // order is live-and-placed > placed > live > whatever we got.
+  const ancestryOf = (startId) => {
+    const chains = [];
+    const walk = (id, chain, seen) => {
+      // Bounded: shared folders can fan out, and this runs per job code across
+      // the whole tree. Depth 40 matches the old climb; 24 paths is plenty to
+      // find a live one without letting a pathological tree stall the scan.
+      if (chain.length >= 40 || chains.length >= 24) { chains.push(chain); return; }
+      const parents = (parentsOf[id] || []).filter((pid) => byId[pid] && !seen.has(pid));
+      if (!parents.length) { chains.push(chain); return; }
+      for (const pid of parents) {
+        walk(pid, chain.concat(byId[pid]), new Set(seen).add(pid));
+      }
+    };
+    walk(startId, [], new Set([startId]));
+
+    const scored = chains.map(describeChain);
+    const rank = (d) => (d.hasStudio ? 2 : 0) + (d.archived ? 0 : 1);
+    return scored.reduce((best, d) => (rank(d) > rank(best) ? d : best), scored[0]);
   };
 
   const CODE = /XY\d{5,6}/i;
@@ -230,8 +333,13 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     if (seen.has(code)) return;          // one line per code
     seen.add(code);
 
-    const { studioKw, filmTitle: ancestorFilm, archived } = ancestryOf(f.id);
-    const client = studioKw ? STUDIO_CLIENT[studioKw.toLowerCase()] || studioKw : "";
+    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived } = ancestryOf(f.id);
+    const region = regionOf(studioTitle, studioKw);
+    // "Universal Pictures UK" / "Universal Pictures International" — the client
+    // the Job Book and the timesheet site both name, rather than every region's
+    // jobs collapsing onto a bare "Universal Pictures".
+    const baseClient = studioKw ? STUDIO_CLIENT[studioKw.toLowerCase()] || studioKw : "";
+    const client = baseClient && region ? `${baseClient} ${region.name}` : baseClient;
 
     let filmTitle, projectDescription, jobNumber;
     if (title.includes(" : ")) {
@@ -242,17 +350,25 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
         title.slice(title.indexOf(m[0]) + m[0].length).replace(/^[\s,–—-]+/, "")
       );
     } else {
-      // Underscore folder ("XY025563_Germany_Launch_Assets") — reassemble.
+      // Underscore folder ("XY025563_Germany_Launch_Assets") — reassemble, and
+      // carry the region the folder lives under into the description the way
+      // the timesheet site writes it ("UK - Sky VIP"). Skipped when the folder
+      // already leads with a region code, so a rescan can't stack "UK - UK - ".
       projectDescription = deUnderscore(
         title.slice(title.indexOf(m[0]) + m[0].length).replace(/^[\s,_–—-]+/, "")
       );
+      if (region && projectDescription &&
+          !new RegExp(`^${region.short}\\b`, "i").test(projectDescription)) {
+        projectDescription = `${region.short} - ${projectDescription}`;
+      }
       filmTitle = ancestorFilm;
       jobNumber = filmTitle
         ? `${filmTitle} : ${code}${projectDescription ? `, ${projectDescription}` : ""}`
         : `${code}${projectDescription ? `, ${projectDescription}` : ""}`;
     }
 
-    out.push({ code, jobNumber, filmTitle, projectDescription, client, archived, folderId: f.id });
+    out.push({ code, jobNumber, filmTitle, projectDescription, client, archived,
+               region: region ? region.short : null, folderId: f.id });
   });
 
   // Pull each job folder's Wrike createdDate (the flat tree endpoint doesn't
@@ -319,10 +435,6 @@ export function findMasterTemplateFolder(byId, studioName) {
 // we'd go hunting for a "Fake_Film_Tryout" master template. So prefer the match
 // whose parent is NOT itself the same film: the outermost one, sitting in its
 // real studio folder.
-// Region qualifiers that mark a regional studio folder (e.g. "UNIVERSAL AUSTRALIA")
-// as a variant of a base studio ("UNIVERSAL") — used to pick a sensible default.
-const REGION_QUALIFIER = /\b(AUSTRALIA|UK|US|USA|NEW MEDIA|INTERNATIONAL|INTL|EU|EMEA|APAC|CANADA|GERMANY|FRANCE|SPAIN|ITALY|JAPAN|KOREA|LATAM|NORDIC|BENELUX)\b/i;
-
 export function findFilmLocation(byId, filmTitle) {
   if (!(filmTitle || "").trim()) return null;
 

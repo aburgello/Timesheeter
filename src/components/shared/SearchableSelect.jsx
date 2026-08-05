@@ -11,6 +11,11 @@ const SearchableSelect = ({
   quickFilters,
   getPrefix,
   isGrouped = false,
+  // Optional (groupName, items) => number, higher sorts nearer the top. Opt-in
+  // because insertion order is meaningful for curated lists like CATEGORIES,
+  // but meaningless for an append-only one like jobOptions — where it simply
+  // means "whatever was seen first", i.e. the oldest films.
+  groupRank = null,
   alignRight = false,
   // Optional shared-dropdown props (same pattern as LegacyTimesheets)
   // When provided, only one dropdown can be open at a time across siblings.
@@ -57,6 +62,16 @@ const SearchableSelect = ({
     });
   }
 
+  // Group order: by rank when the caller supplies one, alphabetically within
+  // equal ranks so the list is stable and scannable rather than arbitrary.
+  const groupEntries = Object.entries(groupedOptions);
+  if (isGrouped && groupRank) {
+    groupEntries.sort(
+      (a, b) =>
+        groupRank(b[0], b[1]) - groupRank(a[0], a[1]) || a[0].localeCompare(b[0])
+    );
+  }
+
   const getDisplayLabel = (opt) => {
     if (isGrouped && opt.includes(" : "))
       return opt.split(" : ").slice(1).join(" : ");
@@ -72,12 +87,20 @@ const SearchableSelect = ({
           0% { transform: translateX(-150%) skewX(-15deg); }
           100% { transform: translateX(150%) skewX(-15deg); }
         }
-        .animate-shine-6 { animation: shine 1.5s ease-in-out 10; }
+        /* animation-fill-mode matters here: without it the sweep snaps back to its
+           un-animated position when the last iteration ends — which is dead
+           centre over the chip — leaving a permanent pale blob sitting there.
+           Holding the final keyframe parks it off the right edge instead,
+           where overflow-hidden clips it away. */
+        .animate-shine-6 { animation: shine 1.5s ease-in-out 10 forwards; }
+        @media (prefers-reduced-motion: reduce) {
+          .animate-shine-6 { animation: none; opacity: 0; }
+        }
       `}</style>
 
       {quickFilters && (
         <div className="flex flex-wrap gap-2 mb-2">
-          {quickFilters.map((filter) => (
+          {quickFilters.map((filter, i) => (
             <button
               type="button"
               key={filter}
@@ -85,7 +108,9 @@ const SearchableSelect = ({
               disabled={disabled}
               className="relative overflow-hidden px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-[#12a0e1]/10 hover:bg-[#12a0e1]/20 text-[#12a0e1] rounded-md border border-[#12a0e1]/20 transition-colors disabled:opacity-50"
             >
-              {filter === "DOOH" && (
+              {/* The lead chip gets the sweep, whatever it's called — the
+                  filter list is department-specific (see jobQuickFiltersFor). */}
+              {i === 0 && (
                 <span className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/80 to-transparent animate-shine-6 pointer-events-none" />
               )}
               <span className="relative z-10">{filter}</span>
@@ -146,7 +171,7 @@ const SearchableSelect = ({
         >
           {filteredOptions.length > 0 ? (
             isGrouped ? (
-              Object.entries(groupedOptions).map(([groupName, items]) => (
+              groupEntries.map(([groupName, items]) => (
                 <div key={groupName} className="border-b border-slate-100 last:border-0">
                   <div className="px-4 py-1.5 text-[10px] font-black text-[#12a0e1] uppercase tracking-widest bg-slate-50 sticky top-0 z-10 border-b border-slate-100/60">
                     {groupName}

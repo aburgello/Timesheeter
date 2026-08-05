@@ -8,13 +8,13 @@ import React, {
 import { useLegacyRows, getCurrentWeekStart, hmToHours } from "../hooks/useLegacyRows";
 import { useColumnResize } from "../lib/useColumnResize";
 import { layoutRect } from "../utils/zoom";
-import { roundToHalfHourSeconds } from "../utils/timeHelpers";
 import { useJobLookup } from "../hooks/useJobLookup";
 import {
   supabase,
   setWrikeUserId as stampWrikeUserId,
   fetchExistingTimelogIds,
   whenIdentityReady,
+  selectAll,
 } from "../lib/supabaseClient";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
@@ -40,12 +40,27 @@ import {
   TERRITORIES,
   CATEGORIES,
   TERRITORY_FLAGS,
-  REGION_ALIASES,
   FILM_MAPPINGS,
+  normalizeName,
 } from "../constants.js";
+import { resolveJobNumber } from "../utils/wrikeHelpers";
+import { resolveCountries } from "../utils/countryCodes";
+import { getFolderCountries, buildChildToParent } from "../lib/wrikeEnrich";
+import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
+import { countryFieldIds, warmCountryFields } from "../lib/countryField";
+import { secondsToHM } from "../utils/timeHelpers";
 import { COLUMNS, DAYS, TIME_OPTIONS, getDarkTagStyle } from "./legacy/legacyConstants";
 import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
 import TableSearchableSelect from "./legacy/TableSearchableSelect";
+import MultiCountrySelect from "./shared/MultiCountrySelect";
+import {
+  splitTerritories,
+  joinTerritories,
+  territoryFlags,
+  territoryKey,
+  territoryCode,
+  toTimesheetTerritories,
+} from "../utils/territories";
 
 export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Drag-resizable column configs (persisted per table).
@@ -58,17 +73,36 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     { key: "location", label: "Location",         px: 160 },
     ...["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => ({ key: `day_${d}`, label: d, px: 64 })),
   ];
-  const { widths: wtWidths, resizeHandle: wtHandle } = useColumnResize("legacy-wrike-ts-cols", WRIKE_TS_COLS, { dark: true });
+  const { widths: wtWidths, resizeHandle: wtHandle } = useColumnResize("legacy-wrike-ts-cols", WRIKE_TS_COLS);
 
   // Default widths mirror the previous per-cell w-[…] classes so the layout is
   // unchanged until the user drags.
   const CONSOL_PX = {
     "Job Number": 240, "Client": 140, "Film Title": 150, "Project Description": 220,
-    "Country": 140, "Category": 180, "Client Amends": 70, "Notes": 140,
-    "3D": 50, "Time Spent": 90, "Additional Time": 90,
+    "Country": 140, "Category": 180, "Client Amends": 80, "Notes": 140,
+    "3D": 56, "Time Spent": 104, "Additional Time": 104,
   };
-  const CONSOL_COLS = COLUMNS.map((c, i) => ({ key: `c${i}`, label: c, px: CONSOL_PX[c] || 140 }));
-  const { widths: consolWidths, resizeHandle: consolHandle } = useColumnResize("legacy-consol-cols", CONSOL_COLS, { dark: true });
+  // These four hold a checkbox or a short time dropdown, never prose. They're
+  // already the size they need to be, so squeezing them only clips the control
+  // ("none" became "n…") without buying the text columns much room.
+  const CONSOL_FIXED = new Set(["Client Amends", "3D", "Time Spent", "Additional Time"]);
+  const CONSOL_COLS = COLUMNS.map((c, i) => ({
+    key: `c${i}`,
+    label: c,
+    px: CONSOL_PX[c] || 140,
+    fixed: CONSOL_FIXED.has(c),
+  }));
+  // Job Number and Additional Time keep their width and stay pinned to the
+  // edges; everything between them is squeezed to whatever the window leaves,
+  // so a narrow laptop scales the table down instead of pushing the last
+  // columns off the right where nobody finds them.
+  const consolScrollRef = useRef(null);
+  const { widths: consolWidths, resizeHandle: consolHandle } = useColumnResize(
+    "legacy-consol-cols",
+    CONSOL_COLS,
+    { fitTo: consolScrollRef, keepFirst: true, keepLast: true }
+  );
+  const consolTotal = CONSOL_COLS.reduce((s, c) => s + consolWidths[c.key], 0);
 
   const [activeDay, setActiveDay] = useState(() => {
     return localStorage.getItem("xyi_legacy_activeDay") || "Monday";
@@ -206,12 +240,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Formats a decimal-hours total as "H:MM" — decimal hours (e.g. "4.17h" for
   // 4h10m) read like hundredths to a human, so display the same H:MM shape
   // used everywhere else in the app instead.
-  const formatDayTotal = (hours) => {
-    const mins = Math.round(hours * 60);
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${h}:${String(m).padStart(2, "0")}`;
-  };
+  // "0:00" rather than "none" for an empty day — this is a running total, not
+  // a row's value.
+  const formatDayTotal = (hours) => secondsToHM(hours * 3600, "0:00");
 
   // --- Add blank row ---
   const handleAddRow = () => {
@@ -259,31 +290,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     setCollapsedGroups((prev) => ({ ...prev, [g.jobNumber]: false })); // ensure visible
   };
 
-  // Multi-country: one entry per selected country, all sharing the group's
-  // job/category/time. Each stays a real single-country row (subrow), so
-  // exports and totals are unaffected — see the modal picker below.
-  const addMultiCountryEntries = (g, countries, extra = {}) => {
+  // Multi-country: ONE entry covering every country picked, so the time is
+  // logged once for the work rather than duplicated per market. The company
+  // timesheet site takes several countries on a single row, so this exports
+  // straight across — see handleCopyJSON.
+  const addMultiCountryEntry = (g, countries, extra = {}) => {
     if (frozenDays[activeDay] || !countries?.length) return;
-    countries.forEach((territory, i) =>
-      addRow({
-        id: Date.now() + i * 7 + Math.floor(Math.random() * 1000),
-        taskId: null,
-        dayOfWeek: activeDay,
-        jobNumber: g.jobNumber || "",
-        client: g.client || "",
-        filmTitle: g.filmTitle || "",
-        projectDescription: g.projectDescription || "",
-        territory,
-        category: "",
-        clientAmends: false,
-        notes: "",
-        is3D: false,
-        timeSpent: "none",
-        additionalTime: "none",
-        ...extra,
-      })
-    );
-    setCollapsedGroups((prev) => ({ ...prev, [g.jobNumber]: false }));
+    addEntryToGroup(g, { territory: joinTerritories(countries), ...extra });
     setAddEntryFor(null);
   };
 
@@ -326,8 +339,43 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // ever runs later (on sync or on a webhook event), by which point the
   // whole component body (and parseWrikeDescription's const binding) has
   // already executed for this render.
+  // Parent tasks for any subtasks in a batch, keyed by id.
+  //
+  // A subtask is where both of the deliberate country rules go quiet: Wrike
+  // gives it no folder membership of its own (parentIds is the PARENT's
+  // business), and production writes the market code on the parent — the task
+  // people actually record time against — not on every subtask beneath it. So
+  // a subtask of "ODY_CN_EmperorCinema", sitting in a folder called
+  // "China 🇨🇳", could see neither the name nor the folder and fell through to
+  // whatever its custom fields happened to say.
+  //
+  // The Tracker gets this for free by inverting subTaskIds across its cache of
+  // the whole workspace (see enrichTasks). Legacy can't: it only ever holds
+  // MY tasks, and the parent of my subtask is often somebody else's, so it
+  // simply isn't in the batch to invert. Asking for the parents by id is the
+  // reliable way round — one batched call, only when subtasks are present,
+  // deduped and coalesced by fetchTasksByIds.
+  const fetchParentTasks = useCallback(async (tasks) => {
+    const have = new Map(tasks.map((t) => [t.id, t]));
+    const missing = [
+      ...new Set(tasks.flatMap((t) => t.superTaskIds || [])),
+    ].filter((id) => !have.has(id));
+
+    if (missing.length) {
+      try {
+        for (const p of await fetchTasksByIds(missing)) have.set(p.id, p);
+      } catch {
+        /* parents unavailable → subtasks fall back to their custom fields */
+      }
+    }
+    return have;
+  }, []);
+
   const enrichLegacyTask = useCallback(
-    (task, statusDict) => {
+    (task, statusDict, parentById) => {
+      const parent = (task.superTaskIds || [])
+        .map((id) => parentById?.get(id))
+        .find(Boolean);
       const parsed = parseWrikeDescription(task.description);
       let projectName = task.title.split(/[_|-]/)[0].trim();
       if (parsed.extractedPathData) {
@@ -344,6 +392,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         extractedPathData: parsed.extractedPathData,
         notesText: parsed.notesText,
         projectName,
+        // Rule 2: the code ending the parent task's name.
+        parentTaskTitle: parent?.title || task.parentTaskTitle || "",
+        // Rule 3, for subtasks: the folders the PARENT sits in, used only when
+        // the task carries none of its own. Kept as its own field rather than
+        // written over parentIds, which means one specific thing to Wrike and
+        // is read elsewhere.
+        superTaskParentIds: task.parentIds?.length ? [] : parent?.parentIds || [],
         customStatusName: task.customStatusId
           ? statusDict[task.customStatusId] || task.status
           : task.status,
@@ -358,6 +413,46 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Last-built status-id → name map, reused by the webhook patch below so an
   // incoming single-task event doesn't need to refetch /api/wrike/workflows.
   const statusDictRef = useRef({});
+
+  // The folder tree, held for the life of the page. Localisation campaigns put
+  // the market in a folder rather than in the task name — an hour on
+  // "ODY_CN_EmperorCinema", which sits in a folder called "China 🇨🇳", is the
+  // case — and only Generate Today's Timesheet ever fetched the tree to read
+  // it. Pull Wrike Times and Sync My Jobs built their rows without it, so
+  // those rows silently skipped the folder rule and fell through to whatever
+  // the task's custom fields happened to say. It lives beside the resolver's
+  // one funnel (guessFieldsFromTask) now, so no path can miss it again.
+  //
+  // fetchFolderDictionary reads the tree the last sync cached in Supabase and
+  // only crawls Wrike when that copy is missing or sparse, so this costs one
+  // select — cheap enough to warm on mount and await on click.
+  const folderTreeRef = useRef({ folderDictionary: {}, childToParent: {} });
+  const ensureFolderTree = useCallback(async (seed) => {
+    if (seed && Object.keys(seed).length) {
+      folderTreeRef.current = {
+        folderDictionary: seed,
+        childToParent: buildChildToParent(seed),
+      };
+      return;
+    }
+    if (Object.keys(folderTreeRef.current.folderDictionary).length) return;
+    try {
+      const { folderDictionary } = await fetchFolderDictionary();
+      folderTreeRef.current = {
+        folderDictionary,
+        childToParent: buildChildToParent(folderDictionary),
+      };
+    } catch {
+      /* no dictionary → countries fall back to the task name / custom field */
+    }
+  }, []);
+
+  // Both warmed on mount so rows built off a webhook patch — which arrives
+  // without anyone clicking anything — resolve their countries in full.
+  useEffect(() => {
+    ensureFolderTree();
+    warmCountryFields();
+  }, [ensureFolderTree]);
 
   // Near-instant updates: a webhook event only carries a changed task's id,
   // so batches of ids (debounced, see wrikeWebhookSubscription.js) get
@@ -375,11 +470,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const changed = await fetchTasksByIds(ids);
       if (!changed.length) return;
 
+      // Same parent lookup the bulk sync does, so a task edited into existence
+      // by a webhook resolves its country the same way one pulled by hand does.
+      const parentById = await fetchParentTasks(changed);
+
       setLocalWrikeTasks((prev) => {
         const map = new Map(prev.map((t) => [t.id, t]));
         changed.forEach((t) => {
           if (t.responsibleIds?.includes(wrikeUserId)) {
-            map.set(t.id, enrichLegacyTask(t, statusDictRef.current));
+            map.set(t.id, enrichLegacyTask(t, statusDictRef.current, parentById));
           } else {
             map.delete(t.id); // reassigned away from me
           }
@@ -389,7 +488,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     };
 
     return subscribeToWrikeTaskEvents(handleWebhookTaskIds);
-  }, [wrikeUserId, enrichLegacyTask]);
+  }, [wrikeUserId, enrichLegacyTask, fetchParentTasks]);
 
   const handleSyncMyJobs = async (silent = false) => {
     if (!wrikeUserId) {
@@ -402,6 +501,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
     setIsSyncingJobs(true);
     try {
+      await Promise.all([ensureFolderTree(), warmCountryFields()]);
+
       const wfRes = await fetch("/api/wrike/workflows");
       const wfJson = await wfRes.json();
       const statusDict = {};
@@ -416,8 +517,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       }
       statusDictRef.current = statusDict;
 
+      // superTaskIds is what tells us a task is a subtask at all — see
+      // fetchParentTasks for why the parent has to be looked up rather than
+      // inverted out of this batch.
       const fieldsFilter = encodeURIComponent(
-        "[customFields,parentIds,description]"
+        "[customFields,parentIds,superTaskIds,description]"
       );
       const responsiblesFilter = encodeURIComponent(`["${wrikeUserId}"]`);
 
@@ -467,7 +571,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         hasMore = !!nextPageToken;
       }
 
-      const enrichedTasks = rawTasks.map((task) => enrichLegacyTask(task, statusDict));
+      const parentById = await fetchParentTasks(rawTasks);
+      const enrichedTasks = rawTasks.map((task) =>
+        enrichLegacyTask(task, statusDict, parentById)
+      );
 
       setLocalWrikeTasks(enrichedTasks);
       return enrichedTasks;
@@ -493,33 +600,34 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       linkedTask.notesText || ""
     }`.toUpperCase();
 
-    let guessedTerritory = "";
-    let earliestIndex = Infinity;
-    const boundary = `(?:^|[^a-zA-Z])`;
-
-    // 1. Check direct matches with constants
-    const sortedTerritories = [...TERRITORIES].sort(
-      (a, b) => b.length - a.length
+    // Countries come from the same resolver the Tracker uses — the code at the
+    // end of the task name, else the parent's, else the market folder, else the
+    // Country custom field. This path used to run its own copy of the old
+    // free-text scan that never even looked at custom fields, so a Legacy-pulled
+    // row and a Tracker-pulled row could disagree about the same task. One rule
+    // now, in one place.
+    //
+    // The folder rule is resolved here for every caller. Tasks that arrive with
+    // it already worked out (the Tracker's cache, which enriches against the
+    // tree at sync time) keep theirs untouched.
+    // A subtask has no folders of its own, so it climbs from its parent's —
+    // resolved at fetch time into superTaskParentIds (see fetchParentTasks).
+    const folderCountries = linkedTask.folderCountries?.length
+      ? linkedTask.folderCountries
+      : getFolderCountries(
+          linkedTask.parentIds?.length
+            ? linkedTask
+            : { ...linkedTask, parentIds: linkedTask.superTaskParentIds || [] },
+          folderTreeRef.current.folderDictionary,
+          folderTreeRef.current.childToParent
+        );
+    const guessedTerritory = joinTerritories(
+      resolveCountries(
+        { ...linkedTask, folderCountries },
+        linkedTask.parentTaskTitle || "",
+        { countryFieldIds: countryFieldIds() }
+      )
     );
-    for (const terr of sortedTerritories) {
-      const escapedTerr = terr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(`${boundary}${escapedTerr}${boundary}`, "i");
-      const match = searchTarget.match(regex);
-      if (match && match.index < earliestIndex) {
-        earliestIndex = match.index;
-        guessedTerritory = terr;
-      }
-    }
-
-    // 2. Check aliases from constants file
-    for (const [abbr, targetTerritory] of Object.entries(REGION_ALIASES)) {
-      const regex = new RegExp(`${boundary}${abbr}${boundary}`, "i");
-      const match = searchTarget.match(regex);
-      if (match && match.index < earliestIndex) {
-        earliestIndex = match.index;
-        guessedTerritory = targetTerritory;
-      }
-    }
 
     let guessedJob = "";
     let rawPrefix = "";
@@ -532,21 +640,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           cf.value.match(/(XY\d{5,6})/i)
       );
       if (jobField) {
-        // Custom field value may carry a suffix beyond the base code (e.g.
-        // "XY025953_LUG_D6" for a localized delivery package) — keep the full
-        // value as the job number, but match against DEFAULT_JOBS on the base
-        // code only, since that's what's registered there.
+        // Custom field value may carry a suffix beyond the base code — see
+        // resolveJobNumber for which suffixes survive onto the row and why.
         const cfMatch = jobField.value.match(/(XY\d{5,6}(?:_[A-Za-z0-9]+)*)/i);
         const fullCode = cfMatch[1].toUpperCase();
         rawPrefix = fullCode.match(/XY\d{5,6}/i)[0];
-        const matchingOption = DEFAULT_JOBS.find((job) =>
-          job.toUpperCase().includes(rawPrefix)
-        );
-        guessedJob = matchingOption
-          ? matchingOption.toUpperCase().includes(fullCode)
-            ? matchingOption
-            : matchingOption.replace(new RegExp(rawPrefix, "i"), fullCode)
-          : fullCode;
+        guessedJob = resolveJobNumber(fullCode, DEFAULT_JOBS);
       }
     }
 
@@ -555,14 +654,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       if (xyMatch) {
         const fullCode = xyMatch[1].toUpperCase();
         rawPrefix = fullCode.match(/XY\d{5,6}/i)[0];
-        const matchingOption = DEFAULT_JOBS.find((job) =>
-          job.toUpperCase().includes(rawPrefix)
-        );
-        guessedJob = matchingOption
-          ? matchingOption.toUpperCase().includes(fullCode)
-            ? matchingOption
-            : matchingOption.replace(new RegExp(rawPrefix, "i"), fullCode)
-          : fullCode;
+        guessedJob = resolveJobNumber(fullCode, DEFAULT_JOBS);
       } else {
         const rawSplit = linkedTask.title?.split(/[_|-]/)[0]?.trim();
         for (const job of DEFAULT_JOBS) {
@@ -611,16 +703,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     };
   };
 
-  const getTimesheetValue = (hours) => {
-    if (!hours || hours === 0) return "none";
-    const secs = Math.round(hours * 3600);
-    if (secs <= 0) return "none";
-    const mins = Math.round(secs / 60);
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${h}:${String(m).padStart(2, "0")}`;
-  };
-
   const getLogHoursForTaskAndDay = (taskId, targetDay) => {
     const dayNames = [
       "Sunday",
@@ -635,14 +717,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
     wrikeWeeklyLogs.forEach((log) => {
       if (log.taskId === taskId) {
-        const logDay = dayNames[new Date(log.trackedDate).getDay()];
+        // Parse as a LOCAL date. A bare "2026-08-04" is parsed as UTC midnight,
+        // so west of Greenwich getDay() lands on the previous weekday and the
+        // hours show up in the wrong column.
+        const dayKey = String(log.trackedDate || "").split("T")[0];
+        const logDay = dayNames[new Date(`${dayKey}T00:00:00`).getDay()];
         if (logDay === targetDay) {
           totalHours += log.hours;
         }
       }
     });
 
-    return totalHours > 0 ? totalHours.toFixed(1) : null;
+    // Exact hours, not toFixed(1). The caller turns this into minutes, and
+    // rounding to one decimal first meant every quarter-hour was reported
+    // wrong: 0.25h became "0.3" and displayed as 18m, 2.75h as 2h 48m.
+    return totalHours > 0 ? totalHours : null;
   };
 
   const getTaskSortValues = (t) => {
@@ -678,70 +767,106 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const tomorrowStr = toLocalDateStr(tomorrow);
 
       const fieldsFilter = encodeURIComponent(
-        "[customFields,parentIds,description]"
+        "[customFields,parentIds,superTaskIds,description]"
       );
 
-      // --- STEP 1: Fetch today's timelogs (source of truth for worked-on tasks) ---
+      // --- STEP 1: Fetch this reporting week's timelogs ---
+      // The modal draws a Mon–Sun grid, but this used to keep only today's and
+      // yesterday's logs — so any hour tracked earlier in the week rendered as
+      // "—" in its column, on a panel headed "CURRENT REPORTING WEEK". Keep the
+      // whole week the grid actually shows.
+      const weekStartStr = getCurrentWeekStart();          // Monday, local
+      const weekEnd = new Date(`${weekStartStr}T00:00:00`);
+      weekEnd.setDate(weekEnd.getDate() + 6);              // Sunday
+      const weekEndStr = toLocalDateStr(weekEnd);
+
       const timelogRes = await fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`);
       const timelogJson = await timelogRes.json();
       const logs = (timelogJson.data || []).filter((l) => {
         const d = l.trackedDate?.split("T")[0];
-        return d === todayStr || d === yesterdayStr;
+        return d && d >= weekStartStr && d <= weekEndStr;  // ISO dates sort lexically
       });
       setWrikeWeeklyLogs(logs);
 
-      const todayLoggedTaskIds = [
-        ...new Set(
-          logs
-            .filter((l) => l.trackedDate?.split("T")[0] === todayStr)
-            .map((l) => l.taskId)
-        ),
-      ];
+      // One cached lookup, used twice below:
+      //  · folderDictionary — localisation campaigns carry the market in the
+      //    folder tree, not the task name ("PP3 - CHI - DOOH - Batch 1 - POST"
+      //    lives in a folder called "Chile" and ends in "POST"), and these
+      //    tasks already come back with parentIds so the climb is free.
+      //  · statusDictionary — resolves customStatusId to the workflow label
+      //    ("Delivered"), which is what the status badge is meant to show.
+      let folderDictionary = {}, statusDictionary = {}, childToParent = {};
+      try {
+        ({ folderDictionary, statusDictionary } = await fetchFolderDictionary());
+        childToParent = buildChildToParent(folderDictionary);
+        // Share it with guessFieldsFromTask rather than let it read the same
+        // cached tree a second time.
+        ensureFolderTree(folderDictionary);
+      } catch {
+        /* no dictionary → countries fall back to the task name / custom field */
+      }
 
-      // --- STEP 2: Fetch today's timelog tasks directly, one by one ---
-      // We fetch each task individually so a single failure never blocks the rest.
+      // Every task with time against it ANYWHERE in the week, not just today.
+      // This used to be today-only, which meant a task logged on Monday had its
+      // hours in `logs` but no row in the grid to show them against — so the
+      // week's earlier columns were permanently empty however much had been
+      // tracked.
+      const weekLoggedTaskIds = [...new Set(logs.map((l) => l.taskId).filter(Boolean))];
+
+      // --- STEP 2: Fetch the week's logged tasks ---
+      // Each task is fetched independently so one failure never blocks the
+      // rest, and they go out together rather than one-at-a-time — serially
+      // this was one round trip per task, which a full week makes slow enough
+      // to notice.
       // Strategy per task:
       //   A) Try with fields= (gives custom fields, description, parentIds)
       //   B) If that 400s (e.g. unassigned tasks on some Wrike plans), retry bare
       //      — we still get title/status/dates, which is enough to show the row.
-      let timelogTasks = [];
-      for (const taskId of todayLoggedTaskIds) {
-        try {
-          // Attempt A: full fields
-          let res = await fetch(`/api/wrike/tasks/${taskId}?fields=${fieldsFilter}`);
-
-          // Attempt B: bare fetch if fields caused a 400
-          if (!res.ok) {
-            res = await fetch(`/api/wrike/tasks/${taskId}`);
-          }
-
-          if (res.ok) {
-            const json = await res.json();
-            if (json.data)
-              timelogTasks = [
-                ...timelogTasks,
-                ...json.data.map(enrichWrikeTask),
-              ];
-          } else {
-            console.warn(
-              `Could not fetch timelog task ${taskId}: ${res.status}`
-            );
-          }
-        } catch (err) {
-          console.warn(`Failed to fetch timelog task ${taskId}:`, err);
-        }
-      }
+      const timelogRaw = (
+        await Promise.all(
+          weekLoggedTaskIds.map(async (taskId) => {
+            try {
+              let res = await fetch(`/api/wrike/tasks/${taskId}?fields=${fieldsFilter}`);
+              if (!res.ok) res = await fetch(`/api/wrike/tasks/${taskId}`);
+              if (!res.ok) {
+                console.warn(`Could not fetch timelog task ${taskId}: ${res.status}`);
+                return [];
+              }
+              const json = await res.json();
+              return json.data || [];
+            } catch (err) {
+              console.warn(`Failed to fetch timelog task ${taskId}:`, err);
+              return [];
+            }
+          })
+        )
+      ).flat();
+      const timelogParentById = await fetchParentTasks(timelogRaw);
+      const timelogTasks = timelogRaw.map((t) =>
+        enrichWrikeTask(t, statusDictionary, timelogParentById)
+      );
 
       // --- STEP 3: Fetch assigned tasks due today/tomorrow ---
-      const myFirstName = wrikeFullName.split(" ")[0];
       let assignedTasks = await handleSyncMyJobs(true);
       if (!assignedTasks) assignedTasks = activeWrikeData || [];
 
+      // Matching used to be `assignees.includes(firstName)` for arrays and an
+      // exact `=== firstName` for strings — but enrichTasks joins assignees
+      // into a comma-separated list of FULL names, so the string branch never
+      // matched anyone and the whole assigned-tasks step was silently empty for
+      // most people. Compare emoji-stripped full names (normalizeName), which
+      // is how the rest of the app identifies people.
+      const meNormalized = normalizeName(wrikeFullName);
+      const isAssignedToMe = (t) => {
+        const raw = Array.isArray(t.assignees) ? t.assignees : String(t.assignees || "").split(",");
+        return raw.some((n) => {
+          const name = normalizeName(n);
+          return name === meNormalized || name === normalizeName(wrikeFullName.split(" ")[0]);
+        });
+      };
+
       const assignedFiltered = assignedTasks.filter((t) => {
-        const isAssigned = Array.isArray(t.assignees)
-          ? t.assignees.includes(myFirstName)
-          : t.assignees === myFirstName;
-        if (!isAssigned) return false;
+        if (!isAssignedToMe(t)) return false;
 
         const customStatus = (
           t.customStatusName ||
@@ -776,6 +901,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const newExpanded = {};
 
       myTasks.forEach((task) => {
+        task.folderCountries = getFolderCountries(task, folderDictionary, childToParent);
         const fields = guessFieldsFromTask(task);
 
         let client = "";
@@ -1000,7 +1126,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           </div>
           {wrikeHours &&
             (() => {
-              const totalMins = Math.round(parseFloat(wrikeHours) * 60);
+              const totalMins = Math.round(wrikeHours * 60);
               const h = Math.floor(totalMins / 60);
               const m = totalMins % 60;
               const label =
@@ -1040,7 +1166,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   };
 
   // Shared helper: enrich a raw Wrike task object the same way handleSyncMyJobs does
-  const enrichWrikeTask = (task) => {
+  // `statusDictionary` maps customStatusId -> the workflow label. Without it
+  // this fell back to task.status, which is Wrike's fixed Active/Completed
+  // lifecycle — so a timelog-fetched row's badge read "Completed" while the
+  // identical task pulled through the assigned path read "Delivered".
+  const enrichWrikeTask = (task, statusDictionary = {}, parentById) => {
+    const parent = (task.superTaskIds || [])
+      .map((id) => parentById?.get(id))
+      .find(Boolean);
     const parsed = parseWrikeDescription(task.description);
     let projectName = task.title.split(/[_|-]/)[0].trim();
     if (parsed.extractedPathData) {
@@ -1056,7 +1189,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       extractedPathData: parsed.extractedPathData,
       notesText: parsed.notesText,
       projectName,
-      customStatusName: task.status,
+      // Rules 2 and 3 for subtasks — see fetchParentTasks.
+      parentTaskTitle: parent?.title || task.parentTaskTitle || "",
+      superTaskParentIds: task.parentIds?.length ? [] : parent?.parentIds || [],
+      customStatusName:
+        (task.customStatusId && statusDictionary[task.customStatusId]) || task.status,
       // Mark as unassigned-recovery so we know this task was fetched because
       // the user was removed from it — keeps all metadata intact
       assignees: ["__recovered__"],
@@ -1076,24 +1213,55 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     if (missingIds.length === 0) return currentTasks;
 
     const fieldsFilter = encodeURIComponent(
-      "[customFields,parentIds,description]"
+      "[customFields,parentIds,superTaskIds,description]"
     );
-    let recovered = [...currentTasks];
+    // Collected raw, then enriched in one pass at the end: the parent lookup
+    // that subtask countries need is worth doing once for the whole recovery,
+    // not per 100-id chunk.
+    let rawRecovered = [];
+
+    // Same A/B strategy STEP 2 of handleSyncMyJobs uses: `fields=` 400s for
+    // tasks the caller isn't a responsible on, and this path exists precisely
+    // to recover those. Without the retry a 400 left `json.data` undefined and
+    // the whole chunk was dropped in silence — `res.json()` on an error body
+    // doesn't throw, so the catch below never fired and nothing was logged.
+    // Every timelog in that chunk then found no task and produced a blank row
+    // (no job number, "Internal"/"XYi Unbilled", no territory).
+    const fetchChunk = async (ids) => {
+      let res = await fetch(`/api/wrike/tasks/${ids.join(",")}?fields=${fieldsFilter}`);
+      if (!res.ok) res = await fetch(`/api/wrike/tasks/${ids.join(",")}`);
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.data || null;
+    };
 
     for (let i = 0; i < missingIds.length; i += 100) {
       const chunk = missingIds.slice(i, i + 100);
       try {
-        const res = await fetch(`/api/wrike/tasks/${chunk.join(",")}?fields=${fieldsFilter}`);
-        const json = await res.json();
-        if (json.data) {
-          recovered = [...recovered, ...json.data.map(enrichWrikeTask)];
+        const data = await fetchChunk(chunk);
+        if (data) {
+          rawRecovered = [...rawRecovered, ...data];
+          continue;
+        }
+        // A batch request is all-or-nothing: one unreadable id fails all 100
+        // with it. Fall back to one call per id so a single bad task costs
+        // only its own row.
+        for (const id of chunk) {
+          const one = await fetchChunk([id]).catch(() => null);
+          if (one) rawRecovered = [...rawRecovered, ...one];
+          else console.warn("Could not recover timelog task:", id);
         }
       } catch (err) {
         console.warn("Failed to recover missing tasks chunk:", chunk, err);
         // Don't abort the whole pull — continue with whatever we have
       }
     }
-    return recovered;
+
+    const parentById = await fetchParentTasks(rawRecovered);
+    return [
+      ...currentTasks,
+      ...rawRecovered.map((t) => enrichWrikeTask(t, {}, parentById)),
+    ];
   };
 
   const dismissNewWeekBanner = () => setNewWeekBanner(false);
@@ -1106,21 +1274,40 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
     setIsPulling(true);
     try {
+      // Awaited here too, not just in the sync below: that call can bail early
+      // (no Wrike user, a failed fetch) and this path then builds its rows off
+      // activeWrikeData regardless — with no tree, those rows would be exactly
+      // the ones that skipped the folder rule before.
+      await Promise.all([ensureFolderTree(), warmCountryFields()]);
+
       let currentTasks = await handleSyncMyJobs(true);
       if (!currentTasks) currentTasks = activeWrikeData;
 
       // Use contacts-scoped endpoint — avoids the broken trackedDate query param
-      // Filter to target date client-side using local date string
+      // Filter to target date(s) client-side using local date strings
+      const localIso = (d) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+          d.getDate()
+        ).padStart(2, "0")}`;
       const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(
-        now.getMonth() + 1
-      ).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      const targetDateStr = (typeof dateStr === "string" && dateStr) ? dateStr : todayStr;
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      // A normal pull covers today *and* yesterday, so time logged after the
+      // last pull of the previous day still lands without needing a debug
+      // pull. The admin debug pull stays single-date — it's for targeting one
+      // specific day. Anything already pulled is skipped by
+      // existingTimelogIds below, and frozen days are dropped when grouping,
+      // so widening the window can't duplicate or overwrite yesterday's rows.
+      const targetDates =
+        typeof dateStr === "string" && dateStr
+          ? [dateStr]
+          : [localIso(yesterday), localIso(now)];
+      const targetDateSet = new Set(targetDates);
 
       const res = await fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`);
       const json = await res.json();
-      const logs = (json.data || []).filter(
-        (l) => l.trackedDate?.split("T")[0] === targetDateStr
+      const logs = (json.data || []).filter((l) =>
+        targetDateSet.has(l.trackedDate?.split("T")[0])
       );
 
       // Recover any tasks where the user was removed as a responsible —
@@ -1273,7 +1460,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             clientAmends: false,
             notes: notes || task?.title || "",
             is3D: false,
-            timeSpent: getTimesheetValue(totalHours),
+            timeSpent: secondsToHM(totalHours * 3600),
             additionalTime: "none",
           });
         }
@@ -1294,7 +1481,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           "success"
         );
       } else {
-        showToast("No new or unfrozen times found for today.");
+        showToast(
+          targetDates.length > 1
+            ? "No new or unfrozen times found for today or yesterday."
+            : "No new or unfrozen times found for that date."
+        );
       }
     } catch (err) {
       console.error(err);
@@ -1351,18 +1542,23 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         const rawSecs = row.rawSeconds ?? 0;
         const addSecs = row.additionalSeconds ?? 0;
 
-        let exportTerritory = row.territory || "";
-        if (exportTerritory === "UK") exportTerritory = "United Kingdom";
-        else if (exportTerritory === "USA" || exportTerritory === "US")
-          exportTerritory = "United States";
-        else if (exportTerritory === "UAE")
-          exportTerritory = "United Arab Emirates";
+        // A row can cover several markets; the destination site ticks one
+        // checkbox per country on the same row, so send them all. Names go out
+        // exactly as TERRITORIES holds them — that list mirrors the site's own
+        // country names ("UK", not "United Kingdom"), and renaming them here
+        // used to leave those rows with no country ticked at all. The one
+        // exception is a value the site has no checkbox for at all, which
+        // toTimesheetTerritories swaps for the nearest one it does have.
+        const exportTerritories = toTimesheetTerritories(row.territory);
 
         return {
           id: row.id,
           taskId: row.taskId,
           jobNumber: row.jobNumber || "",
-          territory: exportTerritory,
+          // `territory` stays a string for older bookmarklets (they match it
+          // against a single checkbox); `territories` is what current ones read.
+          territory: exportTerritories.join(", "),
+          territories: exportTerritories,
           category: row.category || "",
           notes:
             (row.projectDescription || "") +
@@ -1378,7 +1574,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const getConsolidatedTasks = (taskList) => {
         const consolidated = {};
         taskList.forEach((t) => {
-          const key = `${t.dayOfWeek}|${t.jobNumber}|${t.territory}|${t.category}`;
+          // territoryKey so "Belgium, France" and "France, Belgium" merge.
+          const key = `${t.dayOfWeek}|${t.jobNumber}|${territoryKey(t.territory)}|${t.category}`;
           if (!consolidated[key]) {
             consolidated[key] = {
               ...t,
@@ -1396,16 +1593,18 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           }
         });
 
+        // Exact seconds go out. How coarse a row may be is decided per *job* on
+        // the timesheet site (a UK-folder job takes 0.25 steps, an INT one only
+        // 0.5) and nothing here can know which — so the bookmarklet snaps each
+        // row against its own dropdown instead of us guessing up front.
         return Object.values(consolidated).map((c) => ({
           ...c,
-          rawSeconds: roundToHalfHourSeconds(c.rawSeconds),
-          additionalSeconds: c.additionalSeconds > 0 ? roundToHalfHourSeconds(c.additionalSeconds) : 0,
           notes: c.notesArray.filter(Boolean).join(" | "),
         }));
       };
 
       const exportData = {
-        version: 5,
+        version: 7, // 7 = seconds are exact (the bookmarklet does the rounding)
         exportDate: new Date().toISOString(),
         tasks: getConsolidatedTasks(mappedTasks),
         rawTasks: mappedTasks,
@@ -1499,16 +1698,20 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       // returns empty on a first login.
       await whenIdentityReady();
       if (!alive) return;
-      const [booksRes, tasksRes, filmsRes] = await Promise.all([
-        supabase.from("jobs").select("job_number"),
-        supabase.from("tasks").select("job_number, date").eq("source", "legacy").not("job_number", "is", null),
-        supabase.from("films").select("title"),
+      // selectAll on all three: each is past (or heading past) Supabase's 1000-row
+      // response cap, which truncates without erroring. A partial `jobs` read is
+      // what made recently-allocated jobs unselectable in the row dropdown.
+      const [books, legacyTasks, films] = await Promise.all([
+        selectAll("jobs", "job_number"),
+        selectAll("tasks", "job_number, date", (q) =>
+          q.eq("source", "legacy").not("job_number", "is", null)),
+        selectAll("films", "title"),
       ]);
       if (!alive) return;
       // Real films from the DB — used to sink pseudo-"films" (e.g. a "2026" year
       // folder) below genuine titles in the dropdown grouping.
       const normFilm = (s) => (s || "").toLowerCase().replace(/[_\s]+/g, " ").trim();
-      const realFilms = new Set((filmsRes.data || []).map((f) => normFilm(f.title)));
+      const realFilms = new Set(films.map((f) => normFilm(f.title)));
       // A group name like "2026" (a year folder) or a purely numeric/blank token
       // isn't a real film — sink those regardless of whether the films table read
       // succeeded. Confirmed DB films rank highest.
@@ -1521,7 +1724,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       };
       // Book: code -> best canonical label (prefer "Film : CODE, Desc").
       const bookLabel = {};
-      (booksRes.data || []).forEach((r) => {
+      books.forEach((r) => {
         const j = (r.job_number || "").trim();
         if (!j) return;
         const k = codeKey(j);
@@ -1536,7 +1739,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         return isNaN(t) ? 0 : t;
       };
       const recency = {};
-      (tasksRes.data || []).forEach((r) => {
+      legacyTasks.forEach((r) => {
         const k = codeKey(r.job_number || "");
         if (!k) return;
         const t = parseDate(r.date);
@@ -1610,13 +1813,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // category / session logged against it that day; those individual entries are
   // the group's editable subrows. (Previously grouped by the whole
   // job+territory+category triple, which fragmented one job across many rows.)
-  const sToHM = (s) => {
-    if (!(s > 0)) return "none";
-    const mins = Math.round(s / 60);
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${h}:${String(m).padStart(2, "0")}`;
-  };
   const consolidatedRows = useMemo(() => {
     const groups = {};
     currentDayRows.forEach((row) => {
@@ -1639,7 +1835,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const g = groups[key];
       g._rawSeconds += row.rawSeconds ?? 0;
       g._additionalSeconds += row.additionalSeconds ?? 0;
-      if (row.territory) g._territories.add(row.territory);
+      // A row can cover several markets, so count each one against the job.
+      splitTerritories(row.territory).forEach((t) => g._territories.add(t));
       if (row.category) g._categories.add(row.category);
       // First non-empty client/film wins, so the header isn't blank when only
       // some sessions carry them.
@@ -1651,8 +1848,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       ...g,
       rawSeconds: g._rawSeconds,
       additionalSeconds: g._additionalSeconds,
-      timeSpent: sToHM(g._rawSeconds),
-      additionalTime: sToHM(g._additionalSeconds),
+      timeSpent: secondsToHM(g._rawSeconds),
+      additionalTime: secondsToHM(g._additionalSeconds),
       territories: [...g._territories],
       categories: [...g._categories],
     }));
@@ -1685,7 +1882,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         arr.filter(
           (x) =>
             x.jobNumber === r.jobNumber &&
-            x.territory === r.territory &&
+            territoryKey(x.territory) === territoryKey(r.territory) &&
             x.category === r.category
         ).length > 1
     );
@@ -2183,8 +2380,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
       {/* Everything below the full-bleed header gets the page's horizontal
           gutter + top/bottom spacing — the header itself must stay outside
-          any padded container to remain edge-to-edge. */}
-      <div className="px-4 sm:px-6 pt-3 pb-4">
+          any padded container to remain edge-to-edge. px/py match Job Book,
+          Today's List and Management exactly; this page used to sit tighter
+          (pt-3 pb-4) and read as misaligned when moving between them. */}
+      <div className="px-4 sm:px-6 py-6">
         {/* New week banner */}
         {newWeekBanner && (
           <div className="max-w-[1800px] mx-auto mb-3 flex items-center gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-2xl shadow-sm">
@@ -2303,17 +2502,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         </div>
 
         {/* --- TABLE AREA --- */}
-        <div className="flex-1 bg-white relative overflow-x-auto w-full min-h-[600px]">
-          <table className="w-full text-left text-[12px] border-collapse [&_td]:overflow-hidden" style={{ tableLayout: "fixed", minWidth: `${CONSOL_COLS.reduce((s, c) => s + consolWidths[c.key], 0)}px` }}>
+        <div ref={consolScrollRef} className="flex-1 bg-white relative overflow-x-auto w-full min-h-[600px]">
+          <table className="w-full text-left text-[12px] border-collapse [&_td]:overflow-hidden" style={{ tableLayout: "fixed", minWidth: `${consolTotal}px` }}>
             <colgroup>
               {CONSOL_COLS.map((c) => <col key={c.key} style={{ width: consolWidths[c.key] }} />)}
             </colgroup>
             <thead className="sticky top-0 z-20">
               <tr className="bg-slate-50 text-[#768994] shadow-sm border-b-2 border-slate-200">
+                {/* Headers wrap rather than truncate — a squeezed column showed
+                    "ADDITIONA" with no way to tell what it was. align-bottom
+                    keeps the labels on one baseline whether they run to one
+                    line or two. */}
                 {CONSOL_COLS.map((c, idx) => (
                   <th
                     key={c.key}
-                    className={`relative p-3 text-[10px] font-black uppercase tracking-widest whitespace-nowrap overflow-hidden ${
+                    className={`relative px-3 py-2 text-[10px] font-black uppercase tracking-widest leading-[1.2] align-bottom ${
                       idx === CONSOL_COLS.length - 1 ? "" : "border-r border-slate-200/70"
                     }`}
                   >
@@ -2416,7 +2619,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                     </button>
                                     <div className="my-1.5 border-t border-slate-100" />
                                     <p className="px-1.5 py-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
-                                      Multi-country — one entry each
+                                      One entry, several countries
                                     </p>
                                     <input
                                       value={countryQuery}
@@ -2425,8 +2628,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                       className="w-full mb-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-slate-200 outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/10"
                                     />
                                     <div className="max-h-44 overflow-y-auto custom-scrollbar pr-0.5">
-                                      {TERRITORIES.filter((t) =>
-                                        t.toLowerCase().includes(countryQuery.toLowerCase())
+                                      {TERRITORIES.filter(
+                                        (t) =>
+                                          t.toLowerCase().includes(countryQuery.trim().toLowerCase()) ||
+                                          territoryCode(t).toLowerCase().includes(countryQuery.trim().toLowerCase())
                                       ).map((t) => {
                                         const on = multiCountrySel.includes(t);
                                         return (
@@ -2448,20 +2653,25 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                             </span>
                                             <span className="shrink-0">{TERRITORY_FLAGS[t]}</span>
                                             <span className="truncate">{t}</span>
+                                            {territoryCode(t) && (
+                                              <span className={`ml-auto shrink-0 font-mono text-[9.5px] tracking-wide ${on ? "opacity-70" : "text-slate-400"}`}>
+                                                {territoryCode(t)}
+                                              </span>
+                                            )}
                                           </button>
                                         );
                                       })}
                                     </div>
                                     <button
                                       disabled={!multiCountrySel.length}
-                                      onClick={() => addMultiCountryEntries(g, multiCountrySel)}
+                                      onClick={() => addMultiCountryEntry(g, multiCountrySel)}
                                       className={`w-full mt-2 px-3 py-2 rounded-lg text-[11px] font-black transition-colors ${
                                         multiCountrySel.length
                                           ? "bg-[#12a0e1] text-white hover:bg-[#0e8bc4]"
                                           : "bg-slate-100 text-slate-300 cursor-not-allowed"
                                       }`}
                                     >
-                                      Add {multiCountrySel.length || ""} {multiCountrySel.length === 1 ? "entry" : "entries"}
+                                      Add entry{multiCountrySel.length ? ` · ${multiCountrySel.length} ${multiCountrySel.length === 1 ? "country" : "countries"}` : ""}
                                     </button>
                                   </div>
                                 </>
@@ -2474,7 +2684,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       <td className="p-2 border-r border-slate-200/60 align-middle text-[12px] font-black text-slate-800 truncate px-3">{g.filmTitle}</td>
                       <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-400 truncate px-3">{g.projectDescription}</td>
                       <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-500 px-3">
-                        {g.territories.length ? `${g.territories.length} ${g.territories.length === 1 ? "country" : "countries"}` : "—"}
+                        {g.territories.length ? (
+                          <span className="flex flex-wrap items-center gap-x-1 gap-y-0.5" title={g.territories.join(", ")}>
+                            <span className="text-[13px] leading-none">{territoryFlags(g.territories, 12)}</span>
+                            <span>{g.territories.length} {g.territories.length === 1 ? "country" : "countries"}</span>
+                          </span>
+                        ) : "—"}
                       </td>
                       <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-500 px-3">
                         {g.categories.length ? `${g.categories.length} ${g.categories.length === 1 ? "category" : "categories"}` : "—"}
@@ -2522,11 +2737,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         {isSub ? (
                           // The job is set once at the group top, never per subrow —
                           // the subrow just carries its own country/category identity.
-                          <div className="flex items-center gap-1.5 pl-3 border-l-2 border-[#12a0e1]/25 py-1 min-w-0">
+                          <div className="flex items-center gap-1.5 pl-3 border-l-2 border-[#12a0e1]/25 py-1 min-w-0" title={row.territory}>
                             <span className="text-slate-300 text-[11px] shrink-0">↳</span>
-                            <span className="text-[13px] leading-none shrink-0">{TERRITORY_FLAGS[row.territory] || "🌐"}</span>
+                            {/* Capped: this sits on one line next to the category,
+                                so a 20-country row can't be allowed to run away. */}
+                            <span className="text-[13px] leading-none shrink-0">{territoryFlags(row.territory, 6) || "🌐"}</span>
                             <span className="text-[11px] font-bold text-slate-600 truncate">
-                              {row.territory || "No country"}
+                              {splitTerritories(row.territory).length > 6
+                                ? `${splitTerritories(row.territory).length} countries`
+                                : row.territory || "No country"}
                               {row.category ? <span className="font-medium text-slate-400"> · {row.category.replace(/^(Digital|Print|XYi)\s*-\s*/, "")}</span> : null}
                             </span>
                           </div>
@@ -2598,19 +2817,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   </td>
 
                   <td className="p-2 border-r border-slate-100 align-middle w-[140px]">
-                    <TableSearchableSelect
-                      options={TERRITORIES}
+                    <MultiCountrySelect
                       value={row.territory}
                       onChange={(val) =>
                         handleUpdateRow(row.id, "territory", val)
                       }
                       placeholder="Country"
-                      getPrefix={(val) => TERRITORY_FLAGS[val]}
                       dropdownId={`country-${row.id}`}
                       activeDropdown={activeDropdown}
                       setActiveDropdown={setActiveDropdown}
-                      isCountry={true}
                       disabled={!rowsAreEditable}
+                      needsAttention={rowsAreEditable}
                     />
                   </td>
 
@@ -2774,6 +2991,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             <button
               onClick={() => handlePullTimes()}
               disabled={isPulling || isDayFrozen}
+              title="Pulls your Wrike time for today and yesterday"
               className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold border rounded-xl shadow-lg transition-all ${
                 isDayFrozen
                   ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-70"

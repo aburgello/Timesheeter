@@ -345,7 +345,16 @@ export const DEFAULT_JOBS = [
 ];
 
 export const TERRITORIES = [
+  // Misc first, then countries alphabetically. These five aren't places — they
+  // are the timesheet's answers for "this row isn't for one market" — and
+  // burying OV among the O's meant scrolling past forty countries to reach one
+  // of the most-used entries. The dropdown renders this list in order, so the
+  // grouping here is the grouping people see.
+  "_Multiple_",
   "_XYi_",
+  "_Masters_",
+  "OV",
+  "OV Suite Build",
   "Albania",
   "Arabic",
   "Argentina",
@@ -386,6 +395,7 @@ export const TERRITORIES = [
   "India",
   "India - English",
   "India - Hindi",
+  "India - Kannada",
   "India - Tamil",
   "India - Telugu",
   "Indonesia",
@@ -412,8 +422,6 @@ export const TERRITORIES = [
   "Netherlands",
   "New Zealand",
   "Norway",
-  "OV",
-  "OV Suite Build",
   "Pakistan",
   "Panama",
   "Paraguay",
@@ -449,8 +457,349 @@ export const TERRITORIES = [
   "Yoruba (West Africa)",
 ];
 
+// (MANUAL_ONLY_TERRITORIES used to live here. It existed to stop the old
+// free-text scan reading "_Multiple_" out of a folder name it happened to
+// appear in. Nothing scans free text any more — a value is only taken from a
+// deliberate suffix, folder name or custom field — so the exclusion list had
+// no readers left.)
+
+// The suffixes production agreed to write at the end of a task name when the
+// work isn't for one named country (agreed with Guillaume, 4 Aug 2026). They
+// are read exactly like a country code — see countryCodes.js — and exist so a
+// deliberate "this covers every market" can be told apart from a task nobody
+// labelled at all. Keys are matched case- and punctuation-insensitively.
+export const COUNTRY_SUFFIX_EXCEPTIONS = {
+  MARKETS: "_Multiple_",
+  MULTIPLE: "_Multiple_",
+  OV: "OV",
+  MASTERS: "_Masters_",
+};
+
+// The company timesheet's country list has no "Masters" checkbox, so a row
+// carrying ours has nowhere to land. Until one exists it goes over as
+// "OV Suite Build" — the closest thing the site offers — which keeps the
+// paste-into-timesheet flow working without pretending we didn't mean Masters
+// on our side. Delete the entry once the site gains the real option; the
+// export and the bookmarklet both read this map, so that's the only edit.
+export const TIMESHEET_TERRITORY_SUBSTITUTIONS = {
+  // The site renamed this option to "OV Suite Build (Masters)" on 4 Aug 2026.
+  // The bookmarklet matches on the name with punctuation stripped, so our
+  // plain "OV Suite Build" stopped finding it the moment that happened — both
+  // of ours now point at the site's new label.
+  _Masters_: "OV Suite Build (Masters)",
+  "OV Suite Build": "OV Suite Build (Masters)",
+
+  // Two names we spell differently from the site. Found by diffing this list
+  // against the site's own country panel: the bookmarklet matches on the name
+  // with punctuation stripped, so "Czech Republic" never found "Czech" and
+  // those rows landed with no country ticked at all. Substituting on the way
+  // out fixes the paste without renaming the values people already have saved
+  // against thousands of stored rows.
+  "Czech Republic": "Czech",
+  "Canadian-French": "Canada - French",
+};
+
+// The market code shown beside each country in the picker — "Brazil (BR)" —
+// so the list reads as a call-back to the codes people write at the end of a
+// task name. These are MAGI's own 2-letter codes, taken from their MARKET
+// CODES sheet, so what someone reads here is what MAGI calls that market.
+//
+// Where MAGI splits a market by language and we carry one territory for it
+// (BE-FL/BE-FR, CH-FR/CH-DE/CH-IT, IN-*, AE-*), the shared 2-letter root is
+// shown. Both halves still resolve — see MAGI_MARKET_CODES.
+export const TERRITORY_CODES = {
+  OV: "OV",
+  Albania: "AL",
+  Argentina: "AR",
+  Armenia: "AM",
+  Australia: "AU",
+  Austria: "AT",
+  Azerbaijan: "AZ",
+  Belgium: "BE",
+  Bolivia: "BO",
+  Bosnia: "BA",
+  Brazil: "BR",
+  Bulgaria: "BG",
+  Cambodia: "KH",
+  "Canadian-French": "CA",
+  Chile: "CL",
+  China: "CN",
+  CIS: "CIS",
+  Colombia: "CO",
+  Croatia: "HR",
+  Cyprus: "CY",
+  Czech: "CZ",
+  "Czech Republic": "CZ",
+  Denmark: "DK",
+  Ecuador: "EC",
+  Egypt: "EG",
+  Estonia: "EE",
+  Finland: "FI",
+  France: "FR",
+  Georgia: "GE",
+  Germany: "DE",
+  Greece: "GR",
+  "Hong Kong": "HK",
+  Hungary: "HU",
+  Iceland: "IS",
+  "India - English": "IN",
+  "India - Hindi": "IN",
+  "India - Kannada": "IN",
+  "India - Tamil": "IN",
+  "India - Telugu": "IN",
+  Indonesia: "ID",
+  Ireland: "IE",
+  Israel: "IL",
+  Italy: "IT",
+  Japan: "JP",
+  Kazakhstan: "KZ",
+  Korea: "KR",
+  Kyrgyzstan: "KG",
+  "Latam / Las": "LAS",
+  Latvia: "LV",
+  Lebanon: "LB",
+  Lithuania: "LT",
+  Macedonia: "MK",
+  Malaysia: "MY",
+  Mexico: "MX",
+  "Middle East": "ME",
+  Moldova: "MD",
+  Mongolia: "MN",
+  Netherlands: "NL",
+  "New Zealand": "NZ",
+  Norway: "NO",
+  Pakistan: "PK",
+  Panama: "PA",
+  Paraguay: "PY",
+  Peru: "PE",
+  Philippines: "PH",
+  Poland: "PL",
+  Portugal: "PT",
+  Romania: "RO",
+  "Serbia & Montenegro": "RS",
+  Singapore: "SG",
+  Slovakia: "SK",
+  Slovenia: "SI",
+  "South Africa": "ZA",
+  Spain: "ES",
+  Sweden: "SE",
+  Switzerland: "CH",
+  Taiwan: "TW",
+  Thailand: "TH",
+  Trinidad: "TT",
+  "Türkiye": "TR",
+  UK: "UK",
+  Ukraine: "UA",
+  "United Arab Emirates": "AE",
+  Uruguay: "UY",
+  Uzbekistan: "UZ",
+  Venezuela: "VE",
+  Vietnam: "VN",
+
+  // Not in MAGI — our own, for entries their list doesn't cover.
+  // The misc entries carry no code on purpose: MAGI has none for them, and an
+  // invented one reads as a market code people could write on a task name.
+  // "OV" is the exception — that one IS MAGI's, for International OV.
+  India: "IN",
+  "Spain - Catalan": "ES",
+  Canada: "CAN",
+  Domestic: "DOM",
+  Dubai: "DXB",
+  Laos: "LA",
+  Malta: "MT",
+  Russia: "RU",
+  "Sri Lanka": "LK",
+  USA: "US",
+};
+
+// Every code on MAGI's sheet, 2- and 3-letter alike, mapped to the territory
+// we store it as. This is what makes a "_BG" or "_BGR" suffix resolve, and it
+// is the authority: where it disagrees with the older hand-grown REGION_ALIASES
+// it wins. One consequence worth knowing — MAGI's "CA" is Canada-FR, not
+// Canada, so a "_CA" suffix now resolves to Canadian-French.
+export const MAGI_MARKET_CODES = {
+  "AE-AR": "United Arab Emirates",
+  "AE-EN": "United Arab Emirates",
+  AL: "Albania",
+  ALB: "Albania",
+  AM: "Armenia",
+  AR: "Argentina",
+  ARG: "Argentina",
+  ARM: "Armenia",
+  AT: "Austria",
+  AU: "Australia",
+  AUS: "Australia",
+  AUT: "Austria",
+  AZ: "Azerbaijan",
+  AZE: "Azerbaijan",
+  BA: "Bosnia",
+  "BE-FL": "Belgium",
+  "BE-FR": "Belgium",
+  "BEL-FL": "Belgium",
+  "BEL-FR": "Belgium",
+  BG: "Bulgaria",
+  BGR: "Bulgaria",
+  BIH: "Bosnia",
+  BO: "Bolivia",
+  BOL: "Bolivia",
+  BR: "Brazil",
+  BRA: "Brazil",
+  CA: "Canadian-French",
+  "CAN-FR": "Canadian-French",
+  "CH-DE": "Switzerland",
+  "CH-FR": "Switzerland",
+  "CH-IT": "Switzerland",
+  CHI: "Chile",
+  CHN: "China",
+  "CIS-RU": "CIS",
+  CL: "Chile",
+  CN: "China",
+  CO: "Colombia",
+  COL: "Colombia",
+  CY: "Cyprus",
+  CYP: "Cyprus",
+  CZ: "Czech Republic",
+  CZE: "Czech Republic",
+  DE: "Germany",
+  DEN: "Denmark",
+  DK: "Denmark",
+  EC: "Ecuador",
+  ECU: "Ecuador",
+  EE: "Estonia",
+  EG: "Egypt",
+  EGY: "Egypt",
+  ES: "Spain",
+  ESP: "Spain",
+  EST: "Estonia",
+  FI: "Finland",
+  FIN: "Finland",
+  FR: "France",
+  FRA: "France",
+  GBR: "UK",
+  GE: "Georgia",
+  GEO: "Georgia",
+  GER: "Germany",
+  GR: "Greece",
+  GRE: "Greece",
+  HK: "Hong Kong",
+  HKG: "Hong Kong",
+  HR: "Croatia",
+  HRV: "Croatia",
+  HU: "Hungary",
+  HUN: "Hungary",
+  ID: "Indonesia",
+  IDN: "Indonesia",
+  IE: "Ireland",
+  IL: "Israel",
+  "IN-EN": "India - English",
+  "IN-HI": "India - Hindi",
+  "IN-KA": "India - Kannada",
+  "IN-TA": "India - Tamil",
+  "IN-TE": "India - Telugu",
+  IND: "India - English",
+  IRL: "Ireland",
+  IS: "Iceland",
+  ISL: "Iceland",
+  ISR: "Israel",
+  IT: "Italy",
+  ITA: "Italy",
+  JP: "Japan",
+  JPN: "Japan",
+  KAZ: "Kazakhstan",
+  KG: "Kyrgyzstan",
+  KGZ: "Kyrgyzstan",
+  KH: "Cambodia",
+  KHM: "Cambodia",
+  KOR: "Korea",
+  KR: "Korea",
+  KZ: "Kazakhstan",
+  LAS: "Latam / Las",
+  LB: "Lebanon",
+  LIB: "Lebanon",
+  LT: "Lithuania",
+  LTU: "Lithuania",
+  LV: "Latvia",
+  LVA: "Latvia",
+  MD: "Moldova",
+  MDA: "Moldova",
+  ME_AR: "Middle East",
+  ME_EN: "Middle East",
+  MENA_AR: "Middle East",
+  MENA_EN: "Middle East",
+  MEX: "Mexico",
+  MK: "Macedonia",
+  MKD: "Macedonia",
+  MN: "Mongolia",
+  MNG: "Mongolia",
+  MX: "Mexico",
+  MY: "Malaysia",
+  MYS: "Malaysia",
+  NED: "Netherlands",
+  NL: "Netherlands",
+  NO: "Norway",
+  NOR: "Norway",
+  NZ: "New Zealand",
+  NZL: "New Zealand",
+  OV: "OV",
+  PA: "Panama",
+  PAK: "Pakistan",
+  PAN: "Panama",
+  PAR: "Paraguay",
+  PE: "Peru",
+  PER: "Peru",
+  PH: "Philippines",
+  PHI: "Philippines",
+  PK: "Pakistan",
+  PL: "Poland",
+  POL: "Poland",
+  POR: "Portugal",
+  PT: "Portugal",
+  PY: "Paraguay",
+  RO: "Romania",
+  ROU: "Romania",
+  RS: "Serbia & Montenegro",
+  RSA: "South Africa",
+  SE: "Sweden",
+  SG: "Singapore",
+  SI: "Slovenia",
+  SIN: "Singapore",
+  SK: "Slovakia",
+  SRB: "Serbia & Montenegro",
+  "SUI-DE": "Switzerland",
+  "SUI-FR": "Switzerland",
+  "SUI-IT": "Switzerland",
+  SVK: "Slovakia",
+  SVN: "Slovenia",
+  SWE: "Sweden",
+  TH: "Thailand",
+  "TH-ENG": "Thailand",
+  THA: "Thailand",
+  "THA-ENG": "Thailand",
+  TR: "Türkiye",
+  TRI: "Trinidad",
+  TT: "Trinidad",
+  TUR: "Türkiye",
+  TW: "Taiwan",
+  TWN: "Taiwan",
+  UA: "Ukraine",
+  UAE: "United Arab Emirates",
+  UK: "UK",
+  UKR: "Ukraine",
+  URU: "Uruguay",
+  UY: "Uruguay",
+  UZ: "Uzbekistan",
+  UZB: "Uzbekistan",
+  VE: "Venezuela",
+  VEN: "Venezuela",
+  VIE: "Vietnam",
+  VN: "Vietnam",
+  ZA: "South Africa",
+};
+
 export const TERRITORY_FLAGS = {
+  _Multiple_: "🌐",
   _XYi_: "🏢",
+  _Masters_: "📼",
   Albania: "🇦🇱",
   Arabic: "🌍",
   Argentina: "🇦🇷",
@@ -491,6 +840,7 @@ export const TERRITORY_FLAGS = {
   India: "🇮🇳",
   "India - English": "🇮🇳",
   "India - Hindi": "🇮🇳",
+  "India - Kannada": "🇮🇳",
   "India - Tamil": "🇮🇳",
   "India - Telugu": "🇮🇳",
   Indonesia: "🇮🇩",
@@ -672,7 +1022,12 @@ export const MOTION_TEAM_NAME_MAP = {
   "Nicholas 😎": "Nicholas",
   "Trott ⚡️": "Luke",
   "Luke Trott": "Luke",
+  // Both spellings on purpose. Wrike currently has him as "Turk 👻" (no
+  // surname), which normalises to "Turk"; our profiles row now says "Turk
+  // Kayadelen". If anyone tidies the Wrike side to match, the board would
+  // otherwise stop matching him and his tasks would vanish from it silently.
   Turk: "Turk",
+  "Turk Kayadelen": "Turk",
 };
 
 // Wrike lets people decorate their display name with emoji ("Maria Cerrato 🐱",

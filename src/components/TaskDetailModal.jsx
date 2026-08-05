@@ -30,6 +30,7 @@ import { supabase } from "../lib/supabaseClient";
 import { parseWrikeData } from "../lib/wrikeEnrich";
 import { guessFieldsFromTask } from "../utils/wrikeHelpers";
 import SearchableSelect from "./shared/SearchableSelect";
+import MultiCountrySelect from "./shared/MultiCountrySelect";
 import { parsePdfDeliverySpecs } from "../utils/pdfTableParser";
 import DeliverySpecsModal from "./DeliverySpecsModal";
 import { logTimeToWrike } from "../lib/wrikeApi";
@@ -991,15 +992,15 @@ function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, trigger
           </div>
           <div>
             <label className={labelCls}>Territory</label>
-            <SearchableSelect
-              options={TERRITORIES}
+            <MultiCountrySelect
               value={territory}
               onChange={setTerritory}
-              placeholder="Search territory…"
-              getPrefix={(val) => TERRITORY_FLAGS[val]}
+              placeholder="Pick countries…"
+              variant="form"
               dropdownId="hub-territory"
               activeDropdown={activeDropdown}
               setActiveDropdown={setActiveDropdown}
+              needsAttention
             />
           </div>
           <div>

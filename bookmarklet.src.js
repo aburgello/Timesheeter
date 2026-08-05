@@ -12,7 +12,7 @@
     "background:#fff;padding:30px;border-radius:12px;width:680px;max-width:92%;box-shadow:0 10px 25px rgba(0,0,0,0.5);";
   modal.innerHTML =
     '<h2 style="margin:0 0 10px;color:#1e293b;">Automate Timesheet</h2>' +
-    '<p style="margin:0 0 20px;color:#64748b;font-size:14px;">Paste the JSON backup exported from your XYi Tracker below. Ensure you are on the correct Day tab first.</p>' +
+    '<p style="margin:0 0 20px;color:#64748b;font-size:14px;">Paste the JSON backup exported from your XYi Tracker below. Ensure you are on the correct Day tab first. Rows already on this sheet are left alone — anything matching one is reported, not added again.</p>' +
     '<textarea id="xyi-json-input" style="width:100%;height:150px;margin-bottom:20px;padding:10px;border:1px solid #CBD5E1;border-radius:8px;font-family:monospace;font-size:12px;" placeholder=\'{"tasks": [...]}\'></textarea>' +
     '<div id="xyi-report" style="display:none;max-height:340px;overflow:auto;margin-bottom:16px;padding:12px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;font-size:12px;color:#7f1d1d;white-space:pre-wrap;font-family:monospace;"></div>' +
     '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
@@ -48,9 +48,11 @@
       btn.disabled = false;
     }
 
-    // Once rows exist on the page a second run would duplicate every one of
-    // them, so the run button is removed outright rather than left looking
-    // clickable. Close is then the only action.
+    // Once rows exist on the page the run button is removed rather than left
+    // looking clickable, and Close is the only action. The duplicate check
+    // below makes a second run safe for rows that were written in full, but a
+    // row a failed run left half-written matches nothing and would be added a
+    // second time — so re-running is a decision for a human, not one click.
     function finish() {
       btn.remove();
       var close = document.getElementById("xyi-btn-cancel");
@@ -75,20 +77,76 @@
       function norm(s) {
         return (s || "").trim().toUpperCase();
       }
-      function getVal(secs) {
-        if (!secs || secs === 0) return "";
-        var r = Math.round((secs / 3600) * 2) / 2;
-        if (r === 0 && secs > 0) r = 0.5;
-        return r === 0 ? "" : r.toFixed(1);
+
+      // Country names have to survive both sides drifting: this site calls it
+      // "UK", exports have at times said "United Kingdom", and a stale export
+      // sitting in someone's clipboard has to keep working. So match on a
+      // punctuation-free key and fold the handful of names that differ.
+      var CTRY_ALIASES = {
+        UNITEDKINGDOM: "UK",
+        GREATBRITAIN: "UK",
+        GB: "UK",
+        UNITEDSTATES: "USA",
+        UNITEDSTATESOFAMERICA: "USA",
+        US: "USA",
+        UAE: "UNITEDARABEMIRATES",
+        // This site's "OV Suite Build" was relabelled "OV Suite Build
+        // (Masters)", and the Tracker offers a _Masters_ of its own. Current
+        // exports already substitute both, but a JSON sitting in someone's
+        // clipboard from before either change still says the old thing and has
+        // to land on the checkbox rather than be reported as missing.
+        MASTERS: "OVSUITEBUILDMASTERS",
+        OVSUITEBUILD: "OVSUITEBUILDMASTERS",
+      };
+      function ctryKey(s) {
+        var k = norm(s).replace(/[^A-Z0-9]/g, "");
+        return CTRY_ALIASES[k] || k;
+      }
+      function hours(secs) {
+        return !secs || secs <= 0 ? 0 : secs / 3600;
+      }
+
+      // How fine a row may be sliced is decided per *job* by this site — a
+      // UK-folder job offers 0.25 steps where an INT one only offers 0.5 — and
+      // the export can't know which. So take the row's own dropdown as the
+      // authority: read its options and use the nearest one, never going below
+      // the smallest real option (rounding a 6-minute log down to nothing would
+      // lose the work). The option's own value is returned verbatim, since the
+      // site writes them inconsistently ("0.25" on one job, "1.0" on another)
+      // and val() silently no-ops on anything that isn't an exact match.
+      function snap($select, want) {
+        if (!want) return "";
+        var opts = $select
+          .find("option")
+          .map(function () {
+            return { val: $(this).val(), num: parseFloat($(this).val()) };
+          })
+          .get()
+          .filter(function (o) {
+            return isFinite(o.num) && o.num > 0;
+          });
+        if (!opts.length) return "";
+        // Only positive options are considered, so the smallest one is the
+        // floor for free — a 6-minute log lands on 0.25 rather than vanishing.
+        // <= so a dead-on tie (1.25h against 0.5 steps) takes the later, larger
+        // option: options ascend, and rounding a tie down would quietly bill
+        // 15 minutes of real work to nobody.
+        var best = opts[0];
+        opts.forEach(function (o) {
+          if (Math.abs(o.num - want) <= Math.abs(best.num - want)) best = o;
+        });
+        return best.val;
       }
       function esc(s) {
         return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
           return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
         });
       }
+      // Unlogged rows never reach a dropdown, so there's nothing to snap them
+      // to — report the true time and let whoever retypes the row pick.
       function hrs(secs) {
-        var v = getVal(secs);
-        return v ? v + "h" : "—";
+        var h = hours(secs);
+        return h ? Math.round(h * 100) / 100 + "h" : "—";
       }
       function describe(t) {
         return [t.filmTitle, t.client, t.projectDescription, t.notes]
@@ -98,10 +156,24 @@
       // Anything that couldn't be placed still has to be logged by hand, so the
       // report has to carry enough detail to retype the row without going back
       // to the Tracker — job, what it was, time, territory.
-      function showReport(filled, total, skipped, warnings) {
+      function showReport(filled, total, skipped, warnings, dupes) {
         var h = "";
         h += '<div style="font-size:14px;font-weight:bold;color:#1e293b;margin-bottom:12px;">' +
              "Filled " + filled + " of " + total + " rows for " + esc(activeDay) + ".</div>";
+
+        if (dupes && dupes.length) {
+          h += '<div style="font-size:13px;font-weight:bold;color:#1e40af;margin:0 0 6px;">' +
+               "ALREADY ON THIS SHEET — " + dupes.length + " row" + (dupes.length > 1 ? "s" : "") +
+               " left untouched</div>" +
+               '<ul style="margin:0 0 12px;padding-left:18px;color:#1e40af;">';
+          dupes.forEach(function (d) {
+            h += "<li>" + esc(d.task.jobNumber) +
+                 (d.task.category ? " · " + esc(d.task.category) : "") +
+                 (d.task.territory ? " · " + esc(d.task.territory) : "") +
+                 " — check the time on the existing row reads " + hrs(d.task.rawSeconds) + "</li>";
+          });
+          h += "</ul>";
+        }
 
         if (skipped.length) {
           h += '<div style="font-size:13px;font-weight:bold;color:#7f1d1d;margin:0 0 6px;">' +
@@ -226,15 +298,85 @@
         return { val: best.val };
       }
 
-      var planned = [], skipped = [];
+      // A row can cover several markets — countriesSelectedCsv is a
+      // comma-separated list of checkbox values, so tick every country the task
+      // carries and report only the names this site doesn't know. The checkbox
+      // list is the page's, not the row's, so this resolves once per task up
+      // front — the same values are also what the duplicate check compares on.
+      // task.territories arrives from export v6+; older exports (and manual
+      // edits) only have the comma-separated territory string.
+      function countriesFor(task) {
+        var want = task.territories && task.territories.length
+          ? task.territories
+          : String(task.territory || "").split(",");
+        var vals = [], names = [], missing = [];
+        want.forEach(function (raw) {
+          var name = String(raw).trim();
+          if (!name) return;
+          var key = ctryKey(name);
+          var $cb = $("#countrySelector .ctry input").filter(function () {
+            return ctryKey($(this).attr("data-country-name")) === key;
+          });
+          // Label the row the way this site spells the country, not the way the
+          // export did.
+          if ($cb.length) {
+            vals.push($cb.val());
+            names.push($cb.attr("data-country-name"));
+          } else missing.push(name);
+        });
+        return { vals: vals, names: names, missing: missing };
+      }
+
+      // Rows already on the sheet are never touched, and a task matching one is
+      // not added again: this can be run on a half-filled day, or twice in a
+      // day, without doubling anything up. A row counts as the same row when
+      // its job, category and countries match — time is deliberately not part
+      // of the key, since a row someone started and left short is still that
+      // row, not a second one to add. It's reported instead, so the short time
+      // gets noticed.
+      function rowKey(job, category, countryVals) {
+        return [
+          String(job || ""),
+          norm(category),
+          countryVals.slice().sort().join(","),
+        ].join("|");
+      }
+      // Counted, not just flagged, so an export that genuinely holds the same
+      // row twice (the same job worked in two sittings) still puts two rows on
+      // an empty sheet — and puts none on a sheet that already has both.
+      var onSheet = {};
+      $(".job-row").each(function () {
+        var $r = $(this);
+        var job = $r.find("select[name='jobSelector']").val();
+        if (!job) return; // a blank row is a placeholder, not a logged row
+        var csv = String($r.find("[name='countriesSelectedCsv']").val() || "")
+          .split(",")
+          .map(function (s) { return s.trim(); })
+          .filter(Boolean);
+        var cat = $r.find("select[name='categorySelector'] option:selected").text();
+        var k = rowKey(job, cat, csv);
+        onSheet[k] = (onSheet[k] || 0) + 1;
+      });
+
+      var planned = [], skipped = [], dupes = [];
       dailyTasks.forEach(function (task) {
         var r = resolve(task.jobNumber);
-        if (r.val !== undefined) planned.push({ task: task, val: r.val });
-        else skipped.push({ task: task, why: r.err });
+        if (r.val === undefined) {
+          skipped.push({ task: task, why: r.err });
+          return;
+        }
+        var ctry = countriesFor(task);
+        var key = rowKey(r.val, task.category, ctry.vals);
+        if (onSheet[key]) {
+          onSheet[key]--;
+          dupes.push({ task: task });
+          return;
+        }
+        planned.push({ task: task, val: r.val, ctry: ctry });
       });
 
       if (!planned.length) {
-        showReport(0, dailyTasks.length, skipped, []);
+        showReport(0, dailyTasks.length, skipped, [], dupes);
         if (populated) finish(); else reset("Populate Rows");
         return;
       }
@@ -242,6 +384,27 @@
       // Rows are added newest-first by the page, so walk the plan in reverse to
       // preserve the tracker's ordering.
       var warnings = [];
+
+      // val() silently no-ops when the value isn't an option, which would leave
+      // the time blank with no clue why — so snap to a real option and verify
+      // it took. Where the job's grid is coarser than the time logged the row
+      // is still correct-as-this-site-allows, but say so: it's a difference
+      // between the tracker and the timesheet, and that gets queried later.
+      function setTime($sel, task, secs, label) {
+        var raw = hours(secs);
+        var val = snap($sel, raw);
+        $sel.val(val);
+        if (!raw) return;
+        if (!val || $sel.val() !== val) {
+          warnings.push(task.jobNumber + ": " + label + " " +
+                        Math.round(raw * 100) / 100 + "h not selectable");
+        } else if (Math.abs(parseFloat(val) - raw) >= 0.005) {
+          warnings.push(task.jobNumber + ": " + label + " " +
+                        Math.round(raw * 100) / 100 + "h logged as " + val +
+                        "h — this job's smallest step");
+        }
+      }
+
       for (var i = planned.length - 1; i >= 0; i--) {
         var task = planned[i].task;
 
@@ -265,42 +428,35 @@
         if ($catOpt.length) $catSelect.val($catOpt.val());
         else if (task.category) warnings.push(task.jobNumber + ": category \"" + task.category + "\" not in dropdown");
 
-        // val() silently no-ops when the value isn't an option, which would
-        // leave the time blank with no clue why — so verify each one.
-        var want = getVal(task.rawSeconds);
-        var $time = $row.find("select[name='timeSelector']:visible");
-        $time.val(want);
-        if (want && $time.val() !== want) warnings.push(task.jobNumber + ": time " + want + "h not selectable");
+        // Countries go in before the time: the row's time options can depend on
+        // what's selected on it, so this has to be settled first. Resolved
+        // during planning (see countriesFor).
+        var ctry = planned[i].ctry;
+        if (ctry.vals.length) {
+          $row.find("[name='countriesSelectedCsv']").val(ctry.vals.join(","));
+          $row.find(".jqCountriesText").html(ctry.names.join(", "));
+        }
+        if (ctry.missing.length) {
+          warnings.push(task.jobNumber + ": territory \"" + ctry.missing.join("\", \"") + "\" not found");
+        }
 
-        var wantOt = getVal(task.additionalSeconds);
-        var $ot = $row.find("select[name='timeSelectorOvertime']:visible");
-        $ot.val(wantOt);
-        if (wantOt && $ot.val() !== wantOt) warnings.push(task.jobNumber + ": overtime " + wantOt + "h not selectable");
+        setTime($row.find("select[name='timeSelector']:visible"), task, task.rawSeconds, "time");
+        setTime($row.find("select[name='timeSelectorOvertime']:visible"), task, task.additionalSeconds, "overtime");
 
         if (task.clientAmends) $row.find("input[name='isClientAmend']").prop("checked", true);
         if (task.is3D) $row.find("input[name='is3dWorkItem']").prop("checked", true);
-
-        var $ctryCb = $("#countrySelector .ctry input").filter(function () {
-          return $(this).attr("data-country-name") === task.territory;
-        });
-        if ($ctryCb.length) {
-          $row.find("[name='countriesSelectedCsv']").val($ctryCb.val());
-          $row.find(".jqCountriesText").html(task.territory);
-        } else if (task.territory) {
-          warnings.push(task.jobNumber + ": territory \"" + task.territory + "\" not found");
-        }
 
         timesheetRowUpdateCheck($row);
         await new Promise(function (r) { setTimeout(r, 600); });
       }
 
-      if (!skipped.length && !warnings.length) {
+      if (!skipped.length && !warnings.length && !dupes.length) {
         document.body.removeChild(overlay);
         alert("Filled all " + planned.length + " rows for " + activeDay + ".");
         return;
       }
 
-      showReport(planned.length, dailyTasks.length, skipped, warnings);
+      showReport(planned.length, dailyTasks.length, skipped, warnings, dupes);
       finish();
     } catch (e) {
       show("Error: " + e.message);

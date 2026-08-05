@@ -47,7 +47,7 @@ function resolveTeamIds(contacts) {
     .map((c) => c.id);
 }
 
-async function fetchFolderDictionary() {
+export async function fetchFolderDictionary() {
   // Reuse the last synced copy — folder structure changes rarely, no need to
   // refetch the whole tree on every Motion Board mount.
   const { data: meta } = await supabase

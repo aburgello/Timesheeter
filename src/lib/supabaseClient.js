@@ -37,6 +37,45 @@ export function whenIdentityReady() {
 }
 
 /**
+ * Read EVERY row of a table, not just the first page.
+ *
+ * Supabase caps a response at 1000 rows and reports no error when it truncates —
+ * a plain `.select()` on a table past that size silently returns a slice, and
+ * with no ORDER BY it isn't even a predictable slice. That's how newly created
+ * jobs went missing from the timesheet's job dropdown while sitting in Job Book
+ * the whole time, and how the next-job-number allocator computed a max that was
+ * thousands of codes too low.
+ *
+ * `.order("id")` is load-bearing, not tidiness: `.range()` pagination without an
+ * ORDER BY is non-deterministic in Postgres, so pages overlap and skip (see the
+ * same fix in useWrikeCache).
+ *
+ * `tweak` receives the query so callers can add filters:
+ *   selectAll("jobs", "*", (q) => q.eq("film_title", film))
+ */
+export async function selectAll(table, columns = "*", tweak) {
+  const PAGE = 1000;
+  let out = [];
+  for (let page = 0; ; page++) {
+    let q = supabase
+      .from(table)
+      .select(columns)
+      .order("id")
+      .range(page * PAGE, (page + 1) * PAGE - 1);
+    if (tweak) q = tweak(q);
+    const { data, error } = await q;
+    if (error) {
+      console.warn(`selectAll(${table}) failed on page ${page}:`, error.message);
+      break;
+    }
+    if (!data?.length) break;
+    out = out.concat(data);
+    if (data.length < PAGE) break;
+  }
+  return out;
+}
+
+/**
  * Returns a Set of wrike_timelog_ids already stored for this user.
  * Pass source="legacy" to only check legacy rows (so Legacy pull isn't
  * blocked by timelogs already pulled by Tracker, and vice versa).
@@ -127,8 +166,34 @@ async function stampIdentity(id, profile) {
     // Only include fields that actually have values — never overwrite existing
     // data with nulls if profile info wasn't available at call time.
     const update = { wrike_user_id: id, updated_at: new Date().toISOString() };
-    if (profile.firstName) update.first_name = profile.firstName;
-    if (profile.lastName) update.last_name = profile.lastName;
+
+    // Names are SEEDED from Wrike, not synced from it. Wrike is where people
+    // put "Trott ⚡️" or drop their surname, and this ran on every single
+    // login — so any name tidied up here was silently reverted the next time
+    // that person signed in, however many times it was corrected.
+    //
+    // So: fill the name only when we don't already hold one. A brand-new
+    // profile still gets a sensible name straight from Wrike, and a curated
+    // one is never touched again. Email and avatar keep syncing, since nobody
+    // curates those and a stale avatar is just wrong.
+    let holdsName = false;
+    try {
+      const { data: existing } = await supabase
+        .from("profiles")
+        .select("first_name, last_name")
+        .eq("wrike_user_id", id)
+        .maybeSingle();
+      holdsName = !!(existing && (existing.first_name || existing.last_name));
+    } catch {
+      // Couldn't read it — assume a name exists rather than risk clobbering
+      // one. A missing name is a cosmetic gap; an overwritten one is data loss.
+      holdsName = true;
+    }
+
+    if (!holdsName) {
+      if (profile.firstName) update.first_name = profile.firstName;
+      if (profile.lastName) update.last_name = profile.lastName;
+    }
     if (profile.email) update.email = profile.email;
     if (profile.avatarUrl) update.avatar_url = profile.avatarUrl;
     // Note: supabase-js resolves (never throws) on a DB error, so the error has

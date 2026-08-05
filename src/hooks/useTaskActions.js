@@ -1,7 +1,11 @@
 import { DAYS_OF_WEEK } from "../constants";
 import { guessFieldsFromTask } from "../utils/wrikeHelpers";
 import { fetchExistingTimelogIds } from "../lib/supabaseClient";
-import { roundToHalfHourSeconds } from "../utils/timeHelpers";
+import {
+  splitTerritories,
+  territoryKey,
+  toTimesheetTerritories,
+} from "../utils/territories";
 import { logTimeToWrike } from "../lib/wrikeApi";
 
 /**
@@ -382,7 +386,9 @@ export function useTaskActions(state) {
   const getConsolidatedTasks = (taskList) => {
     const consolidated = {};
     taskList.forEach((t) => {
-      const key = `${t.dayOfWeek}|${t.jobNumber}|${t.territory}|${t.category}`;
+      // territoryKey so multi-country rows merge regardless of the order the
+      // countries were picked in.
+      const key = `${t.dayOfWeek}|${t.jobNumber}|${territoryKey(t.territory)}|${t.category}`;
       if (!consolidated[key]) {
         consolidated[key] = { ...t, rawSeconds: 0, additionalSeconds: 0, notesArray: [], subtaskCount: 0 };
       }
@@ -393,18 +399,23 @@ export function useTaskActions(state) {
         consolidated[key].notesArray.push(t.notes);
       }
     });
-    // Round to nearest 0.5h at export time only — the old timesheet website
-    // only accepts half-hour values. Supabase itself stores unrounded time.
+    // Exact seconds go out. How coarse a row may be is decided per *job* on the
+    // timesheet site (a UK-folder job takes 0.25 steps, an INT one only 0.5)
+    // and nothing here can know which — so the bookmarklet snaps each row
+    // against its own dropdown instead of us guessing up front.
     return Object.values(consolidated).map((c) => ({
       ...c,
-      rawSeconds: roundToHalfHourSeconds(c.rawSeconds),
-      additionalSeconds: c.additionalSeconds > 0 ? roundToHalfHourSeconds(c.additionalSeconds) : 0,
+      // A row can cover several markets; the timesheet site ticks one checkbox
+      // per country on the same row, so send the list alongside the string.
+      // Translated to the site's vocabulary on the way out — see
+      // toTimesheetTerritories.
+      territories: toTimesheetTerritories(c.territory),
       notes: c.notesArray.filter(Boolean).join(" | "),
     }));
   };
 
   const generateExportData = () => ({
-    version: 5,
+    version: 7, // 7 = seconds are exact (the bookmarklet does the rounding)
     exportDate: new Date().toISOString(),
     tasks: getConsolidatedTasks(tasks),
     rawTasks: tasks,

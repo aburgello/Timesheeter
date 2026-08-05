@@ -15,6 +15,7 @@ import HubRow from "./shared/HubRow";
 import { useDepartment } from "../hooks/useDepartment";
 import { boardLabelFor } from "../lib/departments";
 import { PAGE_GRADIENTS } from "../lib/pageGradients";
+import { reportError } from "../lib/monitoring";
 import { FILM_MAPPINGS } from "../constants.js";
 import {
   Layout,
@@ -40,6 +41,7 @@ import {
   Pin,
   Globe,
   Upload,
+  AlertTriangle,
   ChevronLeft,
   Loader2,
   Image as ImageIcon,
@@ -165,6 +167,16 @@ function SaveStatus({ state, lastSavedAt }) {
       </span>
     );
   }
+  // A write can fail — a schema the client is ahead of, a dropped connection,
+  // RLS. Reporting "Saved" regardless is worse than not reporting at all: the
+  // author walks away believing the note is filed.
+  if (state === "error") {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] font-bold text-rose-500" title="Your note is still in the editor — reload only after this clears.">
+        <AlertTriangle className="w-3 h-3" /> Not saved
+      </span>
+    );
+  }
   const rel = lastSavedAt ? relativeTime(lastSavedAt) : "";
   return rel ? (
     <span className="text-[11px] font-semibold text-[#94a3b8]">Last edited {rel}</span>
@@ -212,158 +224,377 @@ function CollapsibleCard({ icon: Icon, title, subtitle, isOpen, onToggle, childr
 // --- Reference > End of Campaign Notes: pick a campaign, write wrap-up notes ---
 // Notes are per (campaign, department) — Print's wrap-up on a campaign is a
 // separate note from Motion's, sharing only the campaign picker.
-function EndOfCampaignNotesCard({ isOpen, onToggle, campaigns, department }) {
+// A stored note can be a non-empty string holding an empty document: TipTap
+// serialises two blank paragraphs as 68 characters of JSON, and simply opening
+// a campaign was enough to save one. Judging on the string being non-empty
+// counted six such blanks as six wrap-ups. Test for actual content instead —
+// the same check RichNoteEditor makes before persisting.
+const hasNoteContent = (raw) =>
+  !!raw && (raw.includes('"text"') || raw.includes('"image"'));
+
+function EndOfCampaignNotesCard({ campaigns, department }) {
   const [search, setSearch] = useState("");
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
-  const [content, setContent] = useState("");
+  const [notes, setNotes] = useState([]);          // every author's note on this campaign
+  const [profiles, setProfiles] = useState([]);
+  const [myContent, setMyContent] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("idle");
   const [lastSavedAt, setLastSavedAt] = useState(null);
-  const [recent, setRecent] = useState([]);
+  const [noteMeta, setNoteMeta] = useState({});
   const skipNextSaveRef = useRef(false);
   const savedTimerRef = useRef(null);
 
-  // Fetch top 4 recently-edited campaigns on mount + after each save
-  const refreshRecent = useCallback(async () => {
+  // Whether you're currently in your own box. Typing or clicking into it opens
+  // it up; a few seconds after you stop, it settles back to the size of the
+  // others. Longer than the 800ms save debounce on purpose — the box shouldn't
+  // shrink out from under someone who's merely thinking mid-sentence.
+  const [writing, setWriting] = useState(false);
+  const idleTimerRef = useRef(null);
+  const noteActivity = useCallback(() => {
+    setWriting(true);
+    clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => setWriting(false), 4000);
+  }, []);
+  useEffect(() => () => clearTimeout(idleTimerRef.current), []);
+  // A different campaign is a fresh start: collapsed until you write in it.
+  useEffect(() => { setWriting(false); clearTimeout(idleTimerRef.current); }, [selectedCampaignId]);
+
+  // Same identity the rest of Canvas uses for "who am I" (see NotesCanvasCard).
+  const myId = useMemo(() => localStorage.getItem("wrike_user_id") || null, []);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("wrike_user_id, first_name, last_name, canvas_color");
+      setProfiles(data || []);
+    })();
+  }, []);
+
+  const profileFor = useCallback(
+    (id) => profiles.find((p) => p.wrike_user_id === id),
+    [profiles]
+  );
+  const nameFor = useCallback(
+    (id) => {
+      const p = profileFor(id);
+      if (!p) return "Someone";
+      return [p.first_name, p.last_name].filter(Boolean).join(" ") || "Someone";
+    },
+    [profileFor]
+  );
+  const colorFor = useCallback(
+    (id) => profileFor(id)?.canvas_color || hashColor(id),
+    [profileFor]
+  );
+
+  // Which campaigns have been written up at all, and when last. Now that a
+  // campaign can hold several notes, the list shows the freshest of them —
+  // "when did anyone last add to this" is the useful signal, not per-author.
+  const refreshNoteMeta = useCallback(async () => {
+    // content comes back too, because "has this been written up" can't be
+    // answered without looking inside — see hasNoteContent. One department's
+    // wrap-up notes, so the extra payload is small.
     const { data } = await supabase
       .from("campaign_eoc_notes")
-      .select("campaign_id, updated_at")
-      .order("updated_at", { ascending: false })
-      .limit(4);
+      .select("campaign_id, updated_at, content")
+      .eq("department", department);
     if (!data) return;
-    const withTitles = data
-      .map((r) => {
-        const camp = campaigns.find((c) => c.id === r.campaign_id);
-        return camp ? { id: r.campaign_id, title: camp.title, updated_at: r.updated_at } : null;
-      })
-      .filter(Boolean);
-    setRecent(withTitles);
-  }, [campaigns]);
+    const latest = {};
+    for (const r of data) {
+      if (!hasNoteContent(r.content)) continue;
+      if (!latest[r.campaign_id] || new Date(r.updated_at) > new Date(latest[r.campaign_id])) {
+        latest[r.campaign_id] = r.updated_at;
+      }
+    }
+    setNoteMeta(latest);
+  }, [department]);
+
+  useEffect(() => { refreshNoteMeta(); }, [refreshNoteMeta]);
 
   useEffect(() => {
-    if (isOpen) refreshRecent();
-  }, [isOpen, refreshRecent]);
-
-  useEffect(() => {
-    if (!selectedCampaignId) { setContent(""); setLoaded(false); setSaveState("idle"); setLastSavedAt(null); return; }
+    if (!selectedCampaignId) { setNotes([]); setMyContent(""); setLoaded(false); setSaveState("idle"); setLastSavedAt(null); return; }
     setLoaded(false);
     (async () => {
       const { data } = await supabase
         .from("campaign_eoc_notes")
-        .select("content, updated_at")
+        .select("author_id, content, updated_at")
         .eq("campaign_id", selectedCampaignId)
-        .eq("department", department)
-        .maybeSingle();
+        .eq("department", department);
+      const rows = data || [];
+      setNotes(rows);
+      const mine = rows.find((r) => r.author_id === myId);
+      // The editor is remounted per campaign (keyed below), so the first
+      // change it reports is the load itself, not the author typing.
       skipNextSaveRef.current = true;
-      setContent(data?.content || "");
-      setLastSavedAt(data?.updated_at || null);
+      setMyContent(mine?.content || "");
+      setLastSavedAt(mine?.updated_at || null);
       setLoaded(true);
     })();
-  }, [selectedCampaignId, department]);
+  }, [selectedCampaignId, department, myId]);
 
   useEffect(() => {
-    if (!selectedCampaignId || !loaded) return;
+    if (!selectedCampaignId || !loaded || !myId) return;
     if (skipNextSaveRef.current) { skipNextSaveRef.current = false; return; }
     setSaveState("saving");
     const t = setTimeout(async () => {
-      await supabase.from("campaign_eoc_notes").upsert({
-        campaign_id: selectedCampaignId,
-        department,
-        content,
-        updated_at: new Date().toISOString(),
-      });
+      const { error } = await supabase.from("campaign_eoc_notes").upsert(
+        {
+          campaign_id: selectedCampaignId,
+          department,
+          author_id: myId,
+          content: myContent,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "campaign_id,department,author_id" }
+      );
+      if (error) {
+        // Stays on screen — no timer clearing it back to idle — because the
+        // note only exists in this editor until the write lands.
+        reportError(error, { scope: "eoc-note-save", campaignId: selectedCampaignId });
+        setSaveState("error");
+        return;
+      }
       setSaveState("saved");
       setLastSavedAt(new Date().toISOString());
-      refreshRecent();
+      refreshNoteMeta();
       savedTimerRef.current = setTimeout(() => setSaveState("idle"), 2000);
     }, 800);
     return () => { clearTimeout(t); clearTimeout(savedTimerRef.current); };
-  }, [content, selectedCampaignId, department, loaded, refreshRecent]);
+  }, [myContent, selectedCampaignId, department, loaded, myId, refreshNoteMeta]);
 
-  // Newest-updated campaigns first — same recency signal the Studios gallery
-  // sorts by (lastMatrixUpdate), so "most likely to need wrap-up notes right
-  // now" naturally floats to the top instead of requiring a search.
-  const sortedFilteredCampaigns = campaigns
-    .filter((c) => !search.trim() || c.title.toLowerCase().includes(search.trim().toLowerCase()))
-    .sort((a, b) => (b.lastMatrixUpdate || 0) - (a.lastMatrixUpdate || 0));
+  // Campaigns that already have a wrap-up come first, most recently written at
+  // the top — that's the thread of what the team has been adding to. Everything
+  // still blank follows on its own recency (lastMatrixUpdate, the same signal
+  // the Studios gallery sorts by), so the campaign most likely to need writing
+  // up next sits directly under the ones already written.
+  const sortedFilteredCampaigns = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return campaigns
+      .filter((c) => !q || c.title.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aAt = noteMeta[a.id], bAt = noteMeta[b.id];
+        if (aAt && bAt) return new Date(bAt) - new Date(aAt);
+        if (aAt) return -1;
+        if (bAt) return 1;
+        return (b.lastMatrixUpdate || 0) - (a.lastMatrixUpdate || 0);
+      });
+  }, [campaigns, search, noteMeta]);
+
+  const writtenUp = useMemo(
+    () => campaigns.filter((c) => noteMeta[c.id]).length,
+    [campaigns, noteMeta]
+  );
+
+  const selected = campaigns.find((c) => c.id === selectedCampaignId);
+  const parseDoc = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch { return null; } };
+
+  // Boxes in the bento, in reading order: the legacy shared note if this
+  // campaign has one, then everyone else's, then yours. Yours is last so it
+  // sits closest to where you stopped reading, and widest because it's the one
+  // you type into.
+  const teamNote = notes.find((n) => n.author_id === "" && hasNoteContent(n.content));
+  const otherNotes = notes
+    .filter((n) => n.author_id && n.author_id !== myId && hasNoteContent(n.content))
+    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
 
   return (
-    <CollapsibleCard
-      icon={FileText}
-      title="End of Campaign Notes"
-      subtitle="Wrap-up learnings · per campaign"
-      isOpen={isOpen}
-      onToggle={onToggle}
-    >
-      <div className="flex flex-col sm:flex-row gap-4">
-        {/* Campaign list — always visible, newest-updated first */}
-        <div className="sm:w-64 shrink-0 space-y-2">
-          <div className="relative">
-            <Search className="w-4 h-4 text-[#768994] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search campaigns…"
-              className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#dce4ec] bg-white outline-none text-sm font-semibold text-[#122027] focus:border-[#c2410d]/40"
-            />
+    <section className="mt-10">
+      {/* A standing band rather than another collapsed card. It sits under the
+          team's notes because it's the same act — writing something down for
+          everyone — and a note nobody can see they're allowed to write in never
+          gets written in. */}
+      <div className="rounded-3xl border border-[#dce4ec] bg-white shadow-sm overflow-hidden">
+        <div className={`bg-gradient-to-br ${CANVAS_GRADIENT} px-6 py-5 flex items-center gap-4`}>
+          <div className="shrink-0 w-12 h-12 rounded-2xl bg-white/15 border border-white/20 backdrop-blur-sm flex items-center justify-center">
+            <FileText className="w-6 h-6 text-white" strokeWidth={1.75} />
           </div>
-          {/* Recently edited strip — top 4 by updated_at */}
-          {recent.length > 0 && (
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-[#94a3b8] mb-2 px-1">Recently edited</p>
-              <div className="space-y-1">
-                {recent.map((r) => (
-                  <button
-                    key={r.id}
-                    onClick={() => setSelectedCampaignId(r.id)}
-                    className="group w-full text-left px-3 py-2 rounded-xl border border-[#dce4ec] bg-white hover:border-[#c2410d]/40 hover:shadow-sm transition-all"
-                  >
-                    <p className="text-xs font-bold text-[#122027] truncate group-hover:text-[#c2410d] transition-colors">{r.title}</p>
-                    <p className="text-[10px] font-semibold text-[#94a3b8] mt-0.5">{relativeTime(r.updated_at)}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="rounded-xl border border-[#dce4ec] bg-white overflow-hidden max-h-[500px] overflow-y-auto divide-y divide-[#dce4ec]">
-            {sortedFilteredCampaigns.length === 0 && (
-              <p className="p-3 text-xs font-bold text-[#768994]">No campaigns match.</p>
-            )}
-            {sortedFilteredCampaigns.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => setSelectedCampaignId(c.id)}
-                className={`w-full text-left px-3 py-2.5 text-sm font-bold transition-colors ${c.id === selectedCampaignId ? "bg-[#c2410d]/10 text-[#c2410d]" : "text-[#122027] hover:bg-[#f2f6f9]"}`}
-              >
-                {c.title}
-              </button>
-            ))}
+          <div className="min-w-0 flex-1">
+            <h2 className="font-display text-lg font-bold text-white tracking-tight">End of Campaign Notes</h2>
+            <p className="text-xs text-white/80 font-medium mt-0.5">
+              What we'd do differently next time. Everyone on the {department} team
+              writes their own — you'll see each other's side by side.
+            </p>
+          </div>
+          <div className="hidden sm:block shrink-0 text-right">
+            <p className="font-display text-2xl font-bold text-white tabular-nums leading-none">{writtenUp}</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-white/70 mt-1">
+              written up
+            </p>
           </div>
         </div>
 
-        <div className="flex-1 min-w-0">
-          {selectedCampaignId && loaded ? (
-            <>
-              <div className="rounded-xl overflow-hidden border border-[#dce4ec] bg-white">
-                <RichNoteEditor
-                  key={selectedCampaignId}
-                  content={(() => { try { return content ? JSON.parse(content) : null; } catch { return null; } })()}
-                  onChange={(json) => setContent(JSON.stringify(json))}
-                  className="min-h-[340px] max-h-[600px] overflow-y-auto pt-4 px-1"
-                />
+        <div className="flex flex-col lg:flex-row gap-5 p-5 sm:p-6 bg-slate-50 border-t border-[#dce4ec]">
+          {/* Film list — one list, not a "recently edited" strip repeating rows
+              that are in the list below it anyway. Each row carries its own
+              state, so written-up and blank are told apart at a glance. */}
+          <div className="lg:w-72 shrink-0 flex flex-col gap-2.5">
+            <div className="relative">
+              <Search className="w-4 h-4 text-[#768994] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search campaigns…"
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-[#dce4ec] bg-white outline-none text-sm font-semibold text-[#122027] focus:border-[#c2410d]/40"
+              />
+            </div>
+            <div className="rounded-2xl border border-[#dce4ec] bg-white overflow-hidden max-h-[560px] overflow-y-auto custom-scrollbar divide-y divide-slate-100">
+              {sortedFilteredCampaigns.length === 0 && (
+                <p className="p-4 text-xs font-bold text-[#768994]">No campaigns match.</p>
+              )}
+              {sortedFilteredCampaigns.map((c) => {
+                const at = noteMeta[c.id];
+                const isActive = c.id === selectedCampaignId;
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => setSelectedCampaignId(c.id)}
+                    className={`group w-full text-left px-3.5 py-3 flex items-center gap-3 transition-colors ${
+                      isActive ? "bg-[#c2410d]/10" : "hover:bg-[#f2f6f9]"
+                    }`}
+                  >
+                    {/* Filled = written up, hollow = still blank. */}
+                    <span
+                      className={`shrink-0 w-2 h-2 rounded-full border-2 ${
+                        at ? "bg-[#c2410d] border-[#c2410d]" : "border-[#c2d0da]"
+                      }`}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className={`block text-[13px] font-bold truncate ${isActive ? "text-[#c2410d]" : "text-[#122027]"}`}>
+                        {c.title}
+                      </span>
+                      <span className="block text-[10px] font-semibold text-[#94a3b8] mt-0.5">
+                        {at ? relativeTime(at) : "No notes yet"}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            {selectedCampaignId && loaded ? (
+              <>
+                <div className="flex items-center justify-between gap-3 mb-3 px-0.5">
+                  <p className="text-[13px] font-black text-[#122027] truncate">{selected?.title}</p>
+                  <SaveStatus state={saveState} lastSavedAt={lastSavedAt} />
+                </div>
+
+                {/* The bento. A box each, so adding your take never means
+                    editing over someone else's — the single shared note was a
+                    blank page with everyone's name on it, which is nobody's. */}
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-min">
+                  {teamNote && (
+                    <EocNoteBox
+                      className="xl:col-span-2"
+                      label="Team note"
+                      sublabel={`Written before individual notes · ${relativeTime(teamNote.updated_at)}`}
+                      accent="#768994"
+                      content={parseDoc(teamNote.content)}
+                    />
+                  )}
+
+                  {otherNotes.map((n) => (
+                    <EocNoteBox
+                      key={n.author_id}
+                      label={nameFor(n.author_id)}
+                      sublabel={relativeTime(n.updated_at)}
+                      accent={colorFor(n.author_id)}
+                      content={parseDoc(n.content)}
+                    />
+                  ))}
+
+                  <EocNoteBox
+                    className={writing ? "xl:col-span-2" : ""}
+                    label={myId ? "Your note" : "Notes"}
+                    sublabel={myId ? "Add your end of campaign notes here" : "Connect Wrike in your Profile to write"}
+                    accent={myId ? colorFor(myId) : "#c2410d"}
+                    mine
+                    expanded={writing}
+                    onActivity={noteActivity}
+                    content={parseDoc(myContent)}
+                    onChange={myId ? (json) => { noteActivity(); setMyContent(JSON.stringify(json)); } : undefined}
+                  />
+                </div>
+              </>
+            ) : selectedCampaignId ? (
+              <p className="text-center text-sm font-bold text-[#768994] py-24">Loading notes…</p>
+            ) : (
+              <div className="h-full min-h-[340px] rounded-2xl border border-dashed border-[#dce4ec] bg-white/60 flex flex-col items-center justify-center text-center px-6">
+                <FileText className="w-7 h-7 text-[#c2d0da] mb-3" strokeWidth={1.5} />
+                <p className="text-sm font-bold text-[#122027]">Pick a campaign to write it up</p>
+                <p className="text-xs font-medium text-[#768994] mt-1 max-w-xs">
+                  You get your own box on each campaign — write your side of it, and read everyone else's next to it.
+                </p>
               </div>
-              <div className="flex items-center justify-end pt-1">
-                <SaveStatus state={saveState} lastSavedAt={lastSavedAt} />
-              </div>
-            </>
-          ) : selectedCampaignId ? (
-            <p className="text-center text-sm font-bold text-[#768994] py-16">Loading notes…</p>
-          ) : (
-            <p className="text-center text-sm font-bold text-[#768994] py-16">Pick a campaign from the list to write its wrap-up notes.</p>
-          )}
+            )}
+          </div>
         </div>
       </div>
-    </CollapsibleCard>
+    </section>
+  );
+}
+
+// One box in the End of Campaign bento. `mine` is the only editable one: every
+// other box is somebody else's note, shown in full but read-only, so the grid
+// reads as a wall of takes rather than a document several people fight over.
+function EocNoteBox({ label, sublabel, accent, content, onChange, mine = false, expanded = false, onActivity, className = "" }) {
+  // Your box is only the big one while you're actually in it. Once you stop,
+  // it settles back to the size of everyone else's, so the grid reads as a
+  // wall of equal takes rather than yours permanently dominating it.
+  const roomy = mine && expanded;
+  return (
+    <div
+      // Every way of being active in the box, because the editor's own
+      // onChange is debounced 800ms and doesn't fire at all during continuous
+      // typing — relying on it alone collapsed the box mid-sentence.
+      // keydown catches typing, input catches paste and IME composition,
+      // pointerdown/focus catch arriving in the first place.
+      onFocusCapture={mine ? onActivity : undefined}
+      onPointerDown={mine ? onActivity : undefined}
+      onKeyDownCapture={mine ? onActivity : undefined}
+      onInputCapture={mine ? onActivity : undefined}
+      className={`rounded-2xl border bg-white overflow-hidden flex flex-col transition-[box-shadow,border-color] duration-300 ${className} ${
+        mine
+          ? roomy
+            ? "border-[#c2410d] shadow-md ring-2 ring-[#c2410d]/10"
+            : "border-[#c2410d]/35 shadow-sm"
+          : "border-[#dce4ec]"
+      }`}
+    >
+      <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-slate-100">
+        <span className="shrink-0 w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black text-white" style={{ background: accent }}>
+          {(label || "?").charAt(0).toUpperCase()}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[12px] font-black text-[#122027] truncate">{label}</span>
+          {sublabel && <span className="block text-[10px] font-semibold text-[#94a3b8] truncate">{sublabel}</span>}
+        </span>
+        {mine && onChange && (
+          <span className={`shrink-0 text-[9px] font-black uppercase tracking-widest transition-colors duration-300 ${roomy ? "text-[#c2410d]" : "text-[#c2d0da]"}`}>
+            {roomy ? "Editing" : "Your note"}
+          </span>
+        )}
+      </div>
+      {/* Height is what animates — the column span it sits in can't tween, so
+          the transition carries the change and the reflow lands under it. */}
+      <div
+        className={`transition-[max-height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-hidden ${
+          roomy ? "max-h-[460px]" : mine ? "max-h-[320px]" : "max-h-[320px]"
+        }`}
+      >
+        <RichNoteEditor
+          content={content}
+          onChange={onChange}
+          editable={!!mine && !!onChange}
+          accent={accent}
+          placeholder={mine ? "What would you do differently next time?" : ""}
+          className={`px-1 pt-2 overflow-y-auto ${roomy ? "min-h-[220px] max-h-[460px]" : "min-h-[140px] max-h-[320px]"}`}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -996,10 +1227,13 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
               headers with their notes listed flat beneath (no expand gate). */}
           {!railCollapsed && (
           <div
-            className="flex flex-col rounded-2xl border shadow-sm overflow-hidden max-h-[600px]"
-            style={activeBoard === "mine" ? { borderColor: `${myColor}44`, backgroundColor: `${myColor}08` } : { borderColor: "#ece4d8", backgroundColor: "#ffffff" }}
+            className="flex flex-col rounded-2xl border border-[#dce4ec] bg-white shadow-sm overflow-hidden max-h-[600px]"
+            /* Surface comes from the bg-white class, not an inline hex, so the
+               dark theme can remap it; only the personal-space accent tint stays
+               inline (it's derived from the member's own colour). */
+            style={activeBoard === "mine" ? { borderColor: `${myColor}44`, backgroundColor: `${myColor}08` } : undefined}
           >
-            <div className="p-2.5 border-b flex items-center gap-1.5" style={{ borderColor: "#f0e9df" }}>
+            <div className="p-2.5 border-b border-slate-100 flex items-center gap-1.5">
               <button
                 onClick={() => handleNewNote("text")}
                 className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-white text-[13px] font-bold shadow-sm transition-all hover:brightness-105 active:scale-[.98]"
@@ -1011,7 +1245,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                 onClick={() => handleNewNote("sketch")}
                 title="New sketch"
                 className="shrink-0 flex items-center justify-center w-10 h-10 rounded-xl border shadow-sm transition-all hover:brightness-105 active:scale-[.98]"
-                style={{ borderColor: `${boardAccent}55`, color: boardAccent, background: "#fff" }}
+                style={{ borderColor: `${boardAccent}55`, color: boardAccent }}
               >
                 <PenTool className="w-4 h-4" />
               </button>
@@ -1151,7 +1385,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                                 {isSketch ? <PenTool className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
                               </span>
                               <span className="min-w-0 flex-1">
-                                <span className="block text-[13px] font-semibold truncate leading-tight" style={{ color: active ? boardAccent : "#3a352e" }}>
+                                <span className={`block text-[13px] font-semibold truncate leading-tight ${active ? "" : "text-[#3a352e]"}`} style={active ? { color: boardAccent } : undefined}>
                                   {page.title || "Untitled"}
                                 </span>
                                 <span className="block text-[11px] text-[#a79f93] truncate mt-0.5">
@@ -1181,7 +1415,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
             style={selectedPage ? { borderColor: `${selectedAccent}33`, borderLeftWidth: 3, borderLeftColor: selectedAccent } : { borderColor: "#ece4d8" }}
           >
             {/* Slim top bar — orientation + save state + focus toggle */}
-            <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "#f0e9df" }}>
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-100 shrink-0">
               <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.13em]" style={{ color: `${boardAccent}` }}>
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: boardAccent }} />
                 {activeBoard === "mine" ? myName : activeBoard === "team" ? boardLabelFor(department) : nameFor(activeBoard)}
@@ -1301,7 +1535,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                   <button
                     onClick={() => handleNewNote("sketch")}
                     className="flex items-center gap-2 px-4 py-2.5 rounded-xl border text-[13px] font-bold transition-all hover:brightness-105 active:scale-95"
-                    style={{ borderColor: `${boardAccent}55`, color: boardAccent, background: "#fff" }}
+                    style={{ borderColor: `${boardAccent}55`, color: boardAccent }}
                   >
                     <PenTool className="w-4 h-4" /> New sketch
                   </button>
@@ -1401,7 +1635,10 @@ const parseFormatting = (text) => {
     .replace(/\*(.*?)\*/g, "<em>$1</em>") // Italic
     .replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener noreferrer" style="color: #c2410d; text-decoration: underline; font-weight: 700;">$1</a>'
+      // A class, not an inline colour: this HTML goes through
+      // dangerouslySetInnerHTML, and an inline style is the one thing the dark
+      // theme's class overrides can't reach. Styled in Timesheeter.css.
+      '<a href="$2" target="_blank" rel="noopener noreferrer" class="rne-note-link">$1</a>'
     ) // Links
     .replace(/\n/g, "<br/>"); // Newlines
   return html;
@@ -1939,9 +2176,15 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   const [expandedCampId, setExpandedCampId] = useState(null);
 
   // Workspace vs. gallery. Default view is the two-column workspace (Notes +
-  // compact campaign list); "Browse gallery" swaps in the full studio art-wall.
-  const [browseGallery, setBrowseGallery] = useState(false);
-  const [campFilter, setCampFilter] = useState("");        // compact-list search
+  // Which tool is open, or null for none. Canvas hosts several independent
+  // surfaces (campaigns, notes, launch tracker, DOOH specs) and stacking them
+  // all in one scroll meant everything competed at once — the same reason
+  // Management drills down rather than listing every section. Each gets the
+  // full page, one at a time, with the switcher row always on top.
+  //
+  // Opens on Campaigns: the switcher alone over an empty page reads as a
+  // page that failed to load, and the art-wall is what this page is for.
+  const [canvasView, setCanvasView] = useState("campaigns");
   const [collapsedStudios, setCollapsedStudios] = useState({}); // {studio: true} = folded
   // Notes "expand" → full page width: hides the campaigns panel + the notes rail.
   const [notesExpanded, setNotesExpanded] = useState(false);
@@ -2224,10 +2467,22 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
           matrices: [],
           links: [],
           lastMatrixUpdate: 0,
+          // A campaign is live while any of its MATRIX tasks is still open in
+          // Wrike. Age is the wrong test — three campaigns marked Delivered
+          // were edited today, and a genuinely active one can sit untouched
+          // for a fortnight — so this reads Wrike's own status instead.
+          isLive: false,
           studioHint: task.studioName || null,
         };
       } else if (!wrikeGroupedCampaigns[campaignTitle].studioHint && task.studioName) {
         wrikeGroupedCampaigns[campaignTitle].studioHint = task.studioName;
+      }
+
+      // Wrike's own lifecycle field, not the workflow label: customStatusName
+      // is per-workflow free text ("Delivered", "Motion", "Completed"), while
+      // `status` is the fixed Active/Completed/Deferred/Cancelled underneath.
+      if (task.status !== "Completed" && task.status !== "Cancelled") {
+        wrikeGroupedCampaigns[campaignTitle].isLive = true;
       }
 
       const tableHtml = task.tableHtml || "";
@@ -2323,6 +2578,11 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
           if (wrikeCamp.studioHint) {
             updatedList[existingIndex].studioHint = wrikeCamp.studioHint;
           }
+          // Recomputed from this pass, never OR'd with the stored value — a
+          // campaign that has since been delivered has to be able to go back
+          // to not-live, which is the whole point.
+          updatedList[existingIndex].isLive = wrikeCamp.isLive;
+          updatedList[existingIndex].lastMatrixUpdate = wrikeCamp.lastMatrixUpdate;
         } else {
           updatedList.push(wrikeCamp);
         }
@@ -3164,7 +3424,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
         )}
       </PageHeader>
 
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8">
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-6">
         {/* --- PERFECTLY CENTERED ICON DOCK --- */}
         {isLoading && (
           <div className="flex items-center justify-center gap-2 py-3 text-xs font-bold text-[#768994]">
@@ -3214,7 +3474,10 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
             const isExpanded = expandedCampId === camp.id;
             const hasMatrix = camp.matrices?.length > 0;
             const updatedTs = camp.lastMatrixUpdate;
-            const isActive = updatedTs && (Date.now() - updatedTs) < 14 * 24 * 60 * 60 * 1000;
+            // Was "edited in the last 14 days", which marked three
+            // delivered campaigns as active because someone touched them
+            // today. isLive comes off Wrike's own status instead.
+            const isActive = camp.isLive;
 
             return (
               <div
@@ -3253,9 +3516,13 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   )}
                   {/* Top badges */}
                   <div className="absolute top-2.5 left-2.5 right-2.5 flex justify-between items-start">
-                    {hasMatrix && isActive
-                      ? <span className="w-2 h-2 rounded-full mt-0.5 bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.5)]" />
-                      : <span />}
+                    {hasMatrix && isActive ? (
+                      <span className="w-2 h-2 rounded-full mt-0.5 bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.5)]" />
+                    ) : !isActive ? (
+                      <span className="text-[9px] font-black uppercase tracking-widest bg-black/40 backdrop-blur-sm text-white/70 px-2 py-0.5 rounded-full">
+                        Delivered
+                      </span>
+                    ) : <span />}
                     {updatedTs ? (
                       <span className="text-[10px] font-bold bg-black/40 backdrop-blur-sm text-white/80 px-2 py-0.5 rounded-full">
                         {relativeDate(updatedTs)}
@@ -3279,7 +3546,10 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
           // Pinned / DOOH Specs / Reference.
 
           // ============ COUNTRY DETAIL VIEW (a DOOH country is open) ============
-          if (selectedCountry) {
+          // Tied to the DOOH tool being open: this is a full early return, so
+          // an un-cleared country would otherwise render over the hub after
+          // navigating back.
+          if (canvasView === "dooh" && selectedCountry) {
             const country = doohCountries.find((c) => c.id === selectedCountry);
             if (!country) { setSelectedCountry(null); return null; }
             const allAssets = countryAssets[selectedCountry] || [];
@@ -3555,10 +3825,78 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
           }
 
           // ============ GALLERY VIEW (studio cards) ============
+          // Only the department's own tools are offered — Launch Tracker is
+          // Print's, DOOH Specs is Motion's — so the hub never shows a tile
+          // that opens onto nothing.
+          // Counted, not assumed: the tile used to read "18 live" because it
+          // showed every campaign ever cached. Only two of those are actually
+          // open in Wrike.
+          const liveCount = campaigns.filter((c) => c.isLive).length;
+          const canvasTools = [
+            { id: "campaigns", icon: Film,     label: "Campaigns",  desc: "Every campaign, by studio", count: liveCount === campaigns.length ? `${campaigns.length} live` : `${liveCount} live · ${campaigns.length - liveCount} delivered` },
+            { id: "notes",     icon: Folder,   label: "Notes Canvas", desc: `${department} team board · personal spaces`, count: null },
+            ...(department === "Print"  ? [{ id: "launch", icon: Printer, label: "Launch Tracker", desc: "Per-market print requests", count: `${printLaunchHubs.length} live` }] : []),
+            ...(department === "Motion" ? [{ id: "dooh",   icon: Globe,   label: "DOOH Specs", desc: "Screen specs by country", count: `${doohCountries.length} countries` }] : []),
+            // End of Campaign Notes has no tile: it lives at the foot of Notes
+            // Canvas, where the team is already writing things down for each
+            // other. Behind its own tile it read as one more admin surface
+            // nobody opened.
+          ];
+
           return (
             <div key="studio-gallery" className="mt-2 py-4 px-6 w-full">
+              {/* ============ TOOL SWITCHER ============ */}
+              {/* The tiles stay put and the page under them changes, rather
+                  than the row being replaced by whatever you picked. Clicking
+                  the open tool closes it again, so the row doubles as the way
+                  back — no separate breadcrumb to hunt for. */}
+              <section className="mb-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {canvasTools.map(({ id, icon: Icon, label, desc, count }) => {
+                    const active = canvasView === id;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => { setCanvasView(active ? null : id); setSelectedCountry(null); }}
+                        aria-expanded={active}
+                        className={`group text-left rounded-3xl border p-5 transition-all active:scale-[0.99] ${
+                          active
+                            ? "border-[#c2410d] bg-white shadow-md ring-2 ring-[#c2410d]/15"
+                            : "border-[#dce4ec] bg-white shadow-sm hover:shadow-md hover:border-[#c2410d]/40"
+                        }`}
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className={`shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
+                            active
+                              ? `bg-gradient-to-br ${CANVAS_GRADIENT} shadow-md scale-105`
+                              : `bg-gradient-to-br ${CANVAS_GRADIENT} shadow-sm opacity-90 group-hover:opacity-100`
+                          }`}>
+                            <Icon className="w-6 h-6 text-white" strokeWidth={1.75} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h3 className={`text-sm font-black transition-colors ${active ? "text-[#c2410d]" : "text-[#122027] group-hover:text-[#c2410d]"}`}>{label}</h3>
+                            <p className="text-[11px] font-medium text-[#768994] mt-0.5 leading-snug">{desc}</p>
+                            {count && (
+                              <p className="text-[10px] font-black uppercase tracking-widest text-[#c2410d] mt-2">{count}</p>
+                            )}
+                          </div>
+                          {/* Points right when closed, down when open — the
+                              chevron says where the content is. */}
+                          <ChevronRight
+                            className={`w-4 h-4 shrink-0 mt-1 transition-all duration-300 ${
+                              active ? "rotate-90 text-[#c2410d]" : "text-[#c2d0da] group-hover:text-[#c2410d] group-hover:translate-x-0.5"
+                            }`}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
               {/* ============ PINNED SHELF (top) — horizontal quick-access cards ============ */}
-              {(pinnedCamps.length > 0 || pinnedFolders.length > 0) && (
+              {/* Stays on the hub: pins are the shortcut past the tool grid. */}
+              {canvasView === null && (pinnedCamps.length > 0 || pinnedFolders.length > 0) && (
                 <section className="mb-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                   <div className="flex items-center justify-between gap-2.5 mb-3 px-1">
                     <p className="text-[11px] font-black text-[#768994] uppercase tracking-widest">Pinned</p>
@@ -3650,15 +3988,20 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 </section>
               )}
 
-              {/* ============ WORKSPACE — Notes (left) + compact campaign list (right) ============ */}
-              {!browseGallery && (
-                <div className={`grid grid-cols-1 gap-6 mb-10 items-start ${notesExpanded ? "" : "lg:grid-cols-5"}`}>
-                  {/* Notes Canvas — the primary workspace surface, leads the page.
-                      When expanded it spans the full width (campaigns hidden). */}
-                  <div className={notesExpanded ? "min-w-0" : "lg:col-span-3 min-w-0"}>
+              {/* ============ NOTES + CAMPAIGN LIST ============ */}
+              {/* These used to sit side by side, each at half attention. They're
+                  now separate tools, so whichever is open takes the full width. */}
+              {/* Keyed on the open tool: switching remounts this panel so its
+                  entrance animation runs again. The switcher above never
+                  remounts, so the row itself stays perfectly still. */}
+              <div key={canvasView || "hub"} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+              {canvasView === "notes" && (
+                <div className="grid grid-cols-1 gap-6 mb-10 items-start">
+                  {(
+                  <div className="min-w-0">
                     <NotesCanvasCard
-                      isOpen={expandedRegions["notesCanvas"] ?? true}
-                      onToggle={() => toggleRegion("notesCanvas")}
+                      isOpen
+                      onToggle={undefined}
                       department={department}
                       pinnedFolderIds={pinnedFolders.map((f) => f.id)}
                       onTogglePin={toggleNotePin}
@@ -3667,140 +4010,18 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       onToggleEditorExpanded={() => setNotesExpanded((v) => !v)}
                     />
                   </div>
-
-                  {/* Campaigns — a compact, scannable list beside Notes. The full
-                      studio art-wall lives one click away behind "Browse gallery".
-                      Rows open the same campaign modal as the gallery cards. */}
-                  {!notesExpanded && (
-                  <div className="lg:col-span-2 min-w-0">
-                    <div className="rounded-3xl border border-[#dce4ec] bg-white shadow-sm overflow-hidden flex flex-col">
-                      <div className="flex items-center justify-between gap-3 px-3.5 pt-3.5 pb-2.5">
-                        <h2 className="flex items-center gap-2 text-[13px] font-black text-[#122027] uppercase tracking-widest">
-                          <Film className="w-4 h-4 text-[#c2410d]" /> Campaigns
-                        </h2>
-                        <button
-                          onClick={() => setBrowseGallery(true)}
-                          className="flex items-center gap-1.5 shrink-0 text-[11px] font-black text-[#c2410d] uppercase tracking-widest hover:text-[#9a3412] transition-colors"
-                        >
-                          <LayoutGrid className="w-3.5 h-3.5" /> Browse gallery
-                        </button>
-                      </div>
-
-                      {/* Filter — client-side title match across all studios */}
-                      <div className="px-3.5 pb-2.5">
-                        <div className="relative">
-                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#94a3b8]" />
-                          <input
-                            value={campFilter}
-                            onChange={(e) => setCampFilter(e.target.value)}
-                            placeholder="Filter campaigns…"
-                            className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-50 border border-transparent focus:border-[#c2410d]/40 focus:bg-white text-[12px] font-semibold text-[#122027] placeholder:text-[#94a3b8] outline-none transition-colors"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Height tuned to match the Notes card's fixed open height
-                          (~520px scroll area) so the two columns read as equal
-                          modules; the list scrolls internally past that. */}
-                      <div className="max-h-[468px] overflow-y-auto px-2 pb-2">
-                        {(() => {
-                          const q = campFilter.trim().toLowerCase();
-                          const sections = gallerySections
-                            .map((section) => ({
-                              section,
-                              camps: (grouped[section] || []).filter(
-                                (c) => !q || c.title.toLowerCase().includes(q)
-                              ),
-                            }))
-                            .filter((s) => s.camps.length > 0);
-
-                          if (sections.length === 0) {
-                            return (
-                              <p className="text-center text-[12px] font-bold text-[#94a3b8] py-12">
-                                {q ? "No campaigns match." : "No campaigns yet."}
-                              </p>
-                            );
-                          }
-
-                          return sections.map(({ section, camps }) => {
-                            const folded = collapsedStudios[section];
-                            return (
-                              <div key={section} className="mb-1">
-                                <button
-                                  onClick={() => setCollapsedStudios((p) => ({ ...p, [section]: !p[section] }))}
-                                  className="w-full flex items-center gap-2 px-2 pt-3 pb-1.5 group/hdr"
-                                >
-                                  <ChevronRight className={`w-3 h-3 text-[#94a3b8] transition-transform ${folded ? "" : "rotate-90"}`} />
-                                  <span className="text-[10px] font-black uppercase tracking-widest text-[#768994] group-hover/hdr:text-[#122027]">{section}</span>
-                                  <div className="h-px flex-1 bg-[#eef1f5]" />
-                                  <span className="text-[10px] font-bold text-[#b0bcc6] tabular-nums">{camps.length}</span>
-                                </button>
-                                {!folded && camps.map((camp) => {
-                                  const cover = covers[camp.id] || CAMPAIGN_COVERS[camp.id];
-                                  const ts = camp.lastMatrixUpdate;
-                                  const isActive = ts && (Date.now() - ts) < 14 * 24 * 60 * 60 * 1000;
-                                  const isOpen = expandedCampId === camp.id;
-                                  const isPinned = pinnedIds.includes(camp.id);
-                                  const assetCount = camp.links?.length || 0;
-                                  const sub = [
-                                    isActive ? "Live" : relativeDate(ts),
-                                    assetCount ? `${assetCount} asset${assetCount === 1 ? "" : "s"}` : null,
-                                  ].filter(Boolean).join(" · ") || "No matrix";
-                                  return (
-                                    <div
-                                      key={camp.id}
-                                      className={`group/row relative flex items-center gap-3 p-1.5 rounded-xl transition-colors ${isOpen ? "bg-[#c2410d]/10" : "hover:bg-slate-50"}`}
-                                    >
-                                      <button onClick={() => handleToggleCamp(camp.id)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
-                                        <span
-                                          className="relative w-9 h-12 rounded-lg overflow-hidden shrink-0 shadow-sm flex items-center justify-center"
-                                          style={{ background: cover ? "#122027" : generateGradient(camp.title), filter: isActive ? "none" : "grayscale(55%) brightness(0.85)" }}
-                                        >
-                                          {cover ? (
-                                            <img src={cover} alt="" className="w-full h-full object-cover" />
-                                          ) : (
-                                            <Film className="w-4 h-4 text-white/40" />
-                                          )}
-                                        </span>
-                                        <span className="flex-1 min-w-0">
-                                          <span className={`block text-[12px] font-black truncate ${isOpen ? "text-[#c2410d]" : "text-[#122027]"}`}>{camp.title}</span>
-                                          <span className="flex items-center gap-1.5 text-[10px] font-bold text-[#94a3b8]">
-                                            {isActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />}
-                                            <span className="truncate uppercase tracking-wide">{sub}</span>
-                                          </span>
-                                        </span>
-                                      </button>
-                                      <button
-                                        onClick={(e) => { e.stopPropagation(); togglePin(camp.id); }}
-                                        title={isPinned ? "Unpin" : "Pin"}
-                                        className={`shrink-0 p-1.5 rounded-lg transition-all ${isPinned ? "text-amber-500" : "text-[#c2d0da] opacity-0 group-hover/row:opacity-100 hover:text-amber-500"}`}
-                                      >
-                                        <Pin className={`w-3.5 h-3.5 ${isPinned ? "fill-current" : ""}`} />
-                                      </button>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
-                    </div>
-                  </div>
                   )}
+
                 </div>
               )}
 
-              {/* ============ GALLERY — the studio art-wall, behind "Browse gallery" ============ */}
-              {browseGallery && (
+              {/* ============ GALLERY — the studio art-wall ============ */}
+              {/* The only campaigns view. There used to be a compact list here
+                  too, with the gallery behind a "Browse gallery" button — two
+                  ways to see the same campaigns, and the art-wall is the one
+                  worth having on a page called Canvas. */}
+              {canvasView === "campaigns" && (
               <>
-              <button
-                onClick={() => setBrowseGallery(false)}
-                className="flex items-center gap-1.5 mb-5 -ml-1 px-2.5 py-1.5 rounded-lg text-[12px] font-black text-[#768994] hover:text-[#122027] hover:bg-slate-50 transition-colors"
-              >
-                <ChevronLeft className="w-4 h-4" /> Back to workspace
-              </button>
-
               <div className="flex items-center gap-2.5 mb-4 px-1">
                 <div className="w-9 h-9 rounded-xl bg-[#c2410d]/10 text-[#c2410d] flex items-center justify-center shadow-sm">
                   <Film className="w-5 h-5" />
@@ -3824,12 +4045,12 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   return (
                     <div
                       key={section}
-                      className="flex-1 min-w-[200px] animate-in fade-in slide-in-from-bottom-4 zoom-in-95"
+                      className="flex-1 min-w-[280px] animate-in fade-in slide-in-from-bottom-4 zoom-in-95"
                       style={{ animationDelay: `${i * 60}ms`, animationFillMode: "both" }}
                     >
                     <button
                       onClick={() => setSelectedStudio((prev) => (prev === section ? null : section))}
-                      className={`group relative w-full rounded-2xl overflow-hidden h-56 sm:h-64 shadow-md hover:shadow-2xl hover:-translate-y-1.5 outline-none [filter:saturate(0.4)_brightness(0.9)] hover:[filter:saturate(1.08)_brightness(1.05)] ${isSelected ? "ring-4 ring-[#c2410d]/50 [filter:saturate(1.08)_brightness(1.05)]" : ""}`}
+                      className={`group relative w-full rounded-3xl overflow-hidden h-64 sm:h-80 xl:h-96 shadow-md hover:shadow-2xl hover:-translate-y-1.5 outline-none [filter:saturate(0.4)_brightness(0.9)] hover:[filter:saturate(1.08)_brightness(1.05)] ${isSelected ? "ring-4 ring-[#c2410d]/50 [filter:saturate(1.08)_brightness(1.05)]" : ""}`}
                       style={{ background: art.gradient, transition: "filter 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1), box-shadow 0.6s cubic-bezier(0.16,1,0.3,1)" }}
                     >
                       {/* Studio art (best-effort; hides itself on load failure) */}
@@ -3852,15 +4073,15 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       {/* Legibility veil — stronger for cover photos */}
                       <div className={`absolute inset-0 ${art.fit === "cover" ? "bg-gradient-to-t from-black/80 via-black/25 to-black/20" : "bg-gradient-to-t from-black/60 via-black/5 to-black/10"}`} />
                       {/* Count */}
-                      <span className="absolute top-2 right-2 text-[10px] font-black bg-white/15 backdrop-blur-md text-white px-2 py-0.5 rounded-full border border-white/25 transition-transform duration-300 group-hover:scale-105">
+                      <span className="absolute top-3 right-3 text-[11px] font-black bg-white/15 backdrop-blur-md text-white px-2.5 py-1 rounded-full border border-white/25 transition-transform duration-300 group-hover:scale-105">
                         {count}
                       </span>
                       {/* Wordmark */}
-                      <div className="absolute bottom-0 left-0 right-0 p-4 text-left transition-transform duration-300 group-hover:-translate-y-1">
-                        <p className="text-lg font-black text-white tracking-tight drop-shadow-md leading-none truncate">
+                      <div className="absolute bottom-0 left-0 right-0 p-5 sm:p-6 text-left transition-transform duration-300 group-hover:-translate-y-1">
+                        <p className="text-xl sm:text-2xl font-black text-white tracking-tight drop-shadow-md leading-none truncate">
                           {section}
                         </p>
-                        <p className="text-[10px] font-bold text-white/75 uppercase tracking-widest mt-1.5 truncate">
+                        <p className="text-[11px] font-bold text-white/75 uppercase tracking-widest mt-2 truncate">
                           {art.label}
                         </p>
                       </div>
@@ -3906,20 +4127,14 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
               </>
               )}
 
-              {/* ============ REFERENCE TAB BAR ============ */}
-              {/* Sticky pill that lets the user switch between the three Reference
-                  surfaces (DOOH Specs / End of Campaign / Notes Canvas) without
-                  scrolling through all of them. The active tab body renders
-                  below; the others are unmounted so their editors don't fight
-                  for scroll position or steal cmd-k shortcuts. */}
-              {/* Reference surfaces (Launch Tracker / DOOH / EoC) follow as their
-                  own cards — no divider, they read as more modular blocks. */}
-              <div className="mt-6" />
               {/* ============ LAUNCH TRACKER (PRINT) ============ */}
-              {department === "Print" && (
+              {/* Each reference surface is now a tool of its own, reached from
+                  the hub, so it opens expanded — there's nothing to collapse it
+                  against. */}
+              {canvasView === "launch" && department === "Print" && (
                 <PrintLaunchTrackerCard
-                  isOpen={expandedRegions["printLaunch"] ?? true}
-                  onToggle={() => toggleRegion("printLaunch")}
+                  isOpen
+                  onToggle={undefined}
                   hubs={printLaunchHubs}
                   taskById={taskById}
                 />
@@ -3927,13 +4142,13 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
               {/* ============ DOOH SPECS ============ */}
               {/* DOOH specs are Motion-specific (out-of-home media specs) —
                   other departments get different content here later. */}
-              {department === "Motion" && (
+              {canvasView === "dooh" && department === "Motion" && (
               <CollapsibleCard
                 icon={Globe}
                 title="DOOH Specs"
                 subtitle={`Screen specs by country · ${doohCountries.length}`}
-                isOpen={expandedRegions["doohSpecs"] ?? false}
-                onToggle={() => toggleRegion("doohSpecs")}
+                isOpen
+                onToggle={undefined}
               >
                 <div className="flex flex-wrap items-center gap-3 mb-5">
                   <div className="relative">
@@ -4051,13 +4266,10 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
               </CollapsibleCard>
               )}
 
-              <div className="mt-6 space-y-6">
-                <EndOfCampaignNotesCard
-                  isOpen={expandedRegions["eocNotes"] ?? false}
-                  onToggle={() => toggleRegion("eocNotes")}
-                  campaigns={campaigns}
-                  department={department}
-                />
+              {/* Sits at the foot of Notes Canvas — see canvasTools. */}
+              {canvasView === "notes" && !notesExpanded && (
+                <EndOfCampaignNotesCard campaigns={campaigns} department={department} />
+              )}
               </div>
             </div>
           );

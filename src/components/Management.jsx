@@ -5,12 +5,14 @@ import {
   Briefcase, Film, Users, Tag, AlignLeft, Building2,
   Plus, Pencil, Trash2, X, Check, Search,
   RefreshCw, Shield, AlertTriangle, ChevronLeft, ChevronRight,
-  ArrowUpAZ, ArrowDownAZ, CheckCircle2, UserCog,
+  ArrowUpAZ, ArrowDownAZ, CheckCircle2,
   FolderPlus, Folder, FolderOpen, Sparkles, Loader2,
   FileBarChart, ClipboardList, Globe, Layers, Download, Network, TrendingUp,
-  Undo2, UploadCloud, Eye, ListChecks,
+  Undo2, UploadCloud, Eye, ListChecks, Banknote,
 } from "lucide-react";
-import { supabase } from "../lib/supabaseClient";
+import { supabase, selectAll } from "../lib/supabaseClient";
+import { parseCsv, mapCsvRows } from "../utils/csv";
+import { parseTimeToSeconds, parseTimeToHours, secondsToHM } from "../utils/timeHelpers";
 import { confirmAction } from "../lib/confirm";
 import { notify } from "../lib/toast";
 import {
@@ -19,12 +21,15 @@ import {
   planPropagate, applyPropagate, copyTemplateDeep,
   mapSlotFoldersUnder, slotSuffix, renameFolder, buildFilmView,
   setFolderJobNumber, triggerFieldCascade, scanStudioJobNumbers,
+  discoverItemPriceField, fetchFolderItemPrice,
 } from "../lib/wrikeCampaign";
 import { isServiceAccount, DEPT_GROUPS } from "../lib/people";
 import { layoutRect } from "../utils/zoom";
 import { useColumnResize } from "../lib/useColumnResize";
 import { SEED_CLIENTS, SEED_PROJECT_DESCRIPTIONS } from "../data/seedData";
 import { DEFAULT_JOBS, CATEGORIES } from "../constants";
+import { builtInAliasesFor } from "../utils/countryCodes";
+import { loadCountryAliases } from "../lib/countryAliases";
 import { fullName as cleanFullName, cleanNamePart } from "../lib/formatName";
 import PageHeader from "./shared/PageHeader";
 import HubRow from "./shared/HubRow";
@@ -75,7 +80,7 @@ const NAV_GROUPS = [
     gradient: "from-teal-500 to-[#1cc1a5]",
     items: [
       { id: "people", label: "People", icon: Users, desc: "Everyone's role, position & department" },
-      { id: "positions", label: "Positions", icon: UserCog, desc: "Job titles used across the team" },
+      { id: "rates", label: "Positions & Rates", icon: Banknote, desc: "Job titles, what each bills per hour, and item-category overrides" },
     ],
   },
   {
@@ -89,6 +94,7 @@ const NAV_GROUPS = [
       { id: "clients", label: "Clients", icon: Building2, desc: "Studios and companies you work with" },
       { id: "descs", label: "Project Type Descriptions", icon: AlignLeft, desc: "The project types that follow each job number" },
       { id: "categories", label: "Item Categories", icon: Tag, desc: "Work item categories used on jobs" },
+      { id: "work-categories", label: "Job Work Categories", icon: Tag, desc: "The work category set on a job itself" },
       { id: "translations", label: "Translation Countries", icon: Globe, desc: "Countries available for translation work" },
       { id: "departments", label: "Departments", icon: Layers, desc: "The department list used across the app" },
     ],
@@ -200,11 +206,258 @@ const letterPalette = (l) => {
   return LETTER_PALETTES[Math.abs(code) % LETTER_PALETTES.length];
 };
 
+// ── Country alias editor ─────────────────────────────────────────────────────
+// One row's worth of aliases, shown inline against its country in Translation
+// Countries. Two kinds sit side by side:
+//
+//   built-in  — read from CODE_LOOKUP itself (builtInAliasesFor), so what's
+//               shown is what actually resolves rather than a second list that
+//               can drift from it. Not editable here; they live in constants.js
+//               and include MAGI's own sheet, which stays a verbatim copy.
+//   curated   — rows in country_aliases, added freely and removed freely. They
+//               are consulted FIRST, so adding one that matches a built-in
+//               re-points it, and adding a new one extends the set.
+//
+// Uniqueness is global and normalised (upper, punctuation stripped) because an
+// alias is a lookup key: "BE-FL" and "befl" are the same key, and two rows
+// claiming it would make resolution depend on row order. The DB enforces it;
+// this checks first so the failure is a sentence rather than a constraint error.
+const ALIAS_KEY = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+// The eight codes that are also ordinary English words. Adding one of these as
+// an alias is allowed — production may have a good reason — but it's called out,
+// because these are the codes that read countries out of prose when they land
+// somewhere unanchored (see countryCodes.js and the Norway incident).
+const RISKY_ALIAS_KEYS = new Set(["NO", "IN", "IT", "AT", "BE", "US", "IS", "MY"]);
+
+// `open`/`onToggle`/`onClose` are owned by the list, not by each row, so only
+// one panel can be open at a time — three of these stacked over each other was
+// the first thing that went wrong on screen.
+function CountryAliasEditor({ territory, aliases, onChanged, open, onToggle, onClose }) {
+  const [adding, setAdding] = useState("");
+  const [busy, setBusy]     = useState(false);
+  const [err, setErr]       = useState("");
+
+  // A centred modal rather than a popover anchored to its row. Anchoring was
+  // tried twice — nested (clipped by the list) and portaled with computed
+  // coordinates (landed rows above its own row under html{zoom:1.1}) — and it
+  // was never buying much: the panel names the country in its heading, so it
+  // doesn't need to touch the row to say what it belongs to. This drops the
+  // whole coordinate problem, can't clip, and reuses the modal shell the rest
+  // of this file already uses, which the dark-theme sheet covers.
+  //
+  // Escape closes it; click-away is handled by the modal backdrop below.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => e.key === "Escape" && onClose?.();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  // A half-typed alias and its error shouldn't be waiting there next time.
+  useEffect(() => {
+    if (!open) { setAdding(""); setErr(""); }
+  }, [open]);
+
+  const builtIn = useMemo(() => builtInAliasesFor(territory), [territory]);
+  const mine    = aliases || [];
+
+  const add = async () => {
+    const value = adding.trim();
+    if (!value) return;
+    const key = ALIAS_KEY(value);
+    if (!key) { setErr("An alias needs at least one letter or number."); return; }
+
+    const clash = mine.find((a) => ALIAS_KEY(a.alias) === key);
+    if (clash) { setErr(`"${clash.alias}" is already on this country.`); return; }
+
+    setBusy(true); setErr("");
+    const { error } = await supabase
+      .from("country_aliases")
+      .insert({ alias: value, territory });
+    setBusy(false);
+
+    if (error) {
+      // The unique index is on the normalised alias across every country, so
+      // the usual cause is that another country already claims this code.
+      setErr(
+        error.code === "23505"
+          ? `"${value}" is already used as an alias for another country.`
+          : "Couldn't save that alias."
+      );
+      return;
+    }
+    setAdding("");
+    onChanged?.();
+  };
+
+  const remove = async (id) => {
+    setBusy(true);
+    await supabase.from("country_aliases").delete().eq("id", id);
+    setBusy(false);
+    onChanged?.();
+  };
+
+  const riskyPending = RISKY_ALIAS_KEYS.has(ALIAS_KEY(adding));
+
+  return (
+    <div className="shrink-0 flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+      {mine.slice(0, open ? mine.length : 3).map((a) => (
+        <span key={a.id}
+          className="px-1.5 py-0.5 rounded-md bg-[#12a0e1]/10 text-[#0d8bc4] text-[10px] font-bold tracking-wide">
+          {a.alias}
+        </span>
+      ))}
+      {!open && mine.length > 3 && (
+        <span className="text-[10px] font-bold text-[#768994]">+{mine.length - 3}</span>
+      )}
+      <button
+        onClick={onToggle}
+        title={`Aliases for ${territory}`}
+        className="p-1 rounded-lg text-slate-400 hover:text-[#12a0e1] hover:bg-slate-100"
+      >
+        <Tag className="w-3 h-3" />
+      </button>
+
+      {open && createPortal(
+        // Same shell as this file's other modals, so the dark-theme sheet —
+        // which keys off Tailwind class names — covers it without any
+        // per-element dark styling here. onMouseDown, like the others: closes
+        // before blur rather than racing it.
+        <div className="fixed inset-0 z-[9999] bg-[#122027]/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onMouseDown={() => onClose?.()}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md border border-[#dce4ec] overflow-hidden text-left"
+            onMouseDown={(e) => e.stopPropagation()}>
+
+            <div className="px-5 pt-4 pb-3 border-b border-[#dce4ec]">
+              <p className="text-[9px] font-black uppercase tracking-widest text-[#12a0e1] mb-0.5">Aliases</p>
+              <h2 className="text-lg font-black text-[#122027]">{territory}</h2>
+            </div>
+
+            <div className="p-5">
+              <div className="flex gap-2 mb-3">
+                <input
+                  autoFocus
+                  value={adding}
+                  onChange={(e) => { setAdding(e.target.value); setErr(""); }}
+                  onKeyDown={(e) => e.key === "Enter" && add()}
+                  placeholder="Add alias…"
+                  className="flex-1 min-w-0 text-sm border border-[#dce4ec] rounded-lg px-3 py-1.5 outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 bg-white text-[#122027]"
+                />
+                <button onClick={add} disabled={busy || !adding.trim()}
+                  className="shrink-0 px-3 py-1.5 rounded-lg bg-[#12a0e1] text-white text-xs font-bold hover:bg-[#0d8bc4] disabled:opacity-40">
+                  Add
+                </button>
+              </div>
+
+              {riskyPending && (
+                <p className="text-[11px] text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-2.5 py-2 mb-3">
+                  “{adding.trim()}” is also an ordinary English word. It'll be
+                  read as {territory} wherever someone writes it deliberately —
+                  at the end of a task name, on a folder, in the Country field —
+                  but it stays refused in unidentified custom fields, which is
+                  what stopped a boolean “No” being read as Norway.
+                </p>
+              )}
+              {err && <p className="text-[11px] text-rose-600 mb-3">{err}</p>}
+
+              {mine.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-4">
+                  {mine.map((a) => (
+                    <span key={a.id}
+                      className="group/alias inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-bold">
+                      {a.alias}
+                      <button onClick={() => remove(a.id)} disabled={busy}
+                        className="text-slate-400 hover:text-rose-500">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {builtIn.length > 0 && (
+                <>
+                  <p className="text-[9px] font-black uppercase tracking-widest text-[#768994] mb-1.5">
+                    Built in
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {builtIn.map((b) => (
+                      <span key={b} title="Defined in code — add the same alias above to re-point it"
+                        className="px-2 py-1 rounded-lg bg-slate-200 text-slate-700 text-xs font-bold">
+                        {b}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+// Translation Countries + their aliases. Wraps the generic list rather than
+// extending it: the alias rows are a second table, fetched once for the whole
+// list here instead of once per row, and re-read after every edit so the
+// resolver's overlay and the UI never disagree about what's saved.
+function TranslationCountriesSection() {
+  const [byTerritory, setByTerritory] = useState({});
+  // Which row's alias panel is open — one at a time, owned here.
+  const [openFor, setOpenFor] = useState(null);
+  // Stable identity, so the editor's click-away listener isn't torn down and
+  // rebuilt on every render of the list.
+  const closePanel = useCallback(() => setOpenFor(null), []);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase
+      .from("country_aliases")
+      .select("id,alias,territory")
+      .order("alias");
+    const grouped = {};
+    for (const row of data || []) (grouped[row.territory] ||= []).push(row);
+    setByTerritory(grouped);
+    // Push the same rows into the resolver, so an alias added here is live for
+    // the next Wrike pull without a reload.
+    await loadCountryAliases({ force: true });
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <SimpleListSection
+      table="translation_countries"
+      labelField="name"
+      label="Translation Countries"
+      placeholder="e.g. France…"
+      renderRowExtra={(item) => (
+        <CountryAliasEditor
+          territory={item.name}
+          aliases={byTerritory[item.name]}
+          onChanged={load}
+          open={openFor === item.name}
+          onToggle={() => setOpenFor((cur) => (cur === item.name ? null : item.name))}
+          onClose={closePanel}
+        />
+      )}
+    />
+  );
+}
+
 // ── Generic reference-list section ───────────────────────────────────────────
 // onItemClick (optional) makes each row's label a button rather than plain
 // text — used by Films to open that film's bulk campaign. Left off elsewhere,
 // so Clients/Categories/Descriptions stay plain editable lists.
-function SimpleListSection({ table, labelField = "name", label, placeholder, isLong = false, quickFilters = [], quickFilterLabel = "Quick filters", groups = [], wrikeFilmSync = false, onItemClick }) {
+// `renderRowExtra` puts a caller-supplied control on each row, between the
+// label and the hover actions — so a list that also carries a value per item
+// (a position and its rate) stays one list instead of the same names appearing
+// twice on the page. It's handed the item and a patch function that updates
+// this component's copy, so the control reflects its own edits without a
+// refetch. Flat mode only; grouped rows are too tight for it.
+function SimpleListSection({ table, labelField = "name", label, placeholder, isLong = false, quickFilters = [], quickFilterLabel = "Quick filters", groups = [], wrikeFilmSync = false, onItemClick, renderRowExtra }) {
   const [items, setItems]               = useState([]);
   const [showFilmSync, setShowFilmSync] = useState(false);
   const [loading, setLoading]           = useState(true);
@@ -230,6 +483,13 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
   });
   const [editingGrp, setEditingGrp]       = useState(null);
   const [editingGrpVal, setEditingGrpVal] = useState("");
+
+  // Handed to renderRowExtra so a control can write its own field back into
+  // this list's copy of the row. The caller owns persisting it.
+  const patchItem = useCallback((id, patch) => {
+    setItems(prev => prev.map(it => (it.id === id ? { ...it, ...patch } : it)));
+  }, []);
+
   const saveGroupLabel = (original) => {
     const trimmed = editingGrpVal.trim();
     if (!trimmed) { setEditingGrp(null); return; }
@@ -681,6 +941,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                         {text}
                       </span>
                     )}
+                    {renderRowExtra?.(item, patchItem)}
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                       <button onClick={() => { setEditId(item.id); setEditVal(text); }}
                         className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-[#122027]">
@@ -719,14 +980,6 @@ function FieldLabel({ text, required }) {
 // with the form. Instead we fold it into the dropdown: options group under
 // sticky headers (same idiom as Tracker/Legacy's SearchableSelect), so scanning
 // by territory/studio/type is a property of the list, not extra chrome.
-const afterDash = (s) => { const i = s.indexOf(" - "); return i >= 0 ? s.slice(i + 3) : s; };
-// "Digital - Production" → "Digital"; "AUS - Foo" → "AUS"; else a bucket.
-const prefixGroup = (s) => {
-  const i = s.indexOf(" - ");
-  if (i >= 0) return s.slice(0, i);
-  return s.startsWith("XYi") ? "XYi" : "Other";
-};
-
 // Project descriptions lead with a territory token but separate it with a SPACE
 // as often as a dash ("UK Titles", "AUS - DOOH", "XYi Internal"), so split on the
 // leading token itself rather than a fixed " - " delimiter.
@@ -761,7 +1014,6 @@ const CLIENT_PIN_RANK = (name) => {
   return 999;
 };
 const DESC_GROUP_ORDER = ["AUS", "UK", "DOM", "INT", "IRE", "XYi"];
-const CAT_GROUP_ORDER = ["Digital", "Print", "XYi"];
 
 // Searchable combobox. Free text is allowed (type a new value); selection uses
 // onMouseDown so it commits before the input's onBlur closes the list.
@@ -888,16 +1140,20 @@ function ComboField({ label, value, onChange, options, placeholder, required, gr
 // popup, but you can't commit free text, only pick an existing option. Use
 // for pickers whose values must reference an existing row (e.g. Film Setup's
 // film picker), as opposed to ComboField which lets you introduce new values.
-function StrictSelect({ value, onChange, options, placeholder, loading, className = "" }) {
+// `limit` caps how many rows render at once. The default keeps the original
+// behaviour for the pickers that have always used it; callers with genuinely
+// long lists (a year and a half of weeks, 65 item categories) raise it so the
+// tail isn't reachable only by typing.
+function StrictSelect({ value, onChange, options, placeholder, loading, className = "", limit = 60 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState(null);
   const btnRef = useRef(null);
 
   const hits = useMemo(() => {
-    if (!q) return options.slice(0, 60);
-    return options.filter(o => o.toLowerCase().includes(q.toLowerCase())).slice(0, 60);
-  }, [options, q]);
+    if (!q) return options.slice(0, limit);
+    return options.filter(o => o.toLowerCase().includes(q.toLowerCase())).slice(0, limit);
+  }, [options, q, limit]);
 
   const toggle = () => {
     // layoutRect, not getBoundingClientRect: the panel below is position:fixed
@@ -1000,45 +1256,54 @@ const JOB_STATUSES = ["Inactive", "Active", "Closed"];
 const STATUS_COLOR_MAP = { Inactive: "bg-slate-400 border-slate-400", Active: "bg-[#12a0e1] border-[#12a0e1]", Closed: "bg-[#1cc1a5] border-[#1cc1a5]" };
 const STATUS_BADGE = { Inactive: "bg-slate-100 text-slate-500", Active: "bg-[#12a0e1]/10 text-[#12a0e1]", Closed: "bg-[#1cc1a5]/10 text-[#1cc1a5]" };
 
+// Allocate the next sequential XY code. selectAll is essential here, not just
+// tidier: this scans for the HIGHEST code in use, and a truncated read returns a
+// max that's thousands too low — every allocation then collides with an existing
+// job number. Reads jobs AND tasks, since either can carry the newest code.
+async function nextJobCode() {
+  const [jobRows, taskRows] = await Promise.all([
+    selectAll("jobs", "job_number"),
+    selectAll("tasks", "job_number"),
+  ]);
+  let maxNum = 0;
+  [...jobRows, ...taskRows].forEach(r => {
+    const m = (r.job_number || "").match(/XY(\d+)/);
+    if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+  });
+  return `XY${String(maxNum + 1).padStart(6, "0")}`;
+}
+
 // ── Job Form ───────────────────────────────────────────────────────────────────
 // Fields + footer for creating/editing a Job Book row. Shared by JobModal (edit,
 // from Job Book) and the Custom Job tab in Jobs Setup (create) — same form,
 // different chrome around it (layout="modal" adds the fixed-footer/scroll
 // behaviour a popup needs; layout="inline" just flows in the page).
-function JobForm({ job, clients, films, categories, descs, onSave, onCancel, saving, submitLabel, layout = "modal" }) {
+function JobForm({ job, clients, films, workCategories, descs, onSave, onCancel, saving, submitLabel, layout = "modal", presetCode = null }) {
   const isEdit = !!job?.id;
   const [orderedByOpts, setOrderedByOpts] = useState([]);
   const [billedToOpts, setBilledToOpts]   = useState([]);
-  const [nextCode, setNextCode] = useState(null); // e.g. "XY025999" — allocated once when creating a new job
+  // e.g. "XY025999" — allocated once when creating a new job. The Bulk Campaign
+  // flow allocates it up front (so the folder preview can show the code the job
+  // will get) and passes it in; standalone creation allocates its own below.
+  const [nextCode, setNextCode] = useState(presetCode);
 
   useEffect(() => {
-    supabase.from("jobs")
-      .select("ordered_by, billed_to")
-      .not("ordered_by", "is", null)
-      .neq("ordered_by", "")
-      .then(({ data }) => {
-        if (!data) return;
-        setOrderedByOpts([...new Set(data.map(r => r.ordered_by).filter(Boolean))].sort());
-        setBilledToOpts([...new Set(data.map(r => r.billed_to).filter(Boolean))].sort());
-      });
+    // Whole table: a truncated read silently drops whole clients from these
+    // pickers, which reads as "that option doesn't exist".
+    selectAll("jobs", "ordered_by, billed_to", (q) =>
+      q.not("ordered_by", "is", null).neq("ordered_by", "")
+    ).then((data) => {
+      setOrderedByOpts([...new Set(data.map(r => r.ordered_by).filter(Boolean))].sort());
+      setBilledToOpts([...new Set(data.map(r => r.billed_to).filter(Boolean))].sort());
+    });
   }, []);
 
   // New jobs get the next sequential XY code auto-allocated, same source of truth
   // (max across jobs + tasks) as the Bulk Campaign flow — never manually typed.
   useEffect(() => {
-    if (isEdit) return;
-    Promise.all([
-      supabase.from("jobs").select("job_number"),
-      supabase.from("tasks").select("job_number"),
-    ]).then(([{ data: jobRows }, { data: taskRows }]) => {
-      let maxNum = 0;
-      [...(jobRows || []), ...(taskRows || [])].forEach(r => {
-        const m = (r.job_number || "").match(/XY(\d+)/);
-        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
-      });
-      setNextCode(`XY${String(maxNum + 1).padStart(6, "0")}`);
-    });
-  }, [isEdit]);
+    if (isEdit || presetCode) return;
+    nextJobCode().then(setNextCode);
+  }, [isEdit, presetCode]);
 
   const [form, setForm] = useState({
     job_number: job?.job_number || "",
@@ -1061,8 +1326,10 @@ function JobForm({ job, clients, films, categories, descs, onSave, onCancel, sav
   });
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  // Create tucks billing/admin fields behind a disclosure; edit shows them open.
-  const [showAdmin, setShowAdmin] = useState(isEdit);
+  // Open from the start, creating or editing: the billing fields are filled in
+  // at creation often enough that hiding them behind a disclosure just adds a
+  // click. Still collapsible.
+  const [showAdmin, setShowAdmin] = useState(true);
   const bodyClass = layout === "modal" ? "overflow-y-auto flex-1 px-6 py-5 space-y-6" : "space-y-6";
   const footerClass = layout === "modal"
     ? "px-6 py-4 border-t border-[#dce4ec] flex items-center justify-end gap-2 shrink-0"
@@ -1133,10 +1400,15 @@ function JobForm({ job, clients, films, categories, descs, onSave, onCancel, sav
           groupBy={descGroup} formatOption={descLabel} groupOrder={DESC_GROUP_ORDER} />
 
         <div className="grid grid-cols-2 gap-5">
-          <ComboField label="Item Category" value={form.job_work_category}
+          {/* Job Work Category — the job-level taxonomy (AUS - Publicity, …).
+              NOT the Item Categories list (Digital - Retouching, …), which is
+              picked per timesheet line; this field was wrongly pointed at that
+              one. Territory-prefixed like project descriptions, so it groups
+              the same way. */}
+          <ComboField label="Job Work Category" value={form.job_work_category}
             onChange={v => set("job_work_category", v)}
-            options={categories} placeholder="Search categories…"
-            groupBy={prefixGroup} formatOption={afterDash} groupOrder={CAT_GROUP_ORDER} />
+            options={workCategories} placeholder="Search job work categories…"
+            groupBy={descGroup} formatOption={descLabel} groupOrder={DESC_GROUP_ORDER} />
           <div>
             <FieldLabel text="Start Date" required />
             <DateField value={form.start_date} onChange={v => set("start_date", v)} allowClear={false} placeholder="Pick a start date…" />
@@ -1269,7 +1541,7 @@ function JobForm({ job, clients, films, categories, descs, onSave, onCancel, sav
 }
 
 // ── Job Form Modal (edit only — creation now lives in Jobs Setup > Custom Job) ─
-function JobModal({ job, clients, films, categories, descs, onSave, onClose, saving }) {
+function JobModal({ job, clients, films, workCategories, descs, onSave, onClose, saving }) {
   return (
     // onMouseDown instead of onClick: fires before blur, so the close is instant
     // and never races with a combobox dropdown's state updates.
@@ -1288,7 +1560,7 @@ function JobModal({ job, clients, films, categories, descs, onSave, onClose, sav
           </button>
         </div>
 
-        <JobForm job={job} clients={clients} films={films} categories={categories} descs={descs}
+        <JobForm job={job} clients={clients} films={films} workCategories={workCategories} descs={descs}
           onSave={onSave} onCancel={onClose} saving={saving} layout="modal" />
       </div>
     </div>
@@ -1444,7 +1716,7 @@ function CheckRow({ ok, label, value, warn }) {
 // mode "push"  — duplicate template into the film project, then tag (reqs 5+1).
 // mode "retag" — skip the copy; re-tag the film project's existing job folders,
 //                topping up items added/renamed since (reqs 2 + 4).
-function PushToWrikeModal({ studio, filmTitle, slotJobs, mode = "push", onClose }) {
+function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
   const isRetag = mode === "retag";
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1454,21 +1726,23 @@ function PushToWrikeModal({ studio, filmTitle, slotJobs, mode = "push", onClose 
   const [result, setResult] = useState(null);      // { propagated, failed, skipped }
   const [targetId, setTargetId] = useState("");    // chosen Wrike project id (film picker)
 
-  // Activated slots, with the code we'll write as the field value.
-  const slots = useMemo(() => Object.values(slotJobs).map((j) => ({
+  // Activated jobs, with the code we'll write as the field value. Identified by
+  // job id, not slot label: the same slot can hold several jobs (two launches off
+  // one template folder), and keying by label would merge them into one row.
+  const slots = useMemo(() => jobs.map((j) => ({
     id: j.id,
     label: j.template_slot,
     jobNumber: j.job_number,
     code: (j.job_number?.match(/XY\d+/) || [])[0] || j.job_number,
-  })), [slotJobs]);
+  })), [jobs]);
 
-  // Which activated slots to actually tag — all by default; unchecking one in the
+  // Which activated jobs to actually tag — all by default; unchecking one in the
   // preview drops it from this push (its Job Book row is untouched).
   const [excluded, setExcluded] = useState(() => new Set());
-  const selectedSlots = useMemo(() => slots.filter((s) => !excluded.has(s.label)), [slots, excluded]);
-  const toggleSlot = (label) => setExcluded((prev) => {
+  const selectedSlots = useMemo(() => slots.filter((s) => !excluded.has(s.id)), [slots, excluded]);
+  const toggleSlot = (id) => setExcluded((prev) => {
     const next = new Set(prev);
-    next.has(label) ? next.delete(label) : next.add(label);
+    next.has(id) ? next.delete(id) : next.add(id);
     return next;
   });
 
@@ -1529,7 +1803,7 @@ function PushToWrikeModal({ studio, filmTitle, slotJobs, mode = "push", onClose 
     walk(filmProject.id);
     slots.forEach((s) => {
       const live = bySuffix[slotSuffix(s.label)];
-      if (live && new RegExp(`^${s.code}_`, "i").test(live)) done.add(s.label);
+      if (live && new RegExp(`^${s.code}_`, "i").test(live)) done.add(s.id);
     });
     return done;
   }, [plan, filmProject, slots]);
@@ -1600,12 +1874,19 @@ function PushToWrikeModal({ studio, filmTitle, slotJobs, mode = "push", onClose 
 
       // Rename each activated slot's folder to its code, set the Job Number field
       // on the folder, then let Wrike cascade that value down to every subitem.
-      let renamed = 0, cascaded = 0, propagated = 0, failed = 0, skipped = 0;
+      // One template folder can only carry one job number. When a slot has been
+      // activated more than once, the first job in this run claims the folder and
+      // the rest are reported as contended rather than silently overwriting it —
+      // their extra folders have to be made in Wrike before they can be tagged.
+      const claimed = new Set();
+      let renamed = 0, cascaded = 0, propagated = 0, failed = 0, skipped = 0, contended = 0;
       for (let i = 0; i < selectedSlots.length; i++) {
         const s = selectedSlots[i];
         const suffix = slotSuffix(s.label);
+        if (claimed.has(suffix)) { contended += 1; continue; }
         const folder = slotFolders[suffix];
         if (!folder) { skipped += 1; continue; }
+        claimed.add(suffix);
         if (inTemplate(folder.id)) throw new Error(TEMPLATE_GUARD); // never write into the template
 
         const newTitle = `${s.code}_${suffix}`;
@@ -1641,7 +1922,7 @@ function PushToWrikeModal({ studio, filmTitle, slotJobs, mode = "push", onClose 
         propagated += r.ok.length;
         failed += r.failed.length;
       }
-      setResult({ renamed, cascaded, propagated, failed, skipped, droppedTaskFolders });
+      setResult({ renamed, cascaded, propagated, failed, skipped, contended, droppedTaskFolders });
       notify(`Wrike updated — ${renamed} folder${renamed === 1 ? "" : "s"} named${cascaded ? `, ${cascaded} cascaded` : ""}${propagated ? `, ${propagated} task${propagated === 1 ? "" : "s"} tagged` : ""}${failed ? `, ${failed} failed` : ""}.`,
         failed ? "error" : "success");
     } catch (e) {
@@ -1673,7 +1954,8 @@ function PushToWrikeModal({ studio, filmTitle, slotJobs, mode = "push", onClose 
               {result.cascaded ? `${result.cascaded} cascaded · ` : ""}
               {result.propagated} task{result.propagated === 1 ? "" : "s"} tagged
               {result.failed ? ` · ${result.failed} failed` : ""}
-              {result.skipped ? ` · ${result.skipped} slot${result.skipped === 1 ? "" : "s"} had no matching folder` : ""}.
+              {result.skipped ? ` · ${result.skipped} slot${result.skipped === 1 ? "" : "s"} had no matching folder` : ""}
+              {result.contended ? ` · ${result.contended} job${result.contended === 1 ? "" : "s"} share a slot whose folder was already claimed` : ""}.
             </p>
             {result.droppedTaskFolders?.length > 0 && (
               <div className="text-left mt-2 px-3 py-2 bg-[#f4b740]/10 border border-[#f4b740]/30 rounded-xl">
@@ -1734,7 +2016,7 @@ function PushToWrikeModal({ studio, filmTitle, slotJobs, mode = "push", onClose 
             )}
 
             <p className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-2">
-              {selectedSlots.length} of {slots.length} activated slot{slots.length === 1 ? "" : "s"} to tag
+              {selectedSlots.length} of {slots.length} activated job{slots.length === 1 ? "" : "s"} to tag
               {doneSlots.size > 0 && <span className="text-[#1cc1a5] normal-case font-bold"> · {doneSlots.size} already tagged</span>}
             </p>
             {slots.length === 0 ? (
@@ -1745,13 +2027,13 @@ function PushToWrikeModal({ studio, filmTitle, slotJobs, mode = "push", onClose 
             ) : (
               <div className="border border-[#dce4ec] rounded-2xl divide-y divide-[#f0f4f8] max-h-[200px] overflow-y-auto mb-2">
                 {slots.map((s) => {
-                  const on = !excluded.has(s.label);
-                  const done = doneSlots.has(s.label);
+                  const on = !excluded.has(s.id);
+                  const done = doneSlots.has(s.id);
                   return (
-                    <label key={s.label}
+                    <label key={s.id}
                       className={`flex items-center justify-between gap-2 px-4 py-2 text-[11px] cursor-pointer transition-opacity ${on ? "" : "opacity-45"}`}>
                       <span className="flex items-center gap-2 min-w-0">
-                        <input type="checkbox" checked={on} onChange={() => toggleSlot(s.label)}
+                        <input type="checkbox" checked={on} onChange={() => toggleSlot(s.id)}
                           className="accent-[#12a0e1] w-3.5 h-3.5 shrink-0" />
                         <span className="text-[#122027] truncate">{s.label.replace(/^JOBNUMBER_?/i, "").replace(/_/g, " ")}</span>
                         {done && <span className="text-[9px] font-black uppercase tracking-wider text-[#1cc1a5] bg-[#1cc1a5]/10 px-1.5 py-0.5 rounded-full shrink-0">Tagged</span>}
@@ -1878,7 +2160,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   const [films, setFilms] = useState([]);
   const [filmsLoading, setFilmsLoading] = useState(true);
   const [clients, setClients] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [workCategories, setWorkCategories] = useState([]);
   const [descs, setDescs] = useState([]);
   const [customSaving, setCustomSaving] = useState(false);
   const [customCreated, setCustomCreated] = useState(null); // job_number of the row just created
@@ -1888,14 +2170,29 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   // manual refresh (the small re-sync affordance below the studio picker).
   const templateCache = useRef({}); // { [studio]: { tree, info } }
 
-  // Slots already activated for the selected film — { [templateSlotLabel]: jobRow }.
-  // Nothing gets created until a slot is clicked, so a film never ends up with a
-  // pile of job numbers nobody asked for — you activate exactly what's needed,
-  // as and when the work comes in, and can come back to activate more later.
-  const [slotJobs, setSlotJobs] = useState({});
+  // Every Job Book row already activated against a template slot for the selected
+  // film. A flat list rather than a slot→job map on purpose: the same slot can be
+  // activated any number of times (numerous launches, several title treatments),
+  // so one slot owns N jobs. Nothing is created until a slot is clicked and the
+  // form below is submitted, so a film never ends up with a pile of job numbers
+  // nobody asked for — you activate exactly what's needed, when the work comes in.
+  const [filmJobs, setFilmJobs] = useState([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
-  const [activatingSlot, setActivatingSlot] = useState(null); // slot label currently being created
+
+  // The staged activation. Clicking a template slot doesn't write anything: it
+  // allocates the next code, previews the folder it would create in the film tree
+  // below, and opens the job form pre-filled from the slot. Because a draft isn't
+  // keyed by slot, an already-allocated slot stays clickable — that's what makes
+  // repeat launches of the same job type possible.
+  // { slotLabel, description, path: [containerLabels], code } | null
+  const [draft, setDraft] = useState(null);
+  const [allocatingDraft, setAllocatingDraft] = useState(false);
   const [activateError, setActivateError] = useState(null);
+  const [creatingJob, setCreatingJob] = useState(false);
+  const draftRef = useRef(null); // scroll target so the form comes into view on activate
+  // Item Price custom field, discovered once per session. undefined = not
+  // looked up yet; null = this member can't see it (or it doesn't exist).
+  const itemPriceFieldRef = useRef(undefined);
 
   // Job numbers activated during THIS session (across films) — the reviewable
   // list at the bottom. Most-recent first. Each can be opened in a detail modal
@@ -1920,7 +2217,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   useEffect(() => {
     loadFilms();
     supabase.from("clients").select("name").order("name").then(({ data }) => setClients((data || []).map(c => c.name)));
-    supabase.from("job_categories").select("name").order("name").then(({ data }) => setCategories((data || []).map(c => c.name)));
+    supabase.from("job_work_categories").select("name").order("name").then(({ data }) => setWorkCategories((data || []).map(c => c.name)));
     supabase.from("project_descriptions").select("description").order("description").then(({ data }) => setDescs((data || []).map(d => d.description)));
   }, []);
 
@@ -2015,7 +2312,9 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
           const node = fd[id];
           if (!node) return null;
           const children = (node.childIds || []).map(build).filter(Boolean);
-          const out = { label: node.title };
+          // id is carried through so a staged slot can read its own Wrike
+          // custom fields (Item Price) without re-walking the tree.
+          const out = { label: node.title, id: node.id };
           if (children.length) out.children = children;
           if (/JOBNUMBER/i.test(node.title || "")) out.jobNumber = true;
           return out;
@@ -2078,18 +2377,26 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
     return () => { cancelled = true; };
   }, [filmTitle, territoryId, ensureFolders]);
 
-  // Load which slots are already activated for the selected film — keyed by
-  // template_slot, so we know per JOBNUMBER_ folder whether it already has a
-  // real job number or is still a pending, un-clicked placeholder.
+  // Load every job already activated against a template slot for this film, so
+  // the film tree can show which slots are numbered and how many times over.
   const loadSlotJobs = useCallback(async (film) => {
-    if (!film) { setSlotJobs({}); return; }
+    if (!film) { setFilmJobs([]); return; }
     setLoadingSlots(true);
     const { data } = await supabase.from("jobs").select("*").eq("film_title", film).not("template_slot", "is", null);
-    const map = {};
-    (data || []).forEach(j => { map[j.template_slot] = j; });
-    setSlotJobs(map);
+    setFilmJobs(data || []);
     setLoadingSlots(false);
   }, []);
+
+  // slot → the jobs activated against it (usually one, several for a slot run
+  // more than once). Drives the ALLOCATED badges and the ×N counts. Keyed by
+  // slotSuffix, not the raw label, so a job stamped against the template's
+  // "JOBNUMBER_French_Canada_Assets" still matches the film's own copy of that
+  // folder once Wrike has renamed it to "XY026047_French_Canada_Assets".
+  const jobsBySlot = useMemo(() => {
+    const map = {};
+    filmJobs.forEach(j => { (map[slotSuffix(j.template_slot)] ||= []).push(j); });
+    return map;
+  }, [filmJobs]);
 
   useEffect(() => { loadSlotJobs(filmTitle); }, [filmTitle, loadSlotJobs]);
 
@@ -2122,59 +2429,98 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
     }
   }, [studio, filmTitle, territoryId, fetchTemplateFromWrike, ensureFolders]);
 
-  // Activate exactly one slot: allocate the next sequential XY code fresh
-  // (reflects anything created anywhere since we last looked), create one job
-  // for it, and mark it activated locally. Nothing else in the template is
-  // touched — the rest stay pending until someone clicks them too.
+  // Stage one slot. Allocates the next sequential XY code fresh (so it reflects
+  // anything created anywhere since we last looked) and opens the form below,
+  // pre-filled from the slot — but writes nothing. Deliberately not blocked by
+  // an existing activation: clicking a slot that's already been used stages
+  // ANOTHER job of that type, which is the whole point of the flow.
   const activateSlot = async (leaf) => {
-    if (!filmTitle.trim() || activatingSlot || slotJobs[leaf.label]) return;
-    setActivatingSlot(leaf.label);
+    if (allocatingDraft) return;
+    setAllocatingDraft(true);
     setActivateError(null);
     try {
-      const [{ data: jobRows }, { data: taskRows }] = await Promise.all([
-        supabase.from("jobs").select("job_number"),
-        supabase.from("tasks").select("job_number"),
+      // The slot's Item Price in Wrike becomes the job's Fixed Cost. Read
+      // alongside the code rather than after it, and tolerated as absent: the
+      // field is only visible to project managers, and plenty of slots carry
+      // no price at all — either way the cost is just left empty.
+      const [code, itemPrice] = await Promise.all([
+        nextJobCode(),
+        (async () => {
+          if (!leaf.id) return null;
+          const field = itemPriceFieldRef.current !== undefined
+            ? itemPriceFieldRef.current
+            : (itemPriceFieldRef.current = await discoverItemPriceField().catch(() => null));
+          return field ? fetchFolderItemPrice(leaf.id, field.id) : null;
+        })(),
       ]);
-      let maxNum = 0;
-      [...(jobRows || []), ...(taskRows || [])].forEach(r => {
-        const m = (r.job_number || "").match(/XY(\d+)/);
-        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+      setDraft({
+        slotLabel: leaf.label,
+        description: leaf.description,
+        path: leaf.path || [],
+        code,
+        itemPrice,
       });
-      const code = `XY${String(maxNum + 1).padStart(6, "0")}`;
-      // Req 8 autofill: client defaults to the studio's international arm, project
-      // description is guessed from the slot name (leaf.description), item category
-      // is left empty. All editable afterwards in the review modal.
+      // Bring the preview + form into view — the form is a long way below the
+      // template tree that was just clicked.
+      requestAnimationFrame(() => draftRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    } catch (e) {
+      setActivateError(e.message);
+    } finally {
+      setAllocatingDraft(false);
+    }
+  };
+
+  // Commit the staged draft: one Job Book row, tagged with the template slot it
+  // came from. The code was allocated when the slot was clicked, but re-check it
+  // here — a collision means someone else took it while the form was open, so
+  // allocate again rather than failing the user's typing.
+  const createDraftJob = async (form) => {
+    if (!draft || creatingJob) return;
+    setCreatingJob(true);
+    setActivateError(null);
+    try {
       const row = {
-        job_number: `${filmTitle.trim()} : ${code}, ${leaf.description}`,
-        film_title: filmTitle.trim(),
-        client: STUDIO_CLIENT[studio] || "",
-        project_description: leaf.description,
-        template_slot: leaf.label,
-        status: "Inactive",
-        start_date: new Date().toISOString().slice(0, 10),
+        ...form,
+        template_slot: draft.slotLabel,
+        start_date: form.start_date || null,
+        completed_date: form.completed_date || null,
+        fixed_cost: form.fixed_cost === "" ? null : parseFloat(form.fixed_cost),
+        third_party_cost: form.third_party_cost === "" ? null : parseFloat(form.third_party_cost),
+        estimated_cost: form.estimated_cost === "" ? null : parseFloat(form.estimated_cost),
       };
-      const { data, error } = await supabase.from("jobs").insert(row).select().single();
+      let { data, error } = await supabase.from("jobs").insert(row).select().single();
+      if (error?.code === "23505") {
+        const fresh = await nextJobCode();
+        row.job_number = (form.job_number || "").replace(/XY\d+/, fresh);
+        ({ data, error } = await supabase.from("jobs").insert(row).select().single());
+      }
       if (error) throw error;
-      setSlotJobs(prev => ({ ...prev, [leaf.label]: data }));
+      setFilmJobs(prev => [...prev.filter(j => j.id !== data.id), data]);
       // Prepend to the session review list (dedupe by id, just in case).
       setSessionJobs(prev => [data, ...prev.filter(j => j.id !== data.id)]);
+      setDraft(null);
+      // Creating a job and pushing it to Wrike are one action, not two. The
+      // Job Book row is written first (it's what allocates the code), but the
+      // push confirmation follows immediately so a job can't sit in the Book
+      // having never reached Wrike because nobody pressed a second button.
+      setPushMode("push");
     } catch (e) {
-      setActivateError(e.code === "23505" ? "That job number was just taken by another activation — try again." : e.message);
+      setActivateError(e.message);
     } finally {
-      setActivatingSlot(null);
+      setCreatingJob(false);
     }
   };
 
   // Req 3 — undo an activation: delete the jobs row again and drop it from both
-  // the per-film slot map and the session review list, returning the slot to a
-  // clickable placeholder. (Once live Wrike writes land, this will also clear the
-  // pushed folder / custom field — that's wired in the Wrike-write phase.)
+  // the film's job list and the session review list. (Once live Wrike writes
+  // land, this will also clear the pushed folder / custom field — that's wired
+  // in the Wrike-write phase.)
   const undoActivation = async (job, { skipConfirm = false } = {}) => {
     if (!job?.id || undoingId) return;
     if (!skipConfirm) {
       const ok = await confirmAction({
         title: "Undo this job number?",
-        message: `“${job.job_number}” will be removed from Job Book and its slot freed up again.`,
+        message: `“${job.job_number}” will be removed from Job Book.`,
         confirmLabel: "Undo activation",
         danger: true,
       });
@@ -2184,11 +2530,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
     const { error } = await supabase.from("jobs").delete().eq("id", job.id);
     setUndoingId(null);
     if (error) { notify("Couldn't undo: " + error.message, "error"); return; }
-    setSlotJobs(prev => {
-      const next = { ...prev };
-      if (job.template_slot) delete next[job.template_slot];
-      return next;
-    });
+    setFilmJobs(prev => prev.filter(j => j.id !== job.id));
     setSessionJobs(prev => prev.filter(j => j.id !== job.id));
   };
 
@@ -2197,7 +2539,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
     if (!sessionJobs.length) return;
     const ok = await confirmAction({
       title: `Undo all ${sessionJobs.length} job number${sessionJobs.length === 1 ? "" : "s"}?`,
-      message: "Every job number activated in this session will be removed from Job Book and its slot freed up again.",
+      message: "Every job number activated in this session will be removed from Job Book.",
       confirmLabel: "Undo all",
       danger: true,
     });
@@ -2207,13 +2549,13 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
     const { error } = await supabase.from("jobs").delete().in("id", ids);
     setUndoingId(null);
     if (error) { notify("Couldn't undo all: " + error.message, "error"); return; }
-    const slots = new Set(sessionJobs.map(j => j.template_slot).filter(Boolean));
-    setSlotJobs(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => !slots.has(k))));
+    const gone = new Set(ids);
+    setFilmJobs(prev => prev.filter(j => !gone.has(j.id)));
     setSessionJobs([]);
   };
 
   // Save edits from the review detail modal back to the jobs row, then refresh
-  // it in both the session list and the slot map so the UI reflects the change.
+  // it in both the session list and the film's job list so the UI reflects it.
   const handleReviewSave = async (form) => {
     if (!reviewJob?.id) return;
     setReviewSaving(true);
@@ -2229,16 +2571,17 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
     setReviewSaving(false);
     if (error) { notify("Couldn't save: " + error.message, "error"); return; }
     setSessionJobs(prev => prev.map(j => j.id === data.id ? data : j));
-    setSlotJobs(prev => data.template_slot && prev[data.template_slot] ? { ...prev, [data.template_slot]: data } : prev);
+    setFilmJobs(prev => prev.map(j => j.id === data.id ? data : j));
     setReviewJob(null);
   };
 
-  // Collapsed folder paths in the preview tree (empty = all expanded).
-  const [collapsed, setCollapsed] = useState(() => new Set());
-  const toggleCollapse = (path) => setCollapsed((prev) => {
-    const next = new Set(prev);
+  // Collapsed folder paths, per tree (empty = all expanded). The template preview
+  // and the film's own folders are two separate panels now, so they fold apart.
+  const [collapsed, setCollapsed] = useState(() => ({ template: new Set(), film: new Set() }));
+  const toggleCollapse = (mode, path) => setCollapsed((prev) => {
+    const next = new Set(prev[mode]);
     next.has(path) ? next.delete(path) : next.add(path);
-    return next;
+    return { ...prev, [mode]: next };
   });
   // Every container-folder path EXCEPT the root — collapsing these leaves the top
   // level (the folders right under the film) visible with their sections folded.
@@ -2250,39 +2593,38 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
     return acc;
   };
 
-  // Recursive tree renderer — activated JOBNUMBER_ leaves show their real code;
-  // pending ones stay clickable placeholders you can activate right in the tree.
+  // Recursive tree renderer, in two modes.
+  //
+  //   "template" — the studio's master template. Every JOBNUMBER_ leaf is a
+  //     permanently clickable action: clicking it stages a job of that type.
+  //     Nothing here is ever "used up", so a slot can be run as many times as
+  //     the campaign needs.
+  //   "film" — the picked film's own live folders. Read-only: slots already
+  //     carrying an XY code are badged, and the staged draft appears inline as
+  //     a green NEW JOB preview of the folder that's about to exist.
+  //
   // Uses a path-based key since live Wrike data can have repeated folder names
-  // across branches. The root folder in Wrike is always renamed to the film
-  // itself (e.g. "Passenger") rather than keeping the "_STUDIO_MASTER_TEMPLATES"
-  // name — mirror that here once a film is picked. Container folders collapse.
-  const renderTree = (node, depth = 0, path = "0") => {
+  // across branches. Container folders collapse.
+  const renderTree = (node, mode, depth = 0, path = "0", ancestors = []) => {
+    const isTpl = mode === "template";
     const isSlot = !!node.jobNumber;
-    const preAllocated = isSlot && node.allocated;                       // already numbered in Wrike (read-only)
-    const sessionJob = isSlot && !preAllocated ? slotJobs[node.label] : null; // numbered by us this session
-    const done = preAllocated || !!sessionJob;
-    const isActivating = activatingSlot === node.label;
-    const leafDesc = isSlot ? (node.description || node.label.replace(/^JOBNUMBER_?/i, "").replace(/_/g, " ").trim() || "General") : null;
-    const clickable = isSlot && !done && !isActivating && filmTitle.trim();
-
-    let displayLabel = node.label;
-    // In the template fallback the root is the generic template name, so wear the
-    // film's name at the top. In the film-driven view the root already IS the
-    // film folder, and allocated leaves already carry their XY code in the title.
-    if (depth === 0 && !filmDriven && filmTitle.trim()) displayLabel = filmTitle.trim().replace(/\s+/g, "_");
-    else if (sessionJob) displayLabel = node.label.replace(/^JOBNUMBER/i, sessionJob.job_number.match(/XY\d+/)?.[0] || "XY??????");
+    const leafDesc = isSlot ? (node.description || node.label.replace(/^(JOBNUMBER|XY\d+)_?/i, "").replace(/_/g, " ").trim() || "General") : null;
+    const slotJobsHere = isSlot ? jobsBySlot[slotSuffix(node.label)] : null;
+    const done = isSlot && !isTpl && (node.allocated || slotJobsHere?.length);
+    const clickable = isTpl && isSlot && !allocatingDraft;
+    const isDraftNode = !!node.__draft;
 
     const hasChildren = node.children?.length > 0;
     // A search override keeps folders on a match path open regardless of collapse.
-    const isCollapsed = collapsed.has(path) && !searchExpand.has(path);
-    const isMatch = nodeMatches(node);
+    const isCollapsed = collapsed[mode].has(path) && !(isTpl && searchExpand.has(path));
+    const isMatch = isTpl && nodeMatches(node);
 
     return (
       <div key={path}>
         <div
           onClick={clickable
-            ? () => activateSlot({ label: node.label, description: leafDesc })
-            : hasChildren ? () => toggleCollapse(path) : undefined}
+            ? () => activateSlot({ label: node.label, id: node.id, description: leafDesc, path: ancestors })
+            : hasChildren ? () => toggleCollapse(mode, path) : undefined}
           className={`flex items-center gap-1.5 py-1 ${(clickable || hasChildren) ? "cursor-pointer hover:bg-[#12a0e1]/5 rounded-lg -mx-1 px-1" : ""}`}
           style={{ paddingLeft: depth * 18 }}>
           {hasChildren
@@ -2292,54 +2634,49 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
             ? (isCollapsed
                 ? <Folder className="w-3.5 h-3.5 text-[#f4b740] shrink-0" />
                 : <FolderOpen className="w-3.5 h-3.5 text-[#f4b740] shrink-0" />)
-            : <Folder className={`w-3.5 h-3.5 shrink-0 ${isSlot && !done ? "text-[#12a0e1]" : "text-[#b0bec5]"}`} />}
-          <span className={`text-[12px] ${isMatch ? "bg-[#f4b740]/40 rounded px-1" : ""} ${done ? "font-mono font-bold text-[#12a0e1]" : isSlot ? "text-[#122027] font-bold" : "text-[#122027]"}`}>
-            {displayLabel}
+            : <Folder className={`w-3.5 h-3.5 shrink-0 ${isDraftNode ? "text-[#10b981]" : isSlot && !done ? "text-[#12a0e1]" : "text-[#b0bec5]"}`} />}
+          <span className={`text-[12px] ${isMatch ? "bg-[#f4b740]/40 rounded px-1" : ""} ${
+            isDraftNode ? "font-mono font-bold text-[#10b981]"
+            : done ? "font-mono font-bold text-[#12a0e1]"
+            : isSlot ? "text-[#122027] font-bold"
+            : "text-[#122027]"}`}>
+            {node.label}
           </span>
           {hasChildren && <span className="text-[10px] text-[#b0bec5] font-bold shrink-0">{node.children.length}</span>}
           {clickable && (
             <span className="text-[9px] font-black uppercase tracking-wider text-[#12a0e1] bg-[#12a0e1]/10 px-1.5 py-0.5 rounded ml-1">Click to activate</span>
           )}
-          {preAllocated && (
-            <span className="text-[9px] font-black uppercase tracking-wider text-[#1cc1a5] bg-[#1cc1a5]/10 px-1.5 py-0.5 rounded ml-1">Allocated</span>
+          {isDraftNode && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-[#10b981] bg-[#10b981]/10 px-1.5 py-0.5 rounded ml-1">New job</span>
           )}
-          {isActivating && <Loader2 className="w-3 h-3 animate-spin text-[#12a0e1] ml-1" />}
+          {done && (
+            <span className="text-[9px] font-black uppercase tracking-wider text-[#1cc1a5] bg-[#1cc1a5]/10 px-1.5 py-0.5 rounded ml-1">
+              Allocated{slotJobsHere?.length > 1 ? ` ×${slotJobsHere.length}` : ""}
+            </span>
+          )}
         </div>
-        {hasChildren && !isCollapsed && node.children.map((c, i) => renderTree(c, depth + 1, `${path}-${i}`))}
+        {hasChildren && !isCollapsed && node.children.map((c, i) =>
+          renderTree(c, mode, depth + 1, `${path}-${i}`, [...ancestors, node.label]))}
       </div>
     );
   };
 
   const hasTemplate = !!(fetchedTemplate || FOLDER_TEMPLATES[studio]);
-  const templateToShow = fetchedTemplate || (hasTemplate ? FOLDER_TEMPLATES[studio] : null);
-  // When the picked film already has its own job-slot folders in Wrike, THAT is
-  // what we show (truthful, already-numbered where numbered). Only a film with no
-  // slots yet falls back to the studio template to preview what could be created.
+  // The studio template is now shown in its own right, always — it's the menu of
+  // actions, not a stand-in for a film with no folders yet.
+  const templateTree = fetchedTemplate || (hasTemplate ? FOLDER_TEMPLATES[studio] : null);
+  // The film's own live folders. Only present once a film with real slot folders
+  // is picked; until then there's nothing truthful to show below the template.
   const filmDriven = !!(filmView && filmView.hasSlots);
-  const viewTree = filmDriven ? filmView.tree : templateToShow;
-  const viewIsLive = filmDriven || !!fetchedTemplate;
-  const allLeaves = viewTree ? collectJobLeaves(viewTree) : [];
-  // "Done" = already numbered in Wrike (allocated) OR activated by us this session.
-  const activatedCount = allLeaves.filter(l => l.allocated || slotJobs[l.label]).length;
+  const filmTree = filmDriven ? filmView.tree : null;
+  const templateLeaves = templateTree ? collectJobLeaves(templateTree) : [];
+  const filmLeaves = filmTree ? collectJobLeaves(filmTree) : [];
+  // "Allocated" = already numbered in Wrike, or carrying a Job Book row we made.
+  const activatedCount = filmLeaves.filter(l => l.allocated || jobsBySlot[slotSuffix(l.label)]?.length).length;
 
-  // Job Slots search + sort (list on the right).
+  // Search over the template tree — highlights matching nodes and auto-expands
+  // the folders on the path to any match. A 30-slot template is a lot to scroll.
   const [slotQuery, setSlotQuery] = useState("");
-  const [slotSort, setSlotSort] = useState("default"); // default | az | za | status
-  const displayLeaves = useMemo(() => {
-    let arr = allLeaves;
-    const q = slotQuery.trim().toLowerCase();
-    if (q) arr = arr.filter(l => (l.description || "").toLowerCase().includes(q) || (l.label || "").toLowerCase().includes(q));
-    // 0 = pending (activatable first), 1 = activated this session, 2 = already allocated
-    const rank = (l) => (l.allocated ? 2 : slotJobs[l.label] ? 1 : 0);
-    const byDesc = (a, b) => (a.description || "").localeCompare(b.description || "");
-    if (slotSort === "az") arr = [...arr].sort(byDesc);
-    else if (slotSort === "za") arr = [...arr].sort((a, b) => byDesc(b, a));
-    else if (slotSort === "status") arr = [...arr].sort((a, b) => rank(a) - rank(b) || byDesc(a, b));
-    return arr;
-  }, [allLeaves, slotQuery, slotSort, slotJobs]);
-
-  // Same search drives the left tree: highlight matching nodes, and auto-expand
-  // the folders on the path to any match so they're actually visible.
   const nodeMatches = (n) => {
     const q = slotQuery.trim().toLowerCase();
     if (!q) return false;
@@ -2349,7 +2686,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   const searchExpand = useMemo(() => {
     const set = new Set();
     const q = slotQuery.trim().toLowerCase();
-    if (!q || !viewTree) return set;
+    if (!q || !templateTree) return set;
     const matches = (n) => {
       const desc = n.description || (n.label || "").replace(/^JOBNUMBER_?/i, "").replace(/_/g, " ");
       return (n.label || "").toLowerCase().includes(q) || desc.toLowerCase().includes(q);
@@ -2360,9 +2697,63 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
       if (has && n.children?.length) set.add(path);
       return has;
     };
-    walk(viewTree, "0");
+    walk(templateTree, "0");
     return set;
-  }, [viewTree, slotQuery]);
+  }, [templateTree, slotQuery]);
+
+  // The film's tree with the staged draft grafted in as a preview of the folder
+  // the job will occupy. The film project is a duplicate of the studio template,
+  // so the draft's template path maps onto it folder-for-folder — walk that path
+  // (ignoring the differing roots, and any XY prefix Wrike has already applied)
+  // and drop the node in beside its siblings. If the film's copy has diverged and
+  // the path doesn't resolve, the preview lands at the root rather than vanishing.
+  const filmTreeWithDraft = useMemo(() => {
+    if (!filmTree) return null;
+    if (!draft) return filmTree;
+    const preview = {
+      label: `${draft.code}_${draft.description.replace(/\s+/g, "_")}`,
+      jobNumber: true,
+      __draft: true,
+    };
+    const norm = (s) => slotSuffix(s || "").replace(/[_\s]+/g, " ").trim().toLowerCase();
+    const graft = (node, rest) => {
+      if (!rest.length) return { ...node, children: [...(node.children || []), preview] };
+      const [head, ...tail] = rest;
+      const idx = (node.children || []).findIndex(c => norm(c.label) === norm(head));
+      if (idx === -1) return { ...node, children: [...(node.children || []), preview] };
+      const children = [...node.children];
+      children[idx] = graft(children[idx], tail);
+      return { ...node, children };
+    };
+    // draft.path[0] is the template root, which the film tree replaces with the
+    // film project itself — so skip it and match from the level below.
+    return graft(filmTree, draft.path.slice(1));
+  }, [filmTree, draft]);
+
+  // A film's live tree is a wall of folders — dozens of leaves across several
+  // branches — so the green NEW JOB preview grafted into it is easy to lose.
+  // Staging a slot folds the tree down to just the branch the new job lands in;
+  // discarding the draft opens it back up. Manual toggling still works from
+  // there, this only sets the starting state each time the draft changes.
+  useEffect(() => {
+    if (!filmTreeWithDraft) return;
+    if (!draft) { setCollapsed(c => ({ ...c, film: new Set() })); return; }
+    // Paths of every container on the way down to the draft node — the only
+    // ones that stay open.
+    const onDraftPath = new Set();
+    const walk = (node, path = "0") => {
+      if (node.__draft) return true;
+      let found = false;
+      (node.children || []).forEach((c, i) => { if (walk(c, `${path}-${i}`)) found = true; });
+      if (found) onDraftPath.add(path);
+      return found;
+    };
+    walk(filmTreeWithDraft);
+    setCollapsed(c => ({
+      ...c,
+      film: new Set(allContainerPaths(filmTreeWithDraft).filter(p => !onDraftPath.has(p))),
+    }));
+  }, [draft, filmTreeWithDraft]);
 
   // ── Job Book ↔ Wrike reconciliation ──────────────────────────────────────
   // Every folder in the film's live subtree, by id, so we can look up the exact
@@ -2383,7 +2774,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   const jobMismatches = useMemo(() => {
     if (!filmView?.filmProject) return [];
     const out = [];
-    Object.values(slotJobs).forEach((job) => {
+    filmJobs.forEach((job) => {
       if (!job.wrike_folder_id) return; // never pushed → pending, not stale
       const code = (job.job_number?.match(/XY\d+/) || [])[0];
       if (!code) return;
@@ -2393,7 +2784,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
         out.push({ job, code, reason: "renamed", liveLabel: live.label });
     });
     return out;
-  }, [slotJobs, liveByFolderId, filmView]);
+  }, [filmJobs, liveByFolderId, filmView]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -2427,18 +2818,18 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
       {!lockPickers && (
       <div className="bg-[#f8fafc] border border-[#dce4ec] rounded-2xl p-4">
         <p className="text-xs text-[#768994] leading-relaxed">
-          Pick a studio and its template loads automatically. Choose a film, then
-          <span className="font-bold text-[#122027]"> click a slot</span> to allocate a real job number for
-          it right then and add it to Job Book — nothing is created just from looking. Everything you activate
-          this session collects in <span className="font-bold text-[#122027]">Review</span> below, where you can
-          fill in costs and billing or undo it.
+          Pick a studio and its template loads automatically. In the folder preview,
+          <span className="font-bold text-[#122027]"> click a slot to activate it</span> — that stages a job
+          number and opens the form below, pre-filled. Nothing reaches Job Book until you press Create Job.
+          A slot never gets used up, so run the same one as many times as the campaign needs. Everything you
+          create this session collects in <span className="font-bold text-[#122027]">Review</span> at the bottom.
         </p>
       </div>
       )}
 
       {!lockPickers && (
       <div>
-        <label className="block text-[10px] font-black uppercase tracking-widest text-[#768994] mb-1.5">Studio Template</label>
+        <label className="block text-[10px] font-black uppercase tracking-widest text-[#768994] mb-1.5">Template</label>
         <div className="flex items-center gap-2 flex-wrap">
           {STUDIO_OPTIONS.map(s => {
             const available = TESTABLE_STUDIOS.has(s);
@@ -2480,6 +2871,36 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
       </div>
       )}
 
+      {/* Folder preview — the studio's master template, straight from Wrike. Every
+          JOBNUMBER_ folder in here is an action, and stays one however many times
+          it's been used: activating a slot never consumes it. */}
+      {templateTree && (
+        <div className={`border border-[#dce4ec] rounded-2xl flex flex-col ${lockPickers ? "max-h-[38vh] min-h-[220px]" : "max-h-[52vh] min-h-[300px]"}`}>
+          <div className="flex items-center gap-2 px-4 pt-4 pb-2 border-b border-[#f0f4f8] shrink-0">
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#768994] shrink-0">
+              Folder Preview{fetchedTemplate ? " \u00b7 live from Wrike" : ""}
+            </p>
+            <div className="relative flex-1 max-w-[220px] ml-auto">
+              <Search className="w-3.5 h-3.5 text-[#b0bec5] absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input value={slotQuery} onChange={(e) => setSlotQuery(e.target.value)}
+                placeholder="Search slots\u2026"
+                className="w-full pl-8 pr-2 py-1.5 text-[11px] bg-white border border-[#dce4ec] rounded-lg outline-none focus:border-[#12a0e1] transition-colors" />
+            </div>
+            <button type="button"
+              onClick={() => setCollapsed(c => ({ ...c, template: c.template.size ? new Set() : new Set(allContainerPaths(templateTree)) }))}
+              className="text-[10px] font-bold text-[#768994] hover:text-[#12a0e1] transition-colors shrink-0">
+              {collapsed.template.size ? "Expand all" : "Collapse all"}
+            </button>
+          </div>
+          <div className="px-4 py-2 overflow-y-auto">
+            {renderTree(templateTree, "template")}
+          </div>
+          <p className="px-4 pb-3 pt-1 text-[10px] text-[#768994] shrink-0">
+            {templateLeaves.length} job slot{templateLeaves.length === 1 ? "" : "s"} \u00b7 click one to activate another job of that type.
+          </p>
+        </div>
+      )}
+
       {!lockPickers && (
       <div>
         <div className="flex items-center justify-between mb-1.5">
@@ -2506,194 +2927,146 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
       </div>
       )}
 
-      {viewTree && (
-        <>
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-xs font-bold text-[#768994]">
-              {filmTitle.trim()
-                ? `${activatedCount} / ${allLeaves.length} job number${allLeaves.length === 1 ? "" : "s"} ${filmDriven ? "already allocated" : "activated"} for “${filmTitle}”`
-                : `${allLeaves.length} job slot${allLeaves.length === 1 ? "" : "s"} in this template — select a film above to activate any of them`}
-            </span>
-            {(loadingSlots || filmViewLoading) && <Loader2 className="w-3.5 h-3.5 animate-spin text-[#768994]" />}
-            {/* Territory swap — this film is shared into more than one studio folder. */}
-            {filmView?.territories?.length > 1 && (
-              <label className="flex items-center gap-1.5 text-[11px] font-bold text-[#768994]">
-                <Globe className="w-3 h-3 text-[#12a0e1]" />
-                <select
-                  value={filmView.studioFolder?.id || ""}
-                  onChange={(e) => {
-                    const t = filmView.territories.find((x) => x.studioFolder.id === e.target.value);
-                    if (!t) return;
-                    setTerritoryId(t.studioFolder.id);
-                    setStudio(t.studio);
-                  }}
-                  className="text-[11px] font-bold text-[#33454f] bg-white border border-[#dce4ec] rounded-lg px-2 py-1 outline-none focus:border-[#12a0e1] cursor-pointer">
-                  {filmView.territories.map((t) => (
-                    <option key={t.studioFolder.id} value={t.studioFolder.id}>{t.studio}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {filmTitle.trim() && !filmViewLoading && (
-              <button onClick={refreshFilmView}
-                title="Re-read this film's folders from Wrike (reflects renames done in Wrike)"
-                className="flex items-center gap-1 text-[11px] font-bold text-[#768994] hover:text-[#12a0e1] transition-colors">
-                <RefreshCw className="w-3 h-3" /> Refresh from Wrike
-              </button>
-            )}
-            {filmTitle.trim() && !filmDriven && !filmViewLoading && (
-              <span className="text-[10px] font-bold text-[#768994] italic">no job folders in Wrike yet — showing the {studio} template</span>
-            )}
-            {activateError && <span className="text-xs font-bold text-red-500">{activateError}</span>}
-          </div>
+      {activateError && (
+        <p className="text-xs font-bold text-red-500">{activateError}</p>
+      )}
 
-          {/* Source-of-truth reconciliation: Job Book numbers whose Wrike folder
-              no longer carries them (renamed off their code, or deleted). Wrike is
-              the truth — offer to clear the stale Job Book entry. */}
-          {jobMismatches.length > 0 && (
-            <div className="border border-[#f4b740]/40 bg-[#f4b740]/10 rounded-2xl overflow-hidden">
-              <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-[#f4b740]/30">
-                <p className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-[#8a6d1a]">
-                  <AlertTriangle className="w-4 h-4" />
-                  {jobMismatches.length} job number{jobMismatches.length === 1 ? "" : "s"} out of step with Wrike
-                </p>
-              </div>
-              <div className="divide-y divide-[#f4b740]/20">
-                {jobMismatches.map(({ job, code, reason, liveLabel }) => (
-                  <div key={job.id} className="flex items-center gap-3 px-4 py-2.5">
-                    <span className="font-mono font-bold text-[#8a6d1a] text-xs shrink-0">{code}</span>
-                    <span className="text-[11px] text-[#122027] flex-1 min-w-0 truncate">
-                      {job.project_description}
-                      <span className="text-[#8a6d1a] italic ml-1.5">
-                        — {reason === "deleted"
-                          ? "its Wrike folder was deleted"
-                          : `its Wrike folder was renamed to “${liveLabel}”`}
-                      </span>
-                    </span>
-                    <button onClick={() => undoActivation(job)} disabled={undoingId === job.id}
-                      className="flex items-center gap-1.5 text-[11px] font-bold text-rose-600 hover:text-rose-700 disabled:opacity-40 shrink-0 transition-colors">
-                      {undoingId === job.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
-                      Un-allocate
-                    </button>
-                  </div>
+      {filmTitle.trim() && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-xs font-bold text-[#768994]">
+            {filmDriven
+              ? `${activatedCount} / ${filmLeaves.length} job number${filmLeaves.length === 1 ? "" : "s"} already allocated for “${filmTitle}”`
+              : `No job folders in Wrike yet for “${filmTitle}” — activating a slot still allocates its number and files the job.`}
+          </span>
+          {(loadingSlots || filmViewLoading) && <Loader2 className="w-3.5 h-3.5 animate-spin text-[#768994]" />}
+          {/* Territory swap — this film is shared into more than one studio folder. */}
+          {filmView?.territories?.length > 1 && (
+            <label className="flex items-center gap-1.5 text-[11px] font-bold text-[#768994]">
+              <Globe className="w-3 h-3 text-[#12a0e1]" />
+              <select
+                value={filmView.studioFolder?.id || ""}
+                onChange={(e) => {
+                  const t = filmView.territories.find((x) => x.studioFolder.id === e.target.value);
+                  if (!t) return;
+                  setTerritoryId(t.studioFolder.id);
+                  setStudio(t.studio);
+                }}
+                className="text-[11px] font-bold text-[#33454f] bg-white border border-[#dce4ec] rounded-lg px-2 py-1 outline-none focus:border-[#12a0e1] cursor-pointer">
+                {filmView.territories.map((t) => (
+                  <option key={t.studioFolder.id} value={t.studioFolder.id}>{t.studio}</option>
                 ))}
-              </div>
-            </div>
+              </select>
+            </label>
           )}
+          {!filmViewLoading && (
+            <button onClick={refreshFilmView}
+              title="Re-read this film's folders from Wrike (reflects renames done in Wrike)"
+              className="flex items-center gap-1 text-[11px] font-bold text-[#768994] hover:text-[#12a0e1] transition-colors">
+              <RefreshCw className="w-3 h-3" /> Refresh from Wrike
+            </button>
+          )}
+        </div>
+      )}
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className={`border border-[#dce4ec] rounded-2xl flex flex-col ${lockPickers ? "max-h-[46vh] min-h-[280px]" : "max-h-[72vh] min-h-[420px]"}`}>
-              <div className="flex items-center justify-between gap-2 px-4 pt-4 pb-2 border-b border-[#f0f4f8] shrink-0">
-                <p className="text-[10px] font-black uppercase tracking-widest text-[#768994]">
-                  {filmDriven ? "Film Folders" : "Folder Preview"}{viewIsLive ? " · live from Wrike" : ""}
-                </p>
-                <button type="button"
-                  onClick={() => setCollapsed(collapsed.size ? new Set() : new Set(allContainerPaths(viewTree)))}
-                  className="text-[10px] font-bold text-[#768994] hover:text-[#12a0e1] transition-colors shrink-0">
-                  {collapsed.size ? "Expand all" : "Collapse all"}
+      {/* Source-of-truth reconciliation: Job Book numbers whose Wrike folder
+          no longer carries them (renamed off their code, or deleted). Wrike is
+          the truth — offer to clear the stale Job Book entry. */}
+      {jobMismatches.length > 0 && (
+        <div className="border border-[#f4b740]/40 bg-[#f4b740]/10 rounded-2xl overflow-hidden">
+          <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-[#f4b740]/30">
+            <p className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-[#8a6d1a]">
+              <AlertTriangle className="w-4 h-4" />
+              {jobMismatches.length} job number{jobMismatches.length === 1 ? "" : "s"} out of step with Wrike
+            </p>
+          </div>
+          <div className="divide-y divide-[#f4b740]/20">
+            {jobMismatches.map(({ job, code, reason, liveLabel }) => (
+              <div key={job.id} className="flex items-center gap-3 px-4 py-2.5">
+                <span className="font-mono font-bold text-[#8a6d1a] text-xs shrink-0">{code}</span>
+                <span className="text-[11px] text-[#122027] flex-1 min-w-0 truncate">
+                  {job.project_description}
+                  <span className="text-[#8a6d1a] italic ml-1.5">
+                    — {reason === "deleted"
+                      ? "its Wrike folder was deleted"
+                      : `its Wrike folder was renamed to “${liveLabel}”`}
+                  </span>
+                </span>
+                <button onClick={() => undoActivation(job)} disabled={undoingId === job.id}
+                  className="flex items-center gap-1.5 text-[11px] font-bold text-rose-600 hover:text-rose-700 disabled:opacity-40 shrink-0 transition-colors">
+                  {undoingId === job.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
+                  Un-allocate
                 </button>
               </div>
-              <div className="px-4 py-2 overflow-y-auto">
-                {renderTree(viewTree)}
-              </div>
-            </div>
-            <div className={`border border-[#dce4ec] rounded-2xl flex flex-col ${lockPickers ? "max-h-[46vh] min-h-[280px]" : "max-h-[72vh] min-h-[420px]"}`}>
-              <div className="px-4 pt-4 pb-2 border-b border-[#f0f4f8] shrink-0 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-[#768994]">Job Slots</p>
-                  <select value={slotSort} onChange={(e) => setSlotSort(e.target.value)}
-                    className="text-[11px] font-bold text-[#33454f] bg-white border border-[#dce4ec] rounded-lg px-2 py-1 outline-none focus:border-[#12a0e1] cursor-pointer">
-                    <option value="default">Template order</option>
-                    <option value="az">A–Z</option>
-                    <option value="za">Z–A</option>
-                    <option value="status">By status</option>
-                  </select>
-                </div>
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-[#b0bec5] absolute left-2.5 top-1/2 -translate-y-1/2" />
-                  <input value={slotQuery} onChange={(e) => setSlotQuery(e.target.value)}
-                    placeholder="Search slots…"
-                    className="w-full pl-8 pr-2 py-1.5 text-[11px] bg-white border border-[#dce4ec] rounded-lg outline-none focus:border-[#12a0e1] transition-colors" />
-                </div>
-              </div>
-              <div className="px-4 py-2 overflow-y-auto flex flex-col gap-1.5">
-                {displayLeaves.length === 0 && (
-                  <p className="text-[11px] text-[#768994] italic py-2">No slots match “{slotQuery}”.</p>
-                )}
-                {displayLeaves.map(l => {
-                  // Already numbered in Wrike (film-driven view) — read-only, no undo:
-                  // the number lives on the live folder, not something we created here.
-                  if (l.allocated) {
-                    return (
-                      <div key={l.label}
-                        className="flex items-center justify-between text-[11px] border-b border-[#f0f4f8] pb-1.5 pt-0.5">
-                        <span className="text-[#768994] truncate mr-2">{l.description}</span>
-                        <span className="flex items-center gap-1.5 shrink-0">
-                          <span className="font-mono font-bold text-[#12a0e1]">{l.code}</span>
-                          <span className="text-[9px] font-black uppercase tracking-wider text-[#1cc1a5] bg-[#1cc1a5]/10 px-1.5 py-0.5 rounded-full">Allocated</span>
-                        </span>
-                      </div>
-                    );
-                  }
-                  const activated = slotJobs[l.label];
-                  const isActivating = activatingSlot === l.label;
-                  const code = activated?.job_number.match(/XY\d+/)?.[0];
-                  const canActivate = filmTitle.trim() && !activated && !isActivating;
-                  // Activated rows carry their own undo button, so they can't be a
-                  // single clickable <button> (no nested buttons) — render a div.
-                  if (activated) {
-                    return (
-                      <div key={l.label}
-                        className="flex items-center justify-between text-[11px] border-b border-[#f0f4f8] pb-1.5 pt-0.5 group">
-                        <span className="text-[#768994] truncate mr-2">{l.description}</span>
-                        <span className="flex items-center gap-1.5 shrink-0">
-                          <span className="font-mono font-bold text-[#12a0e1]">{code}</span>
-                          <button onClick={() => undoActivation(activated)} disabled={undoingId === activated.id}
-                            title="Undo this activation"
-                            className="p-0.5 rounded-md text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-colors disabled:opacity-40">
-                            {undoingId === activated.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
-                          </button>
-                        </span>
-                      </div>
-                    );
-                  }
-                  return (
-                    <button key={l.label} disabled={!canActivate}
-                      onClick={() => activateSlot(l)}
-                      title={!filmTitle.trim() ? "Select a film above first" : ""}
-                      className={`flex items-center justify-between text-[11px] border-b border-[#f0f4f8] pb-1.5 pt-0.5 text-left transition-colors ${
-                        canActivate ? "hover:bg-[#12a0e1]/5 rounded-lg -mx-1 px-1" : "cursor-default"
-                      }`}>
-                      <span className="text-[#122027] font-bold">{l.description}</span>
-                      {isActivating ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#12a0e1]" />
-                      ) : (
-                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${
-                          filmTitle.trim() ? "text-[#12a0e1] bg-[#12a0e1]/10" : "text-[#b0bec5] bg-slate-100"
-                        }`}>Activate</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            ))}
           </div>
-
-          <div className="flex items-center gap-3">
-            <button onClick={() => setActiveTab?.("jobs")}
-              className="px-4 py-2.5 bg-[#122027] hover:bg-[#1a2e38] text-white text-sm font-bold rounded-2xl transition-all">
-              View in Job Book
-            </button>
-            <button onClick={() => setPushMode("push")} disabled={!filmTitle.trim()}
-              title={filmTitle.trim()
-                ? "Duplicate the whole studio template into this film's Wrike project and tag its tasks with the Job Number custom field"
-                : "Select a film first"}
-              className="flex items-center gap-2 px-5 py-2.5 bg-white border border-[#12a0e1] text-[#12a0e1] hover:bg-[#12a0e1] hover:text-white text-sm font-bold rounded-2xl transition-all disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-[#12a0e1]">
-              <UploadCloud className="w-3.5 h-3.5" /> Push to Wrike
-            </button>
-          </div>
-        </>
+        </div>
       )}
+
+      {/* The film's own folders, live from Wrike — what actually exists today,
+          with the staged job shown in place as the folder it's about to become. */}
+      {filmTreeWithDraft && (
+        <div className={`border border-[#dce4ec] rounded-2xl flex flex-col ${lockPickers ? "max-h-[38vh] min-h-[200px]" : "max-h-[52vh] min-h-[260px]"}`}>
+          <div className="flex items-center justify-between gap-2 px-4 pt-4 pb-2 border-b border-[#f0f4f8] shrink-0">
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#768994]">
+              Film Folders · live from Wrike
+            </p>
+            <button type="button"
+              onClick={() => setCollapsed(c => ({ ...c, film: c.film.size ? new Set() : new Set(allContainerPaths(filmTreeWithDraft)) }))}
+              className="text-[10px] font-bold text-[#768994] hover:text-[#12a0e1] transition-colors shrink-0">
+              {collapsed.film.size ? "Expand all" : "Collapse all"}
+            </button>
+          </div>
+          <div className="px-4 py-2 overflow-y-auto">
+            {renderTree(filmTreeWithDraft, "film")}
+          </div>
+        </div>
+      )}
+
+      {/* The staged job. Everything below is pre-filled from the slot that was
+          clicked plus the studio it sits under; nothing is written until Create
+          Job. Remounting on a new draft (or a film change) reloads the defaults. */}
+      <div ref={draftRef}>
+        {draft ? (
+          <div className="border-2 border-[#10b981]/40 rounded-2xl overflow-hidden">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 bg-[#10b981]/5 border-b border-[#10b981]/20">
+              <p className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-[#0d9488] min-w-0">
+                <FolderPlus className="w-4 h-4 shrink-0" />
+                <span className="truncate">New job · {draft.description}</span>
+              </p>
+              <button onClick={() => setDraft(null)}
+                className="flex items-center gap-1 text-[11px] font-bold text-[#768994] hover:text-rose-500 shrink-0 transition-colors">
+                <X className="w-3 h-3" /> Discard
+              </button>
+            </div>
+            <div className="px-5 py-5">
+              <JobForm
+                key={`${draft.slotLabel}|${draft.code}|${filmTitle}`}
+                job={{
+                  film_title: filmTitle.trim(),
+                  client: STUDIO_CLIENT[studio] || "",
+                  project_description: draft.description,
+                  // Prefilled from the slot folder's Item Price when it has
+                  // one; left blank when it doesn't.
+                  fixed_cost: draft.itemPrice ?? "",
+                }}
+                presetCode={draft.code}
+                clients={clients} films={films} workCategories={workCategories} descs={descs}
+                onSave={createDraftJob} saving={creatingJob}
+                submitLabel="Create Job" layout="inline" />
+            </div>
+          </div>
+        ) : templateTree ? (
+          <p className="text-xs text-[#768994] italic">
+            Click a slot in the folder preview above to start a job.
+          </p>
+        ) : null}
+      </div>
+
+      {/* Nothing sits here any more. "Push to Wrike" went when Create Job took
+          over opening the push confirmation, and "View in Job Book" went with
+          it: by the time a job reaches the Book it has already been through
+          the push, so there was never a moment where jumping to the Book told
+          you something the flow above hadn't. */}
 
       {/* Req 8 — Review: everything activated this session, each openable to fill
           in costs/billing (autofilled where we can) or undo. Shows across films. */}
@@ -2747,7 +3120,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
       {reviewJob && (
         <JobModal
           job={reviewJob}
-          clients={clients} films={films} categories={categories} descs={descs}
+          clients={clients} films={films} workCategories={workCategories} descs={descs}
           onSave={handleReviewSave} onClose={() => setReviewJob(null)} saving={reviewSaving}
         />
       )}
@@ -2757,10 +3130,16 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
           onClose={() => setShowFilmSync(false)} onApplied={loadFilms} />
       )}
 
+      {/* Only what this session activated for the film on screen. Passing the
+          film's whole job list dragged in codes from earlier attempts, which
+          then showed up as stale rows in the push preview. Still film-scoped
+          as well as session-scoped — the session list spans films, and a push
+          targets one film's Wrike project. */}
       {pushMode && (
         <PushToWrikeModal
           studio={studio} filmTitle={filmTitle.trim()}
-          slotJobs={slotJobs} mode={pushMode}
+          jobs={sessionJobs.filter(j => (j.film_title || "").trim() === filmTitle.trim())}
+          mode={pushMode}
           onClose={() => setPushMode(null)} />
       )}
 
@@ -2768,7 +3147,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
         <div>
           {customCreated == null ? (
             <JobForm job={filmTitle.trim() ? { film_title: filmTitle.trim() } : undefined}
-              clients={clients} films={films} categories={categories} descs={descs}
+              clients={clients} films={films} workCategories={workCategories} descs={descs}
               onSave={handleCreateCustomJob} saving={customSaving} submitLabel="Create Job" layout="inline" />
           ) : (
             <div className="flex items-center gap-3 py-4">
@@ -2807,33 +3186,66 @@ const scanCodeOf = (s) => {
 const scanFilmOf = (s) => ((s || "").includes(" : ") ? (s || "").split(" : ")[0] : "").trim();
 const scanIsPseudoFilm = (film) => !film || /^\d{2,4}$/.test(film.trim()) || !/[a-z]/i.test(film);
 
+// A book row that is nothing but the bare code — the stub `ensureJob` writes
+// the first time a job is seen in use, before anyone files it properly.
+const scanIsBareCode = (s) => /^\s*XY\d{5,6}\s*$/i.test(s || "");
+
+// How complete a book row is, used to pick which row wins when the same code
+// appears more than once. `jobs.job_number` is unique, so "XY025091" and
+// "The History of Sound : XY025091, NM Packshots FinalWindow" coexist happily
+// as separate rows for one job — the constraint only stops two rows sharing
+// the *same string*. Canonical "Film : CODE, Description" beats "Film : CODE"
+// beats a bare stub.
+const scanRowRank = (s) =>
+  scanIsBareCode(s) ? 0 : (s || "").includes(" : ") ? ((s || "").includes(",") ? 2 : 1) : 0;
+
 function StudioJobScanModal({ onClose, onApplied }) {
   const [phase, setPhase] = useState("scanning"); // scanning | review | saving | done
   const [error, setError] = useState("");
   const [candidates, setCandidates] = useState([]);
   const [totalFolders, setTotalFolders] = useState(0);
   const [existingCodes, setExistingCodes] = useState(new Set());
-  const [existingByCode, setExistingByCode] = useState({}); // code -> book row
+  const [existingByCode, setExistingByCode] = useState({}); // code -> best book row
+  const [existingExtras, setExistingExtras] = useState({}); // code -> that code's other book rows
   const [fixedCount, setFixedCount] = useState(0);
   const [selected, setSelected] = useState({});   // code -> bool
   const [savedCount, setSavedCount] = useState(0);
   const [search, setSearch] = useState("");
   const [activeOnly, setActiveOnly] = useState(true);
+  const [showCorrections, setShowCorrections] = useState(false);
 
   const loadScan = useCallback(async () => {
     setPhase("scanning");
     try {
+      // Whole table — a truncated read would make jobs already in the book look
+      // new and invite duplicate inserts.
       const [found, existing] = await Promise.all([
         scanStudioJobNumbers(),
-        supabase.from("jobs").select("id, job_number, film_title, client"),
+        selectAll("jobs", "id, job_number, film_title, client"),
       ]);
+      // One code can own several book rows (a bare stub plus the properly filed
+      // row, or two spellings of the same description). Keep the most complete
+      // row as the one a correction is measured against and applied to, and
+      // hang on to the rest — blindly overwriting the map, as this used to,
+      // could leave a stub as the "current" row and then try to rewrite it to a
+      // string its own sibling already holds, which is what tripped
+      // jobs_job_number_key.
       const byCode = {};
-      (existing.data || []).forEach((j) => { byCode[scanCodeOf(j.job_number)] = j; });
+      const extrasByCode = {};
+      existing.forEach((j) => {
+        const code = scanCodeOf(j.job_number);
+        const prev = byCode[code];
+        if (!prev) { byCode[code] = j; return; }
+        const keep = scanRowRank(j.job_number) > scanRowRank(prev.job_number) ? j : prev;
+        byCode[code] = keep;
+        (extrasByCode[code] = extrasByCode[code] || []).push(keep === j ? prev : j);
+      });
       const have = new Set(Object.keys(byCode));
       const sel = {};
       found.forEach((c) => { if (!have.has(c.code)) sel[c.code] = true; });
       setExistingCodes(have);
       setExistingByCode(byCode);
+      setExistingExtras(extrasByCode);
       setCandidates(found);
       setTotalFolders(found.totalFolders || 0);
       setSelected(sel);
@@ -2846,14 +3258,25 @@ function StudioJobScanModal({ onClose, onApplied }) {
 
   useEffect(() => { let alive = true; if (alive) loadScan(); return () => { alive = false; }; }, [loadScan]);
 
-  // Existing book rows whose stored film is a pseudo-film (e.g. "2026") that the
-  // re-derived scan now resolves to a real film — safe to correct in place. Rows
-  // that already have a real film are never touched.
+  // Existing book rows that disagree with Wrike. Two kinds:
+  //   • a pseudo-film ("2026") the re-derived scan now resolves to a real film;
+  //   • a row filed under the WRONG film, or carrying a malformed code
+  //     ("XY026089_SKY_VIP" instead of "XY026089").
+  // The second kind is why "0 new" can coexist with jobs you can't find: the
+  // code IS in the book, so the scan skips it as a duplicate, but it's filed
+  // under someone else's film and no film search will ever surface it. Wrike's
+  // folder tree is the source of truth. Nothing is written without a confirm.
   const corrections = candidates.filter((c) => {
     const cur = existingByCode[c.code];
     if (!cur) return false;
+    if (!c.filmTitle || scanIsPseudoFilm(c.filmTitle)) return false; // scan has nothing better
     const curFilm = scanFilmOf(cur.job_number) || cur.film_title || "";
-    return scanIsPseudoFilm(curFilm) && c.filmTitle && !scanIsPseudoFilm(c.filmTitle);
+    const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const filmWrong = norm(curFilm) !== norm(c.filmTitle);
+    // Canonical code position is the bare code — a suffix means the folder name
+    // leaked into it.
+    const codeMalformed = !new RegExp(`(^|\\s:\\s)${c.code}\\s*,`, "i").test(cur.job_number || "");
+    return filmWrong || codeMalformed;
   });
 
   const allNew  = candidates.filter((c) => !existingCodes.has(c.code));
@@ -2866,7 +3289,9 @@ function StudioJobScanModal({ onClose, onApplied }) {
     return (
       c.code.toLowerCase().includes(q) ||
       (c.filmTitle || "").toLowerCase().includes(q) ||
-      (c.client || "").toLowerCase().includes(q)
+      (c.client || "").toLowerCase().includes(q) ||
+      // Region too, so a backfill can be done one territory at a time ("uk").
+      (c.region || "").toLowerCase().includes(q)
     );
   });
   const selectedCount = newOnes.filter((c) => selected[c.code]).length;
@@ -2904,31 +3329,81 @@ function StudioJobScanModal({ onClose, onApplied }) {
     setPhase("done");
   };
 
+  // Bare "XY025091" stubs sitting alongside a properly filed row for the same
+  // code. They carry no information the real row doesn't, and they're what a
+  // correction would otherwise collide with, so the fixer clears them out.
+  const redundantStubs = Object.entries(existingExtras).flatMap(([code, rows]) =>
+    scanIsBareCode(existingByCode[code]?.job_number)
+      ? []
+      : rows.filter((r) => scanIsBareCode(r.job_number))
+  );
+
   // Correct existing book rows whose film was a pseudo-film ("2026") to the
   // real film the re-derived scan found — updates film, client, job number and
   // description in place. Only touches the `corrections` set (safe rows).
   const fixMisfilmed = async () => {
-    if (!corrections.length) return;
+    if (!corrections.length && !redundantStubs.length) return;
+    const total = corrections.length + redundantStubs.length;
     const ok = await confirmAction({
-      title: `Fix ${corrections.length} mis-filmed job${corrections.length === 1 ? "" : "s"}?`,
-      message: "These entries currently show a year/placeholder as their film (e.g. “2026”). This updates them to the real film the scan resolved — nothing that already has a proper film is touched.",
-      confirmLabel: `Fix ${corrections.length}`,
+      title: `Fix ${total} book ${total === 1 ? "entry" : "entries"}?`,
+      message:
+        (corrections.length
+          ? `${corrections.length} ${corrections.length === 1 ? "entry disagrees" : "entries disagree"} with Wrike's folder tree — wrong film, a year/placeholder film, or the folder name left inside the job number. This rewrites their film, client, description and job number to match Wrike. `
+          : "") +
+        (redundantStubs.length
+          ? `${redundantStubs.length} bare-code ${redundantStubs.length === 1 ? "entry is a duplicate" : "entries are duplicates"} of a job already filed properly and will be deleted. `
+          : "") +
+        "Use Review first to see every before → after.",
+      confirmLabel: `Fix ${total}`,
     });
     if (!ok) return;
     setPhase("saving");
     let fixed = 0;
+    let merged = 0;
+    const failures = [];
     for (const c of corrections) {
       const cur = existingByCode[c.code];
+      // Another row for this code already *is* what Wrike says this one should
+      // become. Rewriting would violate jobs_job_number_key, and the right
+      // outcome isn't two identical rows anyway — drop this one and let the
+      // already-correct sibling stand.
+      const twin = (existingExtras[c.code] || []).find(
+        (r) => (r.job_number || "") === c.jobNumber
+      );
+      if (twin) {
+        const { error: delErr } = await supabase.from("jobs").delete().eq("id", cur.id);
+        if (delErr) failures.push(`${c.code}: ${delErr.message}`);
+        else merged += 1;
+        continue;
+      }
       const { error: err } = await supabase.from("jobs").update({
         job_number: c.jobNumber,
         film_title: c.filmTitle || null,
         client: c.client || null,
         project_description: c.projectDescription || null,
       }).eq("id", cur.id);
-      if (err) { setError(err.message); setPhase("review"); return; }
-      fixed += 1;
+      // One bad row used to abort the whole run, leaving every later correction
+      // unapplied and no record of which one failed. Keep going and report.
+      if (err) failures.push(`${c.code}: ${err.message}`);
+      else fixed += 1;
     }
-    setFixedCount(fixed);
+
+    if (redundantStubs.length) {
+      const ids = redundantStubs.map((r) => r.id);
+      for (let i = 0; i < ids.length; i += 200) {
+        const { error: delErr } = await supabase
+          .from("jobs").delete().in("id", ids.slice(i, i + 200));
+        if (delErr) failures.push(`duplicate cleanup: ${delErr.message}`);
+        else merged += Math.min(200, ids.length - i);
+      }
+    }
+
+    setFixedCount(fixed + merged);
+    setError(
+      failures.length
+        ? `${failures.length} of ${corrections.length} couldn't be fixed — ${failures.slice(0, 3).join("; ")}${failures.length > 3 ? "…" : ""}`
+        : ""
+    );
     await loadScan(); // re-derive so corrected rows drop out of the list
   };
 
@@ -2971,18 +3446,76 @@ function StudioJobScanModal({ onClose, onApplied }) {
                 <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} className="accent-[#1cc1a5]" />
                 Active only
               </label>
+              {/* The fix result was previously computed and never shown, so a
+                  partial run looked identical to a clean one. */}
+              {fixedCount > 0 && !error && (
+                <span className="text-emerald-600">✓ Fixed {fixedCount}</span>
+              )}
               {error && <span className="text-rose-500">⚠ {error}</span>}
             </div>
 
-            {corrections.length > 0 && (
-              <div className="px-6 py-2.5 border-b border-amber-100 bg-amber-50/60 flex items-center gap-3">
-                <span className="text-[11px] font-bold text-amber-700">
-                  {corrections.length} existing {corrections.length === 1 ? "entry has" : "entries have"} a year/placeholder film (e.g. “2026”) the scan can now resolve to a real film.
-                </span>
-                <button onClick={fixMisfilmed} disabled={phase === "saving"}
-                  className="ml-auto shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-[11px] font-bold rounded-lg transition-colors">
-                  Fix {corrections.length}
-                </button>
+            {(corrections.length > 0 || redundantStubs.length > 0) && (
+              <div className="border-b border-amber-100 bg-amber-50/60">
+                <div className="px-6 py-2.5 flex items-center gap-3">
+                  <span className="text-[11px] font-bold text-amber-700">
+                    {corrections.length > 0 && (
+                      <>
+                        {corrections.length} existing {corrections.length === 1 ? "entry disagrees" : "entries disagree"} with Wrike — filed under the wrong film, or with the folder name stuck in the job number. These are in the book already, which is why they don’t show as new.
+                      </>
+                    )}
+                    {redundantStubs.length > 0 && (
+                      <>
+                        {corrections.length > 0 ? " " : ""}
+                        {redundantStubs.length} bare-code {redundantStubs.length === 1 ? "entry duplicates a job" : "entries duplicate jobs"} already filed properly — fixing removes {redundantStubs.length === 1 ? "it" : "them"}.
+                      </>
+                    )}
+                  </span>
+                  <button onClick={() => setShowCorrections(v => !v)}
+                    className="ml-auto shrink-0 px-3 py-1.5 bg-white border border-amber-300 hover:border-amber-400 text-amber-700 text-[11px] font-bold rounded-lg transition-colors">
+                    {showCorrections ? "Hide" : "Review"}
+                  </button>
+                  <button onClick={fixMisfilmed} disabled={phase === "saving"}
+                    className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-[11px] font-bold rounded-lg transition-colors">
+                    Fix {corrections.length + redundantStubs.length}
+                  </button>
+                </div>
+                {showCorrections && (
+                  <div className="max-h-52 overflow-y-auto border-t border-amber-100 px-6 py-2">
+                    <table className="w-full text-[11px]">
+                      <tbody>
+                        {corrections.map((c) => (
+                          <tr key={c.code} className="align-top">
+                            <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">{c.code}</td>
+                            <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[240px]"
+                                title={existingByCode[c.code]?.job_number}>
+                              {existingByCode[c.code]?.job_number || "—"}
+                            </td>
+                            <td className="py-1 text-[#122027] truncate max-w-[240px]" title={c.jobNumber}>
+                              → {c.jobNumber}
+                            </td>
+                          </tr>
+                        ))}
+                        {/* Duplicate stubs aren't rewritten, they're removed —
+                            show them here too so Review really is every change. */}
+                        {redundantStubs.map((r) => (
+                          <tr key={`stub-${r.id}`} className="align-top">
+                            <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">
+                              {scanCodeOf(r.job_number)}
+                            </td>
+                            <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[240px]"
+                                title={r.job_number}>
+                              {r.job_number}
+                            </td>
+                            <td className="py-1 text-slate-500 italic truncate max-w-[240px]"
+                                title={existingByCode[scanCodeOf(r.job_number)]?.job_number}>
+                              → duplicate, removed (kept: {existingByCode[scanCodeOf(r.job_number)]?.job_number})
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 
@@ -3016,6 +3549,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
                         <th className="px-4 py-2 w-8"></th>
                         <th className="px-2 py-2">Code</th>
                         <th className="px-2 py-2">Film</th>
+                        <th className="px-2 py-2">Region</th>
                         <th className="px-2 py-2">Client</th>
                         <th className="px-2 py-2">Description</th>
                         <th className="px-2 py-2">Created</th>
@@ -3027,6 +3561,11 @@ function StudioJobScanModal({ onClose, onApplied }) {
                           <td className="px-4 py-2"><input type="checkbox" checked={!!selected[c.code]} onChange={() => toggle(c.code)} className="accent-[#1cc1a5]" onClick={(e) => e.stopPropagation()} /></td>
                           <td className="px-2 py-2 font-black font-mono text-[#1cc1a5]">{c.code}</td>
                           <td className="px-2 py-2 font-bold text-[#122027] truncate max-w-[140px]" title={c.jobNumber}>{c.filmTitle || "—"}</td>
+                          <td className="px-2 py-2">
+                            {c.region
+                              ? <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-[#12a0e1]/10 text-[#12a0e1]">{c.region}</span>
+                              : <span className="text-slate-300">—</span>}
+                          </td>
                           <td className="px-2 py-2 text-slate-600">{c.client || <span className="text-slate-300">—</span>}</td>
                           <td className="px-2 py-2 text-slate-500 truncate max-w-[180px]" title={c.projectDescription}>{c.projectDescription || "—"}</td>
                           <td className="px-2 py-2 text-slate-400 whitespace-nowrap tabular-nums">{c.createdDate || "—"}</td>
@@ -3036,7 +3575,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
                   </table>
                 </div>
                 <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between">
-                  <p className="text-[11px] text-[#768994] font-medium">Stored verbatim as the folder title — existing rows are never touched.</p>
+                  <p className="text-[11px] text-[#768994] font-medium">Taken from the folder title, prefixed with the region its studio folder sits under — existing rows are never touched.</p>
                   <button onClick={apply} disabled={selectedCount === 0 || phase === "saving"}
                     className="flex items-center gap-1.5 px-5 py-2 bg-[#1cc1a5] hover:bg-[#17a892] disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-bold rounded-xl transition-all">
                     {phase === "saving" ? <><RefreshCw className="w-4 h-4 animate-spin" /> Saving…</> : <><Plus className="w-4 h-4" /> Add {selectedCount} to Job Book</>}
@@ -3081,7 +3620,7 @@ export function JobBookSection({ setActiveTab }) {
   const [saving, setSaving]     = useState(false);
   const [clients, setClients]   = useState([]);
   const [films, setFilms]       = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [workCategories, setWorkCategories] = useState([]);
   const [descs, setDescs]       = useState([]);
   const [page, setPage]         = useState(0);
   const PER_PAGE = 50;
@@ -3096,26 +3635,29 @@ export function JobBookSection({ setActiveTab }) {
     const [c, f, cat, d] = await Promise.all([
       supabase.from("clients").select("name").order("name"),
       supabase.from("films").select("title, created_at").order("created_at", { ascending: false }),
-      supabase.from("job_categories").select("name").order("name"),
+      supabase.from("job_work_categories").select("name").order("name"),
       supabase.from("project_descriptions").select("description").order("description"),
     ]);
     setClients((c.data || []).map(x => x.name));
     setFilms((f.data || []).map(x => x.title));
-    setCategories((cat.data || []).map(x => x.name));
+    setWorkCategories((cat.data || []).map(x => x.name));
     setDescs((d.data || []).map(x => x.description));
   }, []);
 
   const loadJobs = useCallback(async () => {
     setLoading(true);
-    let q = supabase.from("jobs").select("*").order("id", { ascending: false });
-    if (monthFilter) {
+    // The whole book — this table paginates client-side, so a 1000-row read
+    // just made every page past the first one lie.
+    const data = await selectAll("jobs", "*", (q) => {
+      if (!monthFilter) return q;
       const start = monthFilter + "-01";
       const end = new Date(monthFilter + "-01");
       end.setMonth(end.getMonth() + 1);
-      q = q.gte("start_date", start).lt("start_date", end.toISOString().slice(0, 10));
-    }
-    const { data } = await q;
-    setJobs(data || []);
+      return q.gte("start_date", start).lt("start_date", end.toISOString().slice(0, 10));
+    });
+    // selectAll orders by id ascending (its pagination depends on it); the book
+    // reads newest-first.
+    setJobs(data.slice().reverse());
     setLoading(false);
   }, [monthFilter]);
 
@@ -3463,7 +4005,7 @@ export function JobBookSection({ setActiveTab }) {
       {showModal && (
         <JobModal
           job={editJob}
-          clients={clients} films={films} categories={categories} descs={descs}
+          clients={clients} films={films} workCategories={workCategories} descs={descs}
           onSave={handleSave} onClose={() => { setShowModal(false); setEditJob(null); }}
           saving={saving}
         />
@@ -3474,11 +4016,390 @@ export function JobBookSection({ setActiveTab }) {
 
 // ── Jobs Feed ─────────────────────────────────────────────────────────────────
 // Exported: also rendered inside the PMs' standalone Job Book page (JobBook.jsx).
+// ── Week helpers (ISO weeks, Monday-start) ───────────────────────────────────
+// The feed is read week-by-week ("view by week"), so the period pickers are
+// weeks rather than months. ISO week numbering matches the numbering the
+// reports this view replaces already use.
+const mondayOf = (d) => {
+  const m = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  m.setDate(m.getDate() - ((m.getDay() + 6) % 7));
+  return m;
+};
+const isoWeekNo = (d) => {
+  // Shift to the Thursday of the same week — the ISO rule that decides which
+  // year (and therefore which week 1) a boundary week belongs to.
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  const yearStart = Date.UTC(t.getUTCFullYear(), 0, 1);
+  return Math.ceil(((t - yearStart) / 86400000 + 1) / 7);
+};
+const isoDate = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// How far back the week pickers reach. 18 months covers the current and prior
+// financial year, which is as far as anyone reads this feed back.
+const WEEKS_BACK = 78;
+
+// Filter-bar dropdown. Wraps StrictSelect — the app's one dropdown — so these
+// read and behave like every other picker (searchable, portaled so it opens
+// over the table rather than being clipped by it, correct under the app-wide
+// zoom). StrictSelect speaks plain strings, so this adapts the {value,label}
+// pairs the filters hold: the label round-trips back to its value on pick.
+// `allLabel` is the clear-to-everything row; pass null where there's no "all"
+// state (Fixed Cost, the unbilled toggle).
+function FeedSelect({ value, onChange, options, allLabel = "All", className = "w-[170px]" }) {
+  const labels = useMemo(
+    () => (allLabel !== null ? [allLabel, ...options.map(o => o.label)] : options.map(o => o.label)),
+    [options, allLabel]
+  );
+  // Empty value = the "all" row. An unknown value (a filter whose option list
+  // hasn't loaded yet) shows the placeholder rather than a stale label.
+  const current = !value
+    ? (allLabel ?? "")
+    : (options.find(o => o.value === value)?.label ?? "");
+
+  return (
+    <StrictSelect
+      className={className}
+      value={current}
+      options={labels}
+      placeholder={allLabel ?? "Select…"}
+      limit={200}
+      onChange={(label) => {
+        if (allLabel !== null && label === allLabel) return onChange("");
+        onChange(options.find(o => o.label === label)?.value ?? "");
+      }}
+    />
+  );
+}
+
+// Header names the importer accepts, per field. The first alias in each list
+// is what the feed's own export writes (COLS labels joined), so a file exported
+// from this screen re-imports unchanged; the rest are the spellings a
+// hand-built spreadsheet tends to use.
+const IMPORT_HEADERS = {
+  job_number:          ["Job #", "Job Number", "Job No"],
+  date:                ["Date"],
+  client:              ["Client"],
+  office:              ["Off.", "Office"],
+  print_digital:       ["P/D", "Print/Digital", "Print Digital"],
+  film_title:          ["Film", "Film Title"],
+  job_category:        ["Job Cat.", "Job Category", "Job Work Category"],
+  project_description: ["Project Description"],
+  category:            ["Item Category", "Category"],
+  client_amends:       ["CA", "Client Amends"],
+  is_3d:               ["3D"],
+  costs:               ["Costs", "Fixed Cost"],
+  ordered_by:          ["Ordered By"],
+  billed_to:           ["Billed To"],
+  worked_on:           ["Worked On By", "Worked On", "Staff"],
+  time_spent:          ["Time", "Time Spent"],
+  additional_time:     ["Extra", "Extra Time", "Additional Time"],
+};
+// Rate, OT and Total are exported but never imported — they're derived from
+// positions and the row's own hours, so reading them back in would let a stale
+// file overwrite a live calculation.
+const IMPORT_IGNORED = ["Rate", "Hourly Rate", "OT", "Over Time", "Total"];
+
+// Standard rate for anyone without one of their own on their profile.
+const DEFAULT_HOURLY_RATE = 150;
+const fmtMoney = (n) => (n == null || isNaN(n) ? "—" : `$${Number(n).toFixed(2)}`);
+
+// A task's job number and film both live inside the composed job label
+// ("Forgotten Island : XY025164, INT - Titles"), which is authoritative — the
+// task's own film_title column can lag a rename. Shared by the filters, the
+// cells and the export so all three agree on what a row's film is.
+const feedJobNo = (e) => {
+  const s = e.job_number || "";
+  // Everything between the film separator (when there is one) and the
+  // description — a label can be "Film : XY1, Desc", "XY1, Desc" or bare "XY1".
+  const colon = s.indexOf(" : ");
+  const after = colon < 0 ? s : s.slice(colon + 3);
+  const comma = after.indexOf(",");
+  return (comma > 0 ? after.slice(0, comma) : after).trim();
+};
+const feedFilm = (e) => {
+  const colon = (e.job_number || "").indexOf(" : ");
+  return colon > 0 ? e.job_number.slice(0, colon).trim() : (e.film_title || "");
+};
+// The description as it actually reads on the folder — the tail of the job
+// label, after the code. The task's own project_description column is a copy
+// taken when the time was logged and goes stale when a job is renamed, so the
+// label wins and the column is only a fallback.
+const feedDesc = (e) => {
+  const s = e.job_number || "";
+  const comma = s.indexOf(",", s.indexOf(" : ") + 1);
+  const fromLabel = comma > 0 ? s.slice(comma + 1).trim() : "";
+  return fromLabel || e.project_description || e._job?.project_description || "";
+};
+
+// Decimal hours from a stored duration — the shared parser, so this agrees
+// with what the grid displays and with what the Tracker/Legacy pages compute.
+// It used to read a bare integer as MINUTES, which mattered here more than
+// anywhere: this feeds the rate × hours money column, so a "2" (two hours,
+// which is what the 0.25-step dropdown writes) was billed as 0.03 hours.
+const hoursOf = parseTimeToHours;
+
+// CSV import for the feed. Pick a file → it's parsed in the browser and sent
+// to the Worker for a dry run → the plan comes back and is shown in full →
+// only then does confirming write anything. Nothing is inserted from the
+// browser directly: `tasks` is per-user RLS'd, so a team-wide import has to go
+// through the service-role endpoint.
+function ImportModal({ onClose, onImported }) {
+  const [fileName, setFileName] = useState("");
+  const [parseError, setParseError] = useState(null);
+  const [unmatchedHeaders, setUnmatchedHeaders] = useState([]);
+  const [rows, setRows] = useState(null);
+  const [plan, setPlan] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [applyError, setApplyError] = useState(null);
+  const [done, setDone] = useState(null);
+
+  const post = async (payload) => {
+    const res = await fetch("/api/jobs-feed/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        body.error === "not_connected" ? "Wrike session expired — reconnect in Profile → Settings."
+        : body.error === "too_many_rows" ? `That file has more rows than the ${body.max}-row limit.`
+        : body.detail || body.error || `Import failed (${res.status})`
+      );
+    }
+    return body;
+  };
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    setParseError(null); setPlan(null); setRows(null); setApplyError(null);
+    try {
+      const grid = parseCsv(await file.text());
+      const { rows: mapped, unmatched } = mapCsvRows(grid, IMPORT_HEADERS);
+      if (!mapped.length) throw new Error("No data rows under the header.");
+      // Rate/OT/Total are expected to be there and expected to be ignored —
+      // listing them as unrecognised would read as a problem.
+      const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const ignored = new Set(IMPORT_IGNORED.map(norm));
+      setUnmatchedHeaders(unmatched.filter((h) => !ignored.has(norm(h))));
+      setRows(mapped);
+      setBusy(true);
+      setPlan((await post({ rows: mapped, dryRun: true })).plan);
+    } catch (e) {
+      setParseError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    if (!rows || busy) return;
+    setBusy(true); setApplyError(null);
+    try {
+      const res = await post({ rows, dryRun: false });
+      setDone(res.plan);
+      onImported?.();
+    } catch (e) {
+      setApplyError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const Stat = ({ n, label, tone = "" }) => (
+    <div className="flex-1 min-w-[110px] px-3 py-2.5 rounded-xl border border-[#dce4ec] bg-white">
+      <p className={`text-lg font-black leading-none ${tone || "text-[#122027]"}`}>{n}</p>
+      <p className="text-[10px] font-bold uppercase tracking-wider text-[#768994] mt-1">{label}</p>
+    </div>
+  );
+
+  return (
+    <WrikeApplyShell title="Import into Project/Time"
+      subtitle="A CSV shaped like this screen's own export" accent="#1cc1a5" onClose={onClose}>
+      <div className="px-6 py-5 overflow-y-auto flex-1 space-y-4">
+        {done ? (
+          <div className="py-4 space-y-3 text-center">
+            <CheckCircle2 className="w-10 h-10 text-[#1cc1a5] mx-auto" />
+            <p className="text-sm font-bold text-[#122027]">
+              Imported {done.inserted} row{done.inserted === 1 ? "" : "s"}.
+            </p>
+            <p className="text-xs text-[#768994]">
+              {done.jobsToCreate.length ? `${done.jobsToCreate.length} job${done.jobsToCreate.length === 1 ? "" : "s"} created · ` : ""}
+              {done.jobsToUpdate.length ? `${done.jobsToUpdate.length} updated · ` : ""}
+              {done.duplicates ? `${done.duplicates} duplicate${done.duplicates === 1 ? "" : "s"} skipped · ` : ""}
+              {done.errors.length ? `${done.errors.length} skipped` : "no errors"}.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div>
+              <label className="flex items-center gap-3 px-4 py-3 border-2 border-dashed border-[#dce4ec] hover:border-[#1cc1a5] rounded-2xl cursor-pointer transition-colors">
+                <UploadCloud className="w-4 h-4 text-[#768994] shrink-0" />
+                <span className="text-sm font-bold text-[#122027]">
+                  {fileName || "Choose a CSV file…"}
+                </span>
+                <input type="file" accept=".csv,text/csv" className="hidden"
+                  onChange={(e) => handleFile(e.target.files?.[0])} />
+              </label>
+              <p className="text-[11px] text-[#768994] mt-2 leading-snug">
+                Same columns as Export to Excel. Client Amends and 3D take <b>Y</b>/<b>N</b>.
+                Rate, OT and Total are ignored — they're worked out from the position rates.
+              </p>
+            </div>
+
+            {busy && !plan && (
+              <p className="flex items-center gap-2 text-sm text-[#768994]">
+                <Loader2 className="w-4 h-4 animate-spin" /> Checking the file…
+              </p>
+            )}
+
+            {parseError && (
+              <p className="flex items-start gap-2 text-sm text-rose-600">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> {parseError}
+              </p>
+            )}
+
+            {unmatchedHeaders.length > 0 && (
+              <div className="px-3 py-2 bg-[#f4b740]/10 border border-[#f4b740]/30 rounded-xl">
+                <p className="text-[11px] font-bold text-[#8a6d1a]">
+                  Columns not recognised (ignored): {unmatchedHeaders.join(", ")}
+                </p>
+              </div>
+            )}
+
+            {plan && (
+              <div className="space-y-3">
+                <div className="flex gap-2 flex-wrap">
+                  <Stat n={plan.toInsert} label="To import" tone="text-[#1cc1a5]" />
+                  <Stat n={plan.duplicates} label="Duplicates skipped" />
+                  <Stat n={plan.errors.length} label="Rows skipped" tone={plan.errors.length ? "text-rose-500" : ""} />
+                  <Stat n={plan.jobsToCreate.length} label="Jobs created" />
+                  <Stat n={plan.jobsToUpdate.length} label="Jobs updated" />
+                </div>
+
+                {plan.unknownStaff.length > 0 && (
+                  <div className="px-3 py-2 bg-[#f4b740]/10 border border-[#f4b740]/30 rounded-xl">
+                    <p className="text-[11px] font-bold text-[#8a6d1a] mb-1">
+                      No profile matches these names — their rows import with nobody attached,
+                      so they'll show "—" under Worked On By and bill at the default rate:
+                    </p>
+                    <p className="text-[11px] text-[#8a6d1a]">{plan.unknownStaff.join(", ")}</p>
+                  </div>
+                )}
+
+                {plan.jobsToCreate.length > 0 && (
+                  <div className="px-3 py-2 bg-[#12a0e1]/5 border border-[#12a0e1]/20 rounded-xl">
+                    <p className="text-[11px] font-bold text-[#0d8bc4] mb-1">
+                      New Job Book entries will be created for:
+                    </p>
+                    <p className="text-[11px] text-[#0d8bc4] font-mono break-words">
+                      {plan.jobsToCreate.slice(0, 25).join(", ")}
+                      {plan.jobsToCreate.length > 25 ? ` … +${plan.jobsToCreate.length - 25} more` : ""}
+                    </p>
+                  </div>
+                )}
+
+                {plan.jobsToUpdate.length > 0 && (
+                  <div className="px-3 py-2 bg-[#f4b740]/10 border border-[#f4b740]/30 rounded-xl">
+                    <p className="text-[11px] font-bold text-[#8a6d1a] mb-1">
+                      These existing jobs will have Office / P-D / Job Cat. / Costs / Ordered By /
+                      Billed To <b>overwritten</b> from the file:
+                    </p>
+                    <p className="text-[11px] text-[#8a6d1a] font-mono break-words">
+                      {plan.jobsToUpdate.slice(0, 25).join(", ")}
+                      {plan.jobsToUpdate.length > 25 ? ` … +${plan.jobsToUpdate.length - 25} more` : ""}
+                    </p>
+                  </div>
+                )}
+
+                {plan.errors.length > 0 && (
+                  <div className="border border-[#dce4ec] rounded-xl overflow-hidden">
+                    <p className="px-3 py-2 text-[11px] font-bold text-[#122027] bg-slate-50 border-b border-[#dce4ec]">
+                      Skipped rows
+                    </p>
+                    <div className="max-h-40 overflow-y-auto divide-y divide-[#f0f4f8]">
+                      {plan.errors.slice(0, 100).map((e) => (
+                        <p key={e.line} className="px-3 py-1.5 text-[11px] text-[#768994]">
+                          <span className="font-mono font-bold text-[#122027]">Line {e.line}</span> — {e.reason}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {applyError && (
+                  <p className="flex items-start gap-2 text-sm text-rose-600">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> {applyError}
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-6 py-4 border-t border-[#dce4ec] flex items-center justify-end gap-2 shrink-0">
+        <button onClick={onClose}
+          className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-all">
+          {done ? "Close" : "Cancel"}
+        </button>
+        {!done && (
+          <button onClick={apply} disabled={busy || !plan || plan.toInsert === 0}
+            className="flex items-center gap-2 px-6 py-2.5 bg-[#1cc1a5] hover:bg-[#17a98f] text-white text-sm font-bold rounded-2xl transition-all disabled:opacity-40">
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+            Import {plan?.toInsert || 0} row{plan?.toInsert === 1 ? "" : "s"}
+          </button>
+        )}
+      </div>
+    </WrikeApplyShell>
+  );
+}
+
 export function JobsFeedSection() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [monthFilter, setMonthFilter] = useState("");
+
+  // Period — a week range, defaulting to the current week at both ends.
+  const [weekFrom, setWeekFrom] = useState("");
+  const [weekTo, setWeekTo] = useState("");
+  // The rest of the filter bar. "" means "all" for every one of these; the
+  // legacy screen's unbilled-hours / billing-times / submitted-only controls
+  // have no equivalent data in TimeHub (tasks carries no billed or submitted
+  // flag), so they're deliberately absent rather than shown inert.
+  const [jobNoFilter, setJobNoFilter] = useState("");
+  const [clientFilter, setClientFilter] = useState("");
+  const [deptFilter, setDeptFilter] = useState("");
+  const [filmFilter, setFilmFilter] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [staffFilter, setStaffFilter] = useState("");
+  const [officeFilter, setOfficeFilter] = useState("");
+  const [fixedCostFilter, setFixedCostFilter] = useState("Both"); // Both | Yes | No
+  const [showImport, setShowImport] = useState(false);
+  // Matches the report this replaces, which defaults to leaving unbilled time
+  // (waiting time and anything else zero-rated) out of the totals.
+  const [includeUnbilled, setIncludeUnbilled] = useState(false);
+
+  // Filter dropdowns read the reference tables, not just the values that
+  // happen to appear in the loaded rows — a client with no logged time yet is
+  // still a client you'd want to filter to (and see the empty result).
+  const [refLists, setRefLists] = useState({ clients: [], films: [], departments: [], categories: [] });
+  useEffect(() => {
+    Promise.all([
+      supabase.from("clients").select("name").order("name"),
+      supabase.from("films").select("title").order("title"),
+      supabase.from("job_departments").select("name").order("name"),
+      supabase.from("job_categories").select("name").order("name"),
+    ]).then(([c, f, d, cat]) => setRefLists({
+      clients: (c.data || []).map(x => x.name),
+      films: (f.data || []).map(x => x.title),
+      departments: (d.data || []).map(x => x.name),
+      categories: (cat.data || []).map(x => x.name),
+    }));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -3506,9 +4427,10 @@ export function JobsFeedSection() {
       return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
     };
 
-    const tasks = monthFilter
-      ? (allTasks || []).filter(t => (toIso(t.date) || "").startsWith(monthFilter))
-      : (allTasks || []);
+    // Everything is filtered client-side below — the endpoint returns the whole
+    // table either way, so narrowing here would only mean refetching on every
+    // filter change.
+    const tasks = [...(allTasks || [])];
 
     // Sort by the job's actual date (not by row id / sync time) — id only
     // reflects when a row was pulled into the app, which can be well after
@@ -3526,37 +4448,127 @@ export function JobsFeedSection() {
     const userIds = [...new Set(tasks.map(t => t.wrike_user_id).filter(Boolean))];
     const jobNums = [...new Set(tasks.map(t => t.job_number).filter(Boolean))];
 
-    const [{ data: profiles }, { data: jobs }] = await Promise.all([
+    // `select("*")` for positions and job_categories on purpose: naming the
+    // rate columns would make the whole read fail (and blank out every name in
+    // the table) on a deploy that lands before the rates migration does.
+    const [{ data: profiles }, { data: jobs }, { data: positions }, { data: cats }] = await Promise.all([
       userIds.length
-        ? supabase.from("profiles").select("wrike_user_id, first_name, last_name").in("wrike_user_id", userIds)
+        ? supabase.from("profiles").select("wrike_user_id, first_name, last_name, department, position_id").in("wrike_user_id", userIds)
         : Promise.resolve({ data: [] }),
       jobNums.length
-        ? supabase.from("jobs").select("job_number, office, print_digital, job_work_category, ordered_by, billed_to, fixed_cost").in("job_number", jobNums)
+        ? selectAll("jobs", "job_number, office, print_digital, job_work_category, ordered_by, billed_to, fixed_cost",
+                    (q) => q.in("job_number", jobNums)).then((data) => ({ data }))
         : Promise.resolve({ data: [] }),
+      supabase.from("positions").select("*"),
+      supabase.from("job_categories").select("*"),
     ]);
 
-    const profileMap = Object.fromEntries(
-      (profiles || []).map(p => [p.wrike_user_id, cleanFullName(p.first_name, p.last_name)])
-    );
+    const profileMap = Object.fromEntries((profiles || []).map(p => [p.wrike_user_id, p]));
     const jobMap = Object.fromEntries((jobs || []).map(j => [j.job_number, j]));
+    const rateByPosition = Object.fromEntries(
+      (positions || []).map(p => [p.id, p.hourly_rate != null ? Number(p.hourly_rate) : DEFAULT_HOURLY_RATE])
+    );
+    const catMap = Object.fromEntries((cats || []).map(c => [c.name, c]));
 
-    setEntries(tasks.map(t => ({ ...t, _name: profileMap[t.wrike_user_id] || "—", _job: jobMap[t.job_number] || {} })));
+    setEntries(tasks.map(t => {
+      const p = profileMap[t.wrike_user_id];
+      const cat = catMap[t.category];
+      // Rate follows the work, not the worker: a category that bills at
+      // another position's rate (a designer proofreading bills the Proofreader
+      // rate) wins over the logger's own position. Unbilled categories are
+      // zero-rated outright.
+      const unbilled = !!cat?.unbilled;
+      const positionId = cat?.rate_position_id || p?.position_id;
+      return {
+        ...t,
+        _iso: toIso(t.date),
+        _name: p ? cleanFullName(p.first_name, p.last_name) : "—",
+        _dept: p?.department || "",
+        _unbilled: unbilled,
+        _rate: unbilled ? 0 : (rateByPosition[positionId] ?? DEFAULT_HOURLY_RATE),
+        _job: jobMap[t.job_number] || {},
+      };
+    }));
     setLoading(false);
-  }, [monthFilter]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
+  // Every week from the current one back, newest first — the option set shared
+  // by both period pickers.
+  const weekOptions = useMemo(() => {
+    const start = mondayOf(new Date());
+    return Array.from({ length: WEEKS_BACK }, (_, i) => {
+      const m = new Date(start);
+      m.setDate(m.getDate() - i * 7);
+      const end = new Date(m);
+      end.setDate(end.getDate() + 6);
+      return {
+        key: isoDate(m),
+        start: isoDate(m),
+        end: isoDate(end),
+        label: `${m.toLocaleDateString("en-GB", { month: "long", year: "numeric" })} (Week:${isoWeekNo(m)})`,
+      };
+    });
+  }, []);
+
+  // Default both ends to the current week once the options exist.
+  useEffect(() => {
+    if (!weekOptions.length) return;
+    setWeekFrom(f => f || weekOptions[0].key);
+    setWeekTo(t => t || weekOptions[0].key);
+  }, [weekOptions]);
+
+  // The picked range, normalised — picking an "until" week earlier than the
+  // "view" week reads as a range either way rather than showing nothing.
+  const range = useMemo(() => {
+    const a = weekOptions.find(w => w.key === weekFrom);
+    const b = weekOptions.find(w => w.key === weekTo);
+    if (!a || !b) return null;
+    return a.start <= b.start ? { from: a.start, to: b.end } : { from: b.start, to: a.end };
+  }, [weekOptions, weekFrom, weekTo]);
+
+  // Values present in the feed, for the two dropdowns with no reference table
+  // of their own (Staff and Office).
+  const optionsFor = useCallback((pick) => {
+    const seen = new Set();
+    entries.forEach(e => { const v = pick(e); if (v) seen.add(v); });
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }, [entries]);
+
+  const staffOptions = useMemo(() => optionsFor(e => (e._name === "—" ? "" : e._name)), [optionsFor]);
+  const officeOptions = useMemo(() => optionsFor(e => e._job?.office), [optionsFor]);
+
   const filtered = useMemo(() => {
-    if (!search) return entries;
-    const q = search.toLowerCase();
-    return entries.filter(e =>
-      (e.job_number || "").toLowerCase().includes(q) ||
-      (e.client || "").toLowerCase().includes(q) ||
-      (e.film_title || "").toLowerCase().includes(q) ||
-      (e._name || "").toLowerCase().includes(q) ||
-      (e.project_description || "").toLowerCase().includes(q)
-    );
-  }, [entries, search]);
+    const q = search.trim().toLowerCase();
+    const jobQ = jobNoFilter.trim().toLowerCase();
+    return entries.filter(e => {
+      // Rows with an unparseable date can't be placed in a week, so a week
+      // range excludes them rather than silently dragging them along.
+      if (range && !(e._iso && e._iso >= range.from && e._iso <= range.to)) return false;
+      if (!includeUnbilled && e._unbilled) return false;
+      if (jobQ && !feedJobNo(e).toLowerCase().includes(jobQ)) return false;
+      if (clientFilter && e.client !== clientFilter) return false;
+      if (deptFilter && e._dept !== deptFilter) return false;
+      if (filmFilter && feedFilm(e) !== filmFilter) return false;
+      if (categoryFilter && e.category !== categoryFilter) return false;
+      if (staffFilter && e._name !== staffFilter) return false;
+      if (officeFilter && (e._job?.office || "") !== officeFilter) return false;
+      if (fixedCostFilter !== "Both") {
+        const hasFixed = e._job?.fixed_cost != null && Number(e._job.fixed_cost) > 0;
+        if (fixedCostFilter === "Yes" ? !hasFixed : hasFixed) return false;
+      }
+      if (q && !(
+        (e.job_number || "").toLowerCase().includes(q) ||
+        (e.client || "").toLowerCase().includes(q) ||
+        (e.film_title || "").toLowerCase().includes(q) ||
+        (e._name || "").toLowerCase().includes(q) ||
+        (e.project_description || "").toLowerCase().includes(q)
+      )) return false;
+      return true;
+    });
+  }, [entries, search, range, includeUnbilled, jobNoFilter, clientFilter, deptFilter,
+      filmFilter, categoryFilter, staffFilter, officeFilter, fixedCostFilter]);
 
   const fmtDate = (d) => {
     if (!d) return "—";
@@ -3572,34 +4584,9 @@ export function JobsFeedSection() {
       return d;
     } catch { return d; }
   };
-  const fmtNum = (n) => {
-    if (n === null || n === undefined || n === "" || n === "none") return "—";
-    const s = String(n);
-    // New format already stored as "H:MM"
-    if (/^\d+:\d{2}$/.test(s)) return s;
-    const v = parseFloat(s);
-    if (isNaN(v) || v <= 0) return "—";
-    // Old decimal hours ("0.5", "1.50") → convert to H:MM
-    const mins = s.includes(".") ? Math.round(v * 60) : Math.round(v);
-    if (mins <= 0) return "—";
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${h}:${String(m).padStart(2, "0")}`;
-  };
-
-  // Build month options: current + past 11
-  const monthOptions = useMemo(() => {
-    const now = new Date();
-    return Array.from({ length: 12 }, (_, i) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    });
-  }, []);
-
-  const fmtMonthLabel = (s) => {
-    const [y, m] = s.split("-");
-    return new Date(+y, +m - 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
-  };
+  // Any stored shape → "H:MM", via the shared parser/formatter so this column
+  // can't disagree with the same row on the Legacy or Tracker pages.
+  const fmtNum = (n) => secondsToHM(parseTimeToSeconds(n), "—");
 
   const COLS = [
     { key: "job_number",          label: ["Job #"],                    px: 80  },
@@ -3624,31 +4611,19 @@ export function JobsFeedSection() {
     { key: "total",               label: ["Total"],                    px: 60  },
   ];
 
-  const { widths, resizeHandle } = useColumnResize("mgmt-jobsfeed-cols", COLS, { dark: true });
+  const { widths, resizeHandle } = useColumnResize("mgmt-jobsfeed-cols", COLS);
 
   const getCellValue = (e, key) => {
     const j = e._job || {};
     switch (key) {
-      case "job_number": {
-        const s = e.job_number || "";
-        const colonIdx = s.indexOf(" : ");
-        if (colonIdx < 0) return s || "—";
-        const after = s.slice(colonIdx + 3);
-        const commaIdx = after.indexOf(",");
-        return commaIdx > 0 ? after.slice(0, commaIdx).trim() : after.trim();
-      }
+      case "job_number":          return feedJobNo(e) || "—";
       case "date":                return fmtDate(e.date);
       case "client":              return e.client || "—";
       case "office":              return j.office || "—";
       case "print_digital":       return j.print_digital || "—";
-      case "film_title": {
-        // Prefer extracting from job_number "Film Name : XYnnnnnn, ..." — always authoritative
-        const colonIdx = (e.job_number || "").indexOf(" : ");
-        if (colonIdx > 0) return e.job_number.slice(0, colonIdx).trim();
-        return e.film_title || "—";
-      }
+      case "film_title":          return feedFilm(e) || "—";
       case "job_category":        return j.job_work_category || "—";
-      case "project_description": return e.project_description || "—";
+      case "project_description": return feedDesc(e) || "—";
       case "category":            return e.category || "—";
       case "client_amends":       return e.client_amends ? <Check className="w-3.5 h-3.5 text-emerald-500 mx-auto" /> : "";
       case "is_3d":               return e.is_3d ? <Check className="w-3.5 h-3.5 text-emerald-500 mx-auto" /> : "";
@@ -3656,11 +4631,18 @@ export function JobsFeedSection() {
       case "ordered_by":          return j.ordered_by || "—";
       case "billed_to":           return j.billed_to || "—";
       case "worked_on":           return e._name;
-      case "hourly_rate":         return "—";
+      case "hourly_rate":         return fmtMoney(e._rate);
       case "time_spent":          return fmtNum(e.time_spent);
       case "extra_time":          return fmtNum(e.additional_time);
+      // No over-time column on tasks — nothing to read, so it's a constant
+      // rather than a number that looks derived.
       case "over_time":           return "0.00";
-      case "total":               return "—";
+      // Rate × every hour on the row (logged + additional). The rows this
+      // replaces only ever carried logged time, so the two agree there.
+      case "total": {
+        const hrs = hoursOf(e.time_spent) + hoursOf(e.additional_time);
+        return hrs > 0 ? fmtMoney(e._rate * hrs) : "—";
+      }
       default:                    return "—";
     }
   };
@@ -3676,8 +4658,8 @@ export function JobsFeedSection() {
   // Same CSV-Blob-and-click-a-link approach as the app's other export
   // (App.jsx's "Download CSV" palette action) — Excel opens CSV natively,
   // so there's no need for an xlsx-writing dependency just for this.
-  // Exports whatever the current month/search filters are showing, not
-  // the full unfiltered table.
+  // Exports whatever the filter bar is currently showing, not the full
+  // unfiltered table.
   const exportToExcel = () => {
     const headers = COLS.map(c => c.label.join(" "));
     const rows = filtered.map(e => COLS.map(c => getCellText(e, c.key)));
@@ -3690,7 +4672,7 @@ export function JobsFeedSection() {
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
     const a = document.createElement("a");
     a.href = url;
-    const scope = monthFilter ? fmtMonthLabel(monthFilter).replace(" ", "_") : "All";
+    const scope = range ? `${range.from}_to_${range.to}` : "All";
     a.download = `ProjectTime_${scope}_${new Date().toISOString().split("T")[0]}.csv`;
     document.body.appendChild(a);
     a.click();
@@ -3700,17 +4682,58 @@ export function JobsFeedSection() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Filters row */}
+      {/* Filter bar. Two rows, mirroring the report this replaces: the period
+          on top, then the narrowing filters. Client / Dept / Film / Categories
+          list their whole reference table, so a client with no logged time is
+          still selectable (and honestly returns nothing); Staff and Office have
+          no table of their own and list what's in the feed. "(All …)" clears. */}
+      <div className="rounded-2xl border border-[#dce4ec] bg-[#fbfdff] px-4 py-3 flex flex-col gap-2.5">
+        <div className="flex items-center gap-2 flex-wrap text-sm text-[#33454f]">
+          <span className="font-bold text-[#122027]">View Week</span>
+          <FeedSelect value={weekFrom} onChange={setWeekFrom} className="w-[215px]" allLabel={null}
+            options={weekOptions.map(w => ({ value: w.key, label: w.label }))} />
+          <span className="font-bold text-[#122027]">Until</span>
+          <FeedSelect value={weekTo} onChange={setWeekTo} className="w-[215px]" allLabel={null}
+            options={weekOptions.map(w => ({ value: w.key, label: w.label }))} />
+          <span className="text-[#768994]">and</span>
+          <FeedSelect value={includeUnbilled ? "Do" : "Do Not"} onChange={v => setIncludeUnbilled(v === "Do")}
+            allLabel={null} className="w-[110px]"
+            options={[{ value: "Do Not", label: "Do Not" }, { value: "Do", label: "Do" }]} />
+          <span className="text-[#768994]">include unbilled hours.</span>
+          <span className="text-[#768994]">Office is</span>
+          <FeedSelect value={officeFilter} onChange={setOfficeFilter} allLabel="All Offices" className="w-[150px]"
+            options={officeOptions.map(o => ({ value: o, label: o }))} />
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap text-sm text-[#33454f]">
+          <label className="flex items-center gap-1.5">
+            <span className="text-[#768994]">Job No:</span>
+            <input value={jobNoFilter} onChange={e => setJobNoFilter(e.target.value)}
+              placeholder="(All Jobs)"
+              className="w-[120px] border border-[#dce4ec] rounded-xl px-3 py-2.5 text-sm font-bold text-[#122027] outline-none focus:border-[#12a0e1] hover:border-[#12a0e1] bg-white placeholder-[#b0bec5] placeholder:font-medium transition-colors" />
+          </label>
+          <span className="text-[#768994]">Client:</span>
+          <FeedSelect value={clientFilter} onChange={setClientFilter} allLabel="(All Clients)" className="w-[200px]"
+            options={refLists.clients.map(o => ({ value: o, label: o }))} />
+          <span className="text-[#768994]">Dept:</span>
+          <FeedSelect value={deptFilter} onChange={setDeptFilter} allLabel="(All Departments)" className="w-[185px]"
+            options={refLists.departments.map(o => ({ value: o, label: o }))} />
+          <span className="text-[#768994]">Film:</span>
+          <FeedSelect value={filmFilter} onChange={setFilmFilter} allLabel="(All Films)" className="w-[200px]"
+            options={refLists.films.map(o => ({ value: o, label: o }))} />
+          <span className="text-[#768994]">Categories:</span>
+          <FeedSelect value={categoryFilter} onChange={setCategoryFilter} allLabel="All Categories" className="w-[200px]"
+            options={refLists.categories.map(o => ({ value: o, label: o }))} />
+          <span className="text-[#768994]">Staff:</span>
+          <FeedSelect value={staffFilter} onChange={setStaffFilter} allLabel="All Staff" className="w-[170px]"
+            options={staffOptions.map(o => ({ value: o, label: o }))} />
+          <span className="text-[#768994]">Fixed Cost:</span>
+          <FeedSelect value={fixedCostFilter} onChange={setFixedCostFilter} allLabel={null} className="w-[100px]"
+            options={[{ value: "Both", label: "Both" }, { value: "Yes", label: "Yes" }, { value: "No", label: "No" }]} />
+        </div>
+      </div>
+
       <div className="flex items-center gap-3 flex-wrap">
-        <select
-          value={monthFilter}
-          onChange={e => setMonthFilter(e.target.value)}
-          className="border border-[#dce4ec] rounded-xl px-3 py-2 text-sm font-bold text-[#122027] outline-none focus:border-[#1cc1a5] bg-white"
-        >
-          {monthOptions.map(m => (
-            <option key={m} value={m}>{fmtMonthLabel(m)}</option>
-          ))}
-        </select>
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#b0bec5]" />
           <input
@@ -3725,6 +4748,13 @@ export function JobsFeedSection() {
             {loading ? "Loading…" : `${filtered.length} entr${filtered.length === 1 ? "y" : "ies"}`}
           </span>
           <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-[#1cc1a5] text-[#122027] text-xs font-bold rounded-xl transition-all"
+          >
+            <UploadCloud className="w-3.5 h-3.5" />
+            Import CSV
+          </button>
+          <button
             onClick={exportToExcel}
             disabled={loading || filtered.length === 0}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-all disabled:opacity-50"
@@ -3734,6 +4764,13 @@ export function JobsFeedSection() {
           </button>
         </div>
       </div>
+
+      {showImport && (
+        <ImportModal
+          onClose={() => setShowImport(false)}
+          onImported={load}
+        />
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto rounded-xl border border-[#dce4ec] shadow-sm">
@@ -3854,6 +4891,185 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
 }
 
 // ── People section ──────────────────────────────────────────────────────────
+// Hourly rate cell. Local while focused so the field stays typeable, written
+// back on blur (or Enter). Blank clears to the standard rate rather than to
+// null, which would read as "free" in the feed's Total.
+function RateInput({ value, onCommit }) {
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
+  const shown = editing ? draft : (value == null ? String(DEFAULT_HOURLY_RATE) : String(Number(value)));
+
+  const commit = () => {
+    setEditing(false);
+    const n = parseFloat(draft);
+    const next = isNaN(n) || n < 0 ? DEFAULT_HOURLY_RATE : n;
+    if (next !== Number(value)) onCommit(next);
+  };
+
+  return (
+    <div className="relative">
+      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#768994] text-xs font-bold select-none pointer-events-none">$</span>
+      <input
+        type="number" min="0" step="0.01"
+        value={shown}
+        onFocus={() => { setDraft(value == null ? String(DEFAULT_HOURLY_RATE) : String(Number(value))); setEditing(true); }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+        title="Hourly rate"
+        className="w-full pl-6 pr-2 py-1.5 border border-[#dce4ec] rounded-xl text-xs font-bold text-[#122027] outline-none focus:border-[#12a0e1] bg-white"
+      />
+    </div>
+  );
+}
+
+// ── Positions & Rates ────────────────────────────────────────────────────────
+// One page, because a position and what it bills at are one thought. They used
+// to be two: adding "Retoucher" on the Positions page then walking to the Rates
+// page to say what it costs, with the same list of names rendered on both.
+// The rate now sits on the position's own row.
+//
+// Item Category Overrides stay underneath rather than on a page of their own —
+// they answer the same question ("what does this hour cost?") for the cases
+// where the answer isn't the logger's position: some work bills at another
+// position's rate (a designer proofreading bills the Proofreader rate) and
+// some doesn't bill at all (waiting time).
+function PositionsAndRatesSection() {
+  return (
+    <div className="space-y-10">
+      <div>
+        <p className="text-xs text-[#768994] mb-3">
+          What an hour of each position's time bills at. Everyone holding the
+          position bills at this rate — it follows the position, not the person,
+          so someone changing role changes what their time costs on its own.
+        </p>
+        <SimpleListSection
+          table="positions"
+          labelField="title"
+          label="Positions"
+          placeholder="e.g. Creative Director…"
+          renderRowExtra={(item, patchItem) => (
+            <div className="w-28 shrink-0">
+              <RateInput
+                value={item.hourly_rate}
+                onCommit={async (v) => {
+                  patchItem(item.id, { hourly_rate: v });
+                  await supabase.from("positions").update({ hourly_rate: v }).eq("id", item.id);
+                }}
+              />
+            </div>
+          )}
+        />
+      </div>
+      <ItemCategoryOverrides />
+    </div>
+  );
+}
+
+function ItemCategoryOverrides() {
+  const [positions, setPositions] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [showAllCategories, setShowAllCategories] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [pos, cats] = await Promise.all([
+      supabase.from("positions").select("*").order("title"),
+      supabase.from("job_categories").select("*").order("name"),
+    ]);
+    setPositions(pos.data || []);
+    setCategories(cats.data || []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const patchCategory = async (id, patch) => {
+    setCategories(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
+    await supabase.from("job_categories").update(patch).eq("id", id);
+  };
+
+  // Default to just the categories that actually override something — the rest
+  // bill at the logger's own position and would be 60-odd rows of "same as
+  // usual". Search or "Show all" reaches the whole list, since any of them can
+  // be given an override.
+  const visibleCategories = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (q) return categories.filter(c => (c.name || "").toLowerCase().includes(q));
+    if (showAllCategories) return categories;
+    return categories.filter(c => c.rate_position_id || c.unbilled);
+  }, [categories, search, showAllCategories]);
+
+  const positionOptions = useMemo(
+    () => positions.map(p => ({ value: String(p.id), label: p.title })),
+    [positions]
+  );
+
+  if (loading) return <p className="text-sm text-[#768994] py-8 text-center">Loading…</p>;
+
+  return (
+    <div>
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+          <p className="text-[10px] font-black uppercase tracking-widest text-[#768994]">Item category overrides</p>
+          <div className="flex items-center gap-2">
+            <button type="button"
+              onClick={() => { setShowAllCategories(s => !s); setSearch(""); }}
+              className={`shrink-0 px-3 py-2 rounded-xl border text-[11px] font-bold transition-all ${
+                showAllCategories && !search.trim()
+                  ? "bg-[#12a0e1]/10 border-[#12a0e1] text-[#12a0e1]"
+                  : "bg-white border-[#dce4ec] text-[#768994] hover:border-slate-300"
+              }`}>
+              Show all {categories.length}
+            </button>
+            <div className="relative w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#b0bec5]" />
+              <input value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Search item categories…"
+                className="w-full pl-9 pr-3 py-2 border border-[#dce4ec] rounded-xl text-xs text-[#122027] outline-none focus:border-[#1cc1a5] bg-white" />
+            </div>
+          </div>
+        </div>
+        <p className="text-xs text-[#768994] mb-3">
+          {search.trim() || showAllCategories
+            ? "Every item category — set a position to give one its own rate, or mark it unbilled."
+            : "Categories that don't bill at the logger's own position rate. Show all or search to add another."}
+        </p>
+        {visibleCategories.length === 0 ? (
+          <p className="text-sm text-[#768994]">
+            {search.trim() ? "No item category matches that." : "No overrides set."}
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {visibleCategories.map(c => (
+              <div key={c.id} className="flex items-center gap-3 p-3 bg-white border border-[#dce4ec] rounded-2xl">
+                <span className="flex-1 min-w-0 text-sm font-medium text-[#122027] truncate">{c.name}</span>
+                <FeedSelect
+                  value={c.rate_position_id ? String(c.rate_position_id) : ""}
+                  onChange={(v) => patchCategory(c.id, { rate_position_id: v ? Number(v) : null })}
+                  allLabel="Logger's own position"
+                  className="w-[220px] shrink-0"
+                  options={positionOptions}
+                />
+                {/* Unbilled wins over any rate override, so the select goes
+                    muted rather than pretending it still applies. */}
+                <button type="button"
+                  onClick={() => patchCategory(c.id, { unbilled: !c.unbilled })}
+                  className={`shrink-0 px-3 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                    c.unbilled
+                      ? "bg-[#f4b740]/10 border-[#f4b740] text-[#8a6d1a]"
+                      : "bg-white border-[#dce4ec] text-[#768994] hover:border-slate-300"
+                  }`}>
+                  Unbilled
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+    </div>
+  );
+}
+
 function PeopleSection() {
   const [people, setPeople]         = useState([]);
   const [positions, setPositions]   = useState([]);
@@ -3892,6 +5108,17 @@ function PeopleSection() {
     await supabase.from("profiles").update(patch).eq("wrike_user_id", wrikeUserId);
   };
 
+  const [editingNameFor, setEditingNameFor] = useState(null);
+  const nameDraft = useRef({ first: null, last: null });
+  const saveName = (p) => {
+    const first = (nameDraft.current.first?.value || "").trim();
+    const last = (nameDraft.current.last?.value || "").trim();
+    setEditingNameFor(null);
+    // Empty both fields and it falls back to Wrike's name on the next sign-in,
+    // which is a reasonable way to undo a rename.
+    updateField(p.wrike_user_id, { first_name: first || null, last_name: last || null });
+  };
+
   const syncFromWrike = async () => {
     if (!localStorage.getItem("wrike_user_id")) { setSyncMsg("Wrike not connected — connect it in Profile → Settings first."); return; }
     setSyncing(true);
@@ -3925,22 +5152,43 @@ function PeopleSection() {
         }
       }
 
+      // Which people we already hold a name for. This sync exists to ADD people
+      // and keep contact details fresh, not to re-impose Wrike's spelling — a
+      // name tidied up here (Wrike is where "Trott ⚡️" and dropped surnames
+      // come from) must survive the next run.
+      const { data: existingRows } = await supabase
+        .from("profiles")
+        .select("wrike_user_id, first_name, last_name");
+      const alreadyNamed = new Set(
+        (existingRows || [])
+          .filter((r) => r.first_name || r.last_name)
+          .map((r) => r.wrike_user_id)
+      );
+
       let added = 0;
+      let keptNames = 0;
       for (const c of contacts) {
         const payload = {
           wrike_user_id: c.id,
-          first_name: c.firstName || null,
-          last_name: c.lastName || null,
           email: c.profiles?.[0]?.email || null,
           avatar_url: c.avatarUrl || null,
         };
+        if (alreadyNamed.has(c.id)) {
+          keptNames++;
+        } else {
+          payload.first_name = c.firstName || null;
+          payload.last_name = c.lastName || null;
+        }
         // Only overwrite department when Wrike groups give us a clear answer
         if (deptMap[c.id]) payload.department = deptMap[c.id];
         const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "wrike_user_id" });
         if (!error) added++;
       }
       const deptCount = Object.keys(deptMap).length;
-      setSyncMsg(`Synced ${added} members · ${deptCount} department assignments from Wrike groups.`);
+      setSyncMsg(
+        `Synced ${added} members · ${deptCount} department assignments from Wrike groups.` +
+          (keptNames ? ` Kept ${keptNames} existing name${keptNames === 1 ? "" : "s"}.` : "")
+      );
       await load();
     } catch (err) {
       setSyncMsg(`Sync failed: ${err.message}`);
@@ -4017,7 +5265,49 @@ function PeopleSection() {
         )}
         <div className="flex-1 min-w-0 flex items-center gap-3 p-3.5">
           <div className="flex-1 min-w-0">
-            <p className="font-display text-base font-bold text-[#122027] tracking-tight truncate">{fullName}</p>
+            {/* The display name is editable here because Wrike is the only
+                other source of it, and Wrike is where the emoji and dropped
+                surnames come from. Sign-in seeds a name once and then leaves
+                it alone (see stampIdentity), so whatever is set here sticks.
+                Inputs are UNCONTROLLED and save on Enter/blur: PersonCard is
+                redefined on every render of this section, so a keystroke that
+                set state would remount it and steal focus mid-word. */}
+            {editingNameFor === p.wrike_user_id ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  autoFocus
+                  defaultValue={cleanFirst}
+                  ref={(el) => (nameDraft.current.first = el)}
+                  placeholder="First"
+                  onKeyDown={(e) => { if (e.key === "Enter") saveName(p); if (e.key === "Escape") setEditingNameFor(null); }}
+                  className="w-full min-w-0 px-2 py-1 text-sm font-bold rounded-lg border border-[#12a0e1] outline-none bg-white text-[#122027]"
+                />
+                <input
+                  defaultValue={cleanLast}
+                  ref={(el) => (nameDraft.current.last = el)}
+                  placeholder="Last"
+                  onKeyDown={(e) => { if (e.key === "Enter") saveName(p); if (e.key === "Escape") setEditingNameFor(null); }}
+                  className="w-full min-w-0 px-2 py-1 text-sm font-bold rounded-lg border border-[#12a0e1] outline-none bg-white text-[#122027]"
+                />
+                <button onClick={() => saveName(p)} title="Save name"
+                  className="shrink-0 p-1.5 bg-[#12a0e1] text-white rounded-lg hover:bg-[#0d8bc4]">
+                  <Check className="w-3 h-3" />
+                </button>
+                <button onClick={() => setEditingNameFor(null)} title="Cancel"
+                  className="shrink-0 p-1 text-slate-400 hover:text-slate-600">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setEditingNameFor(p.wrike_user_id)}
+                title="Rename"
+                className="group/name flex items-center gap-1.5 max-w-full text-left"
+              >
+                <span className="font-display text-base font-bold text-[#122027] tracking-tight truncate">{fullName}</span>
+                <Pencil className="w-3 h-3 shrink-0 text-slate-300 opacity-0 group-hover/name:opacity-100 transition-opacity" />
+              </button>
+            )}
             <p className="text-xs text-[#768994] truncate">{p.email || p.wrike_user_id}</p>
           </div>
           {/* Same searchable dropdown Job Book uses for its pickers, instead
@@ -4399,9 +5689,12 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
                   {activeTab === "films"      && <SimpleListSection table="films" labelField="title" label="Films" placeholder="Film title…" wrikeFilmSync onItemClick={setCampaignFilm} />}
                   {activeTab === "clients"    && <SimpleListSection table="clients" labelField="name" label="Clients" quickFilters={STUDIO_GROUPS} quickFilterLabel="Filter by studio" />}
                   {activeTab === "categories" && <SimpleListSection table="job_categories" labelField="name" label="Item Categories" groups={CATEGORY_GROUPS} />}
+                  {/* Territory-prefixed like project descriptions, so it reuses
+                      their group chips rather than the Digital/Print ones. */}
+                  {activeTab === "work-categories" && <SimpleListSection table="job_work_categories" labelField="name" label="Job Work Categories" placeholder="e.g. AUS - Publicity…" groups={DESCRIPTION_GROUPS} />}
                   {activeTab === "descs"      && <SimpleListSection table="project_descriptions" labelField="description" label="Project Type Descriptions" isLong quickFilters={DESC_QUICK_FILTERS} quickFilterLabel="Filter by territory" groups={DESCRIPTION_GROUPS} />}
-                  {activeTab === "positions"  && <SimpleListSection table="positions" labelField="title" label="Positions" placeholder="e.g. Creative Director…" />}
-                  {activeTab === "translations" && <SimpleListSection table="translation_countries" labelField="name" label="Translation Countries" placeholder="e.g. France…" />}
+                  {activeTab === "rates"      && <PositionsAndRatesSection />}
+                  {activeTab === "translations" && <TranslationCountriesSection />}
                   {activeTab === "departments"  && <SimpleListSection table="job_departments" labelField="name" label="Departments" placeholder="e.g. Print…" />}
                   {activeTab === "orgchart"     && <OrgChart />}
                 </div>

@@ -187,6 +187,10 @@ function NoteEditor({
   placeholder = "Type “/” for commands, or just start writing…",
   className = "",
   wide = false,
+  // Read-only rendering: the note shows with all its formatting but can't be
+  // typed into, and the editing chrome (bubble menu, slash menu, drag handles)
+  // never appears. Used where a note belongs to someone else.
+  editable = true,
   collab = null, // { doc, provider, seed } — see RichNoteEditor below
   collabUser = null, // { name, color } — identifies this editor to peers
 }) {
@@ -263,6 +267,7 @@ function NoteEditor({
   }, []);
 
   const editor = useEditor({
+    editable,
     extensions: [
       // StarterKit v3 already bundles Underline and Link — configure Link here
       // rather than re-adding the extensions (which triggers duplicate-name
@@ -388,7 +393,9 @@ function NoteEditor({
       pendingSaveRef.current = payload;
       saveTimerRef.current = setTimeout(() => {
         pendingSaveRef.current = null;
-        onChangeRef.current(...payload());
+        // Optional: a read-only editor has no onChange, and a programmatic
+        // content change shouldn't throw its way out of a timer.
+        onChangeRef.current?.(...payload());
       }, collab ? 1500 : 800);
     },
     onSelectionUpdate: ({ editor }) => { checkSlash(editor); updateBubble(editor); },
@@ -431,7 +438,7 @@ function NoteEditor({
     if (pendingSaveRef.current) {
       const payload = pendingSaveRef.current;
       pendingSaveRef.current = null;
-      try { onChangeRef.current(...payload()); } catch { /* editor already gone — nothing to flush */ }
+      try { onChangeRef.current?.(...payload()); } catch { /* editor already gone — nothing to flush */ }
     }
   }, []);
 
@@ -660,26 +667,26 @@ function NoteEditor({
       onContextMenu={onEditorContextMenu}
     >
       <style>{`
-        .rne-root .ProseMirror { outline: none; font-size: 16px; line-height: 1.7; color: #2a2620; max-width: var(--rne-measure, 46rem); margin-inline: auto; padding: 4px 24px 48px; transition: max-width 0.2s ease; }
+        .rne-root .ProseMirror { outline: none; font-size: 16px; line-height: 1.7; color: var(--rne-fg); max-width: var(--rne-measure, 46rem); margin-inline: auto; padding: 4px 24px 48px; transition: max-width 0.2s ease; }
         @media (min-width: 640px) { .rne-root .ProseMirror { padding: 4px 48px 48px; } }
         .rne-root h2 { font-size: 1.55rem; font-weight: 750; letter-spacing: -0.01em; margin: 0 0 10px; }
         .rne-root h3 { font-size: 1.28rem; font-weight: 750; letter-spacing: -0.01em; margin: 18px 0 8px; }
         .rne-root p { margin: 0 0 12px; }
-        .rne-root .ProseMirror p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; color: #cdc5b7; pointer-events: none; height: 0; }
+        .rne-root .ProseMirror p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; color: var(--rne-faint); pointer-events: none; height: 0; }
         .rne-root ul, .rne-root ol { padding-left: 22px; margin: 0 0 12px; }
         .rne-root ul { list-style: disc outside; }
         .rne-root ol { list-style: decimal outside; }
         .rne-root li { margin-bottom: 5px; }
-        .rne-root li::marker { color: #8a8073; }
-        .rne-root blockquote { border-left: 3px solid var(--rne-accent); margin: 0 0 12px; padding: 2px 0 2px 14px; color: #8a8073; font-style: italic; }
-        .rne-root pre { background: #22201c; color: #f2ece2; border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: 0 0 12px; font-size: 13px; }
+        .rne-root li::marker { color: var(--rne-muted); }
+        .rne-root blockquote { border-left: 3px solid var(--rne-accent); margin: 0 0 12px; padding: 2px 0 2px 14px; color: var(--rne-muted); font-style: italic; }
+        .rne-root pre { background: var(--rne-code-bg); color: var(--rne-code-fg); border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: 0 0 12px; font-size: 13px; }
         .rne-root code { background: color-mix(in srgb, var(--rne-accent) 10%, transparent); color: var(--rne-accent); border-radius: 4px; padding: 1px 5px; font-size: 13px; font-family: ui-monospace, monospace; }
         .rne-root pre code { background: none; color: inherit; padding: 0; }
         .rne-root ul[data-type="taskList"] { list-style: none; padding-left: 2px; }
         .rne-root ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 8px; }
         .rne-root ul[data-type="taskList"] li > label { margin-top: 3px; }
         .rne-root ul[data-type="taskList"] input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--rne-accent); cursor: pointer; }
-        .rne-root hr { border: none; border-top: 1px solid #ece4d8; margin: 18px 0; }
+        .rne-root hr { border: none; border-top: 1px solid var(--rne-rule); margin: 18px 0; }
         .rne-root img.rne-img { max-width: 100%; height: auto; border-radius: 10px; margin: 4px 0 14px; display: block; cursor: pointer; }
         /* Collaborator carets. The name hangs BELOW the cursor and stays put —
            above-on-hover meant you had to go find a cursor and hover it to learn
@@ -692,12 +699,12 @@ function NoteEditor({
         .rne-root .ProseMirror { caret-color: var(--rne-accent); }
         .rne-root .rne-drag-handle-icon {
           width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
-          background: #fff; border: 1px solid #ece4d8; color: #a79f93; border-radius: 7px;
+          background: var(--rne-surface); border: 1px solid var(--rne-rule); color: var(--rne-muted); border-radius: 7px;
           box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: color 0.12s, border-color 0.12s;
         }
         .rne-root .rne-drag-handle:hover .rne-drag-handle-icon,
         .rne-root .rne-drag-handle:active .rne-drag-handle-icon {
-          color: var(--rne-accent); border-color: color-mix(in srgb, var(--rne-accent) 40%, #ece4d8);
+          color: var(--rne-accent); border-color: color-mix(in srgb, var(--rne-accent) 40%, var(--rne-rule));
         }
       `}</style>
       <EditorContent editor={editor} />
@@ -715,7 +722,7 @@ function NoteEditor({
         document.body
       )}
 
-      {dragHandle && createPortal(
+      {editable && dragHandle && createPortal(
         // The whole gutter column for this row is the drag target — not just
         // the visible icon — so starting a drag doesn't require pinpointing a
         // 26px square. The icon is centered inside via flex, so it always
@@ -738,11 +745,11 @@ function NoteEditor({
         document.body
       )}
 
-      {bubble && createPortal(
+      {editable && bubble && createPortal(
         <div
           style={{
             position: "fixed", top: bubble.top, left: bubble.left, transform: "translate(-50%, calc(-100% - 8px))",
-            display: "flex", alignItems: "center", gap: 2, background: "#fff", border: "1px solid #ece4d8",
+            display: "flex", alignItems: "center", gap: 2, background: "var(--rne-surface)", border: "1px solid var(--rne-rule)",
             borderRadius: 11, boxShadow: "0 10px 28px -12px rgba(0,0,0,0.25)", padding: 5, zIndex: 150,
           }}
         >
@@ -770,7 +777,7 @@ function NoteEditor({
             { Icon: Quote, active: () => editor.isActive("blockquote"), run: () => editor.chain().focus().toggleBlockquote().run(), title: "Quote" },
           ].map((item, i) =>
             item === null ? (
-              <span key={`sep-${i}`} style={{ width: 1, height: 18, background: "#ece4d8", margin: "0 3px" }} />
+              <span key={`sep-${i}`} style={{ width: 1, height: 18, background: "var(--rne-rule)", margin: "0 3px" }} />
             ) : (
               <button
                 key={item.title}
@@ -781,7 +788,7 @@ function NoteEditor({
                   width: 28, height: 28, border: "none", borderRadius: 7, cursor: "pointer",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   background: item.active() ? "var(--rne-accent, #c2410d)" : "transparent",
-                  color: item.active() ? "#fff" : "#8a8073",
+                  color: item.active() ? "#fff" : "var(--rne-muted)",
                 }}
               >
                 <item.Icon size={15} />
@@ -794,7 +801,7 @@ function NoteEditor({
               onMouseDown={(e) => e.preventDefault()}
               style={{
                 position: "absolute", top: "calc(100% + 6px)", left: 0, display: "flex", flexWrap: "wrap", gap: 6,
-                background: "#fff", border: "1px solid #ece4d8", borderRadius: 10,
+                background: "var(--rne-surface)", border: "1px solid var(--rne-rule)", borderRadius: 10,
                 boxShadow: "0 10px 28px -12px rgba(0,0,0,0.25)", padding: 8, width: 172,
               }}
             >
@@ -810,11 +817,11 @@ function NoteEditor({
                   style={{
                     width: 22, height: 22, borderRadius: "50%", cursor: "pointer",
                     background: c.value || "#fff",
-                    border: c.value ? "1px solid rgba(0,0,0,0.08)" : "1px dashed #cdc5b7",
+                    border: c.value ? "1px solid rgba(0,0,0,0.08)" : "1px dashed var(--rne-faint)",
                     display: "flex", alignItems: "center", justifyContent: "center",
                   }}
                 >
-                  {!c.value && <span style={{ fontSize: 9, color: "#8a8073" }}>×</span>}
+                  {!c.value && <span style={{ fontSize: 9, color: "var(--rne-muted)" }}>×</span>}
                 </button>
               ))}
             </div>
@@ -823,16 +830,16 @@ function NoteEditor({
         document.body
       )}
 
-      {slash && createPortal(
+      {editable && slash && createPortal(
         <div
           style={{
-            position: "fixed", top: slash.top, left: slash.left, width: 210, background: "#fff",
-            border: "1px solid #ece4d8", borderRadius: 11, boxShadow: "0 10px 28px -12px rgba(0,0,0,0.25)",
+            position: "fixed", top: slash.top, left: slash.left, width: 210, background: "var(--rne-surface)",
+            border: "1px solid var(--rne-rule)", borderRadius: 11, boxShadow: "0 10px 28px -12px rgba(0,0,0,0.25)",
             padding: 6, zIndex: 150, display: "flex", flexDirection: "column", marginTop: 8,
           }}
         >
           {filteredSlash.length === 0 && (
-            <div style={{ padding: "8px 9px", fontSize: 12.5, color: "#cdc5b7" }}>No matching block</div>
+            <div style={{ padding: "8px 9px", fontSize: 12.5, color: "var(--rne-faint)" }}>No matching block</div>
           )}
           {filteredSlash.map((c, i) => (
             <div

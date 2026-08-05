@@ -49,6 +49,8 @@ import { useDepartment } from "./hooks/useDepartment";
 import { MANAGEMENT_IDS } from "./lib/access";
 import { setWrikeUserId } from "./lib/supabaseClient";
 import { startWrikeOAuth } from "./lib/wrikeApi";
+import { warmCountryFields } from "./lib/countryField";
+import { loadCountryAliases } from "./lib/countryAliases";
 
 // ── Route-level code splitting ───────────────────────────────────────────────
 // Every page except Home is its own chunk, so first paint only carries the
@@ -183,6 +185,16 @@ export default function App() {
     document.documentElement.classList.toggle("home-page", activePage === "home");
   }, [activePage]);
 
+  // Which custom field names a market, discovered once per session. Warmed here
+  // rather than per-page because the readers are synchronous and live in two
+  // different components (the Tracker's guessFieldsFromTask and Legacy's), and
+  // both are pinned or neither is. Costs one /customfields call; failing it is
+  // survivable — see lib/countryField.js.
+  useEffect(() => {
+    warmCountryFields();
+    loadCountryAliases();
+  }, []);
+
   // Reset scroll on page swap — AnimatePresence swaps the content but the
   // window scroll survives it, so navigating from deep in one page would
   // land mid-way down the next. The wash overlay (when present) hides the
@@ -262,6 +274,23 @@ export default function App() {
   // Which pages this member's department can reach (drives the command
   // palette's nav entries; Home and the Rail read the same registry).
   const department = useDepartment();
+
+  // pageFromHash validates against every page that EXISTS, not against the ones
+  // this member has — so a bookmark or a back-button entry for #timesheet would
+  // still render the Tracker for a department that no longer lists it.
+  //
+  // Kept narrow on purpose: a blanket "not in your department's pages → home"
+  // would also lock admins out of #management, which they reach without it
+  // being in any department list. And it waits for `department`, which is
+  // undefined until profiles loads — bouncing on that would send Motion home
+  // mid-load. Declared here rather than up with the other page effects because
+  // it reads `department`, which is a const above only from this line down.
+  useEffect(() => {
+    if (department && department !== "Motion" && activePage === "timesheet") {
+      window.location.hash = "";
+      setActivePage("home");
+    }
+  }, [department, activePage]);
 
   // Warm this member's page chunks once the browser is idle, so the first
   // click on a Home row resolves from cache instead of hitting the network

@@ -1,8 +1,42 @@
 /* --- THE SLEDGEHAMMER DARK MODE V4 --- */
 /* Applied to <html> via document.documentElement.classList.toggle("dark-theme") */
+/* Rich-note editor palette. Defined as custom properties because the editor's
+   floating overlays (bubble menu, slash menu, drag handle, colour picker) are
+   inline-styled and rendered through a portal — a class-based override can't
+   reach an inline style, but a custom property inherits from :root straight
+   through the portal. */
+:root {
+  --rne-fg: #2a2620;
+  --rne-muted: #8a8073;
+  --rne-faint: #cdc5b7;
+  --rne-rule: #ece4d8;
+  --rne-surface: #ffffff;
+  --rne-surface-hover: #f7f3ec;
+  --rne-code-bg: #22201c;
+  --rne-code-fg: #f2ece2;
+}
+html.dark-theme {
+  --rne-fg: #e2e8f0;
+  --rne-muted: #94a3b8;
+  --rne-faint: #64748b;
+  --rne-rule: #334155;
+  --rne-surface: #1e293b;
+  --rne-surface-hover: #334155;
+  --rne-code-bg: #0f172a;
+  --rne-code-fg: #e2e8f0;
+}
+
 html.dark-theme,
 html.dark-theme body {
   background-color: #0f172a !important;
+  /* Set a foreground too, not just a background. Without it, anything with no
+     explicit text-colour class — most notably every <input>, since preflight
+     gives them `color: inherit` — fell back to the UA default black and typed
+     invisibly on the dark surfaces below. */
+  color: #e2e8f0 !important;
+  /* Tells the browser to theme its own chrome: checkboxes, date pickers,
+     scrollbars and <select> popups were all rendering light. */
+  color-scheme: dark;
 }
 
 /* ── BACKGROUNDS ────────────────────────────────────────────── */
@@ -65,8 +99,16 @@ html.dark-theme body {
 .dark-theme .text-\[\#323b43\]  { color: #f8fafc  !important; }
 .dark-theme .text-slate-700    { color: #cbd5e1  !important; }
 .dark-theme .text-slate-600    { color: #94a3b8  !important; }
-.dark-theme .text-slate-500    { color: #64748b  !important; }
-.dark-theme .text-slate-400    { color: #475569  !important; }
+/* slate-400 used to map to #475569 — a LIGHT grey made DARKER for dark mode,
+   landing at 1.96:1 on #1e293b. It carries most secondary labels in the app
+   (section headings, empty states, the market codes in the country picker,
+   the board's "no team members yet"), so this single line was responsible
+   for more unreadable text than any other. slate-300 had no rule at all, so
+   the app's *quietest* tone rendered as its brightest. */
+.dark-theme .text-slate-500    { color: #94a3b8  !important; }
+.dark-theme .text-slate-400    { color: #94a3b8  !important; }
+.dark-theme .text-slate-300    { color: #64748b  !important; }
+.dark-theme .text-slate-200    { color: #475569  !important; }
 
 /* Team allocation text */
 .dark-theme .text-blue-700     { color: #60a5fa !important; }
@@ -112,15 +154,246 @@ html.dark-theme body {
 /* Dashed borders (ghost add-row row) */
 .dark-theme .border-dashed { border-color: #334155 !important; }
 
-/* ── SHADOWS → crisp borders ────────────────────────────────── */
+/* ── SHADOWS ────────────────────────────────────────────────── */
+/* This used to be `box-shadow: none; border: 1px solid #334155`, and both
+   halves did damage:
+     · Tailwind composes shadows as
+       `box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow)`,
+       so `box-shadow: none` silently deleted every `ring-*` as well — and
+       rings are how selected states are drawn all over this app (the open
+       Canvas tool tile, the selected studio card, your own note box, the
+       focused country field). All of them lost their only "this one" cue.
+     · The `border` SHORTHAND, with !important, beat every deliberate border
+       underneath it: coloured status pills, the rose "needs a country" field,
+       `border-b-0` seams. Everything collapsed to the same grey hairline.
+   Overriding only --tw-shadow keeps the ring layers of the composite intact,
+   and leaves author borders alone. */
 .dark-theme .shadow-sm,
 .dark-theme .shadow-md,
 .dark-theme .shadow-lg,
 .dark-theme .shadow-xl,
 .dark-theme .shadow-2xl {
-  box-shadow: none !important;
-  border: 1px solid #334155 !important;
+  --tw-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.55), 0 1px 2px -1px rgb(0 0 0 / 0.55) !important;
+  --tw-shadow-colored: 0 1px 3px 0 var(--tw-shadow-color), 0 1px 2px -1px var(--tw-shadow-color) !important;
 }
+.dark-theme .shadow-xl,
+.dark-theme .shadow-2xl {
+  --tw-shadow: 0 12px 32px -8px rgb(0 0 0 / 0.7) !important;
+  --tw-shadow-colored: 0 12px 32px -8px var(--tw-shadow-color) !important;
+}
+
+/* ── COVERAGE GAPS ──────────────────────────────────────────────
+   Everything below closes holes in the lists above. Three patterns caused
+   nearly all of them:
+
+   1. OPACITY VARIANTS. `bg-slate-50` was covered but `bg-slate-50/40` wasn't;
+      Tailwind emits a separate class per opacity, so each needs its own rule.
+   2. PASTEL PAIRS. The `bg-*-50` list and the `text-*-600/700` list were
+      written independently, so a tag whose background was covered but whose
+      text wasn't (or the reverse) inverted into light-on-light. Families are
+      now completed as pairs — background, text AND border together.
+   3. ARBITRARY HEXES. `bg-[#xxxxxx]` in JSX is invisible to a fixed override
+      list. These are the ones actually in use.
+   ─────────────────────────────────────────────────────────────── */
+
+/* Opacity variants of already-covered backgrounds */
+.dark-theme .bg-slate-100\/70  { background-color: #1b2536 !important; }
+.dark-theme .bg-slate-50\/40   { background-color: #162032 !important; }
+.dark-theme .bg-rose-50\/60    { background-color: #2a1e24 !important; }
+.dark-theme .bg-emerald-50\/50 { background-color: #16302a !important; }
+.dark-theme .bg-indigo-50\/30  { background-color: #1e2440 !important; }
+.dark-theme .bg-amber-50\/60   { background-color: #2a2313 !important; }
+.dark-theme .bg-rose-200\/50   { background-color: #3f2027 !important; }
+
+/* Pastel families completed as pairs. Tints stay dark enough to read light
+   text on; the matching text tones are lifted to their 300/400 shades. */
+.dark-theme .bg-amber-50,
+.dark-theme .bg-amber-100   { background-color: #2f2613 !important; }
+.dark-theme .bg-violet-50,
+.dark-theme .bg-violet-100  { background-color: #241f3d !important; }
+.dark-theme .bg-teal-50,
+.dark-theme .bg-teal-100    { background-color: #10302e !important; }
+.dark-theme .bg-sky-50,
+.dark-theme .bg-sky-100     { background-color: #12283c !important; }
+.dark-theme .bg-red-50,
+.dark-theme .bg-red-100     { background-color: #331b1b !important; }
+.dark-theme .bg-green-50,
+.dark-theme .bg-green-100   { background-color: #14301f !important; }
+.dark-theme .bg-yellow-100  { background-color: #2f2613 !important; }
+.dark-theme .bg-rose-100    { background-color: #3f2027 !important; }
+.dark-theme .bg-emerald-100 { background-color: #16302a !important; }
+.dark-theme .bg-indigo-100  { background-color: #1e2440 !important; }
+.dark-theme .bg-blue-100    { background-color: #17293f !important; }
+.dark-theme .bg-purple-100  { background-color: #251f3d !important; }
+
+.dark-theme .text-amber-600,
+.dark-theme .text-amber-700,
+.dark-theme .text-amber-800,
+.dark-theme .text-amber-900   { color: #fbbf24 !important; }
+.dark-theme .text-violet-600,
+.dark-theme .text-violet-700  { color: #c4b5fd !important; }
+.dark-theme .text-sky-600,
+.dark-theme .text-sky-700     { color: #7dd3fc !important; }
+.dark-theme .text-teal-700    { color: #2dd4bf !important; }
+.dark-theme .text-red-600,
+.dark-theme .text-red-700     { color: #fca5a5 !important; }
+.dark-theme .text-green-600,
+.dark-theme .text-green-700   { color: #86efac !important; }
+.dark-theme .text-emerald-800,
+.dark-theme .text-emerald-900 { color: #6ee7b7 !important; }
+.dark-theme .text-rose-700    { color: #fb7185 !important; }
+.dark-theme .text-indigo-700  { color: #a5b4fc !important; }
+
+/* Pastel borders — these stayed light while their fills went dark, ringing
+   every badge and banner in a pale outline. */
+.dark-theme .border-amber-200,
+.dark-theme .border-amber-300,
+.dark-theme .border-emerald-100,
+.dark-theme .border-emerald-200,
+.dark-theme .border-rose-100,
+.dark-theme .border-rose-200,
+.dark-theme .border-violet-200,
+.dark-theme .border-teal-200,
+.dark-theme .border-sky-200,
+.dark-theme .border-red-200,
+.dark-theme .border-green-200,
+.dark-theme .border-blue-200,
+.dark-theme .border-purple-100,
+.dark-theme .border-purple-200,
+.dark-theme .border-cyan-200,
+.dark-theme .border-yellow-200 { border-color: #3f4a5f !important; }
+
+/* Side-scoped borders: the bare `border-[#dce4ec]` was covered, these weren't,
+   so rows kept a near-white frame on three sides. */
+.dark-theme .border-y-\[\#dce4ec\],
+.dark-theme .border-x-\[\#dce4ec\],
+.dark-theme .border-t-\[\#dce4ec\],
+.dark-theme .border-r-\[\#dce4ec\],
+.dark-theme .border-b-\[\#dce4ec\],
+.dark-theme .border-l-\[\#dce4ec\],
+.dark-theme .border-\[\#f0f4f8\],
+.dark-theme .border-\[\#eef2f6\],
+.dark-theme .border-\[\#eef1f5\],
+.dark-theme .border-\[\#f1f5f9\],
+.dark-theme .border-\[\#ece4d8\],
+.dark-theme .border-\[\#f0e9df\],
+.dark-theme .border-slate-200\/60 { border-color: #334155 !important; }
+.dark-theme .divide-\[\#f0f4f8\] > * + * { border-color: #334155 !important; }
+
+/* Hover states. A missing hover rule is worse than a missing resting one:
+   the element goes light exactly as you point at it, while its text has
+   already been remapped to near-white. */
+.dark-theme .hover\:bg-slate-100:hover,
+.dark-theme .hover\:bg-slate-200:hover,
+.dark-theme .hover\:bg-\[\#dce4ec\]:hover,
+.dark-theme .hover\:bg-\[\#f2f6f9\]:hover,
+.dark-theme .hover\:bg-\[\#edf5fb\]:hover,
+.dark-theme .hover\:bg-\[\#f8fafc\]:hover,
+.dark-theme .hover\:bg-slate-50\/60:hover,
+.dark-theme .hover\:bg-slate-50\/80:hover { background-color: #334155 !important; }
+.dark-theme .hover\:bg-emerald-100:hover,
+.dark-theme .hover\:bg-rose-100:hover,
+.dark-theme .hover\:bg-amber-100:hover   { background-color: #3f4a5f !important; }
+.dark-theme .hover\:border-slate-300:hover { border-color: #475569 !important; }
+.dark-theme .hover\:text-\[\#5a5147\]:hover { color: #e2e8f0 !important; }
+
+/* Arbitrary hexes in use across the app that no rule reached. Grouped by what
+   they are rather than by file, since most appear in several places. */
+/* — surfaces that were near-white — */
+.dark-theme .bg-\[\#f2f6f9\],
+.dark-theme .bg-\[\#fbfdff\],
+.dark-theme .bg-\[\#f4faf8\],
+.dark-theme .bg-\[\#f0fbf7\],
+.dark-theme .bg-\[\#edf5fb\],
+.dark-theme .bg-\[\#faf7f2\],
+.dark-theme .bg-\[\#ece4d8\]  { background-color: #1e293b !important; }
+.dark-theme .bg-\[\#dcf3ec\],
+.dark-theme .bg-\[\#dce4ec\],
+.dark-theme .bg-\[\#d5cdbf\]  { background-color: #334155 !important; }
+/* — surfaces that were ALREADY dark, and became indistinguishable holes — */
+.dark-theme .bg-\[\#122027\],
+.dark-theme .bg-\[\#1b202a\],
+.dark-theme .bg-\[\#19202b\]  { background-color: #334155 !important; }
+/* — foregrounds that stayed dark on newly-dark surfaces — */
+.dark-theme .text-\[\#221f1a\],
+.dark-theme .text-\[\#3a352e\],
+.dark-theme .text-\[\#33454f\],
+.dark-theme .text-\[\#3a4753\]  { color: #e2e8f0 !important; }
+.dark-theme .text-\[\#8a8073\],
+.dark-theme .text-\[\#a79f93\],
+.dark-theme .text-\[\#b0a89a\],
+.dark-theme .text-\[\#5a5147\],
+.dark-theme .text-\[\#b0bec5\],
+.dark-theme .text-\[\#94a3b8\],
+.dark-theme .text-\[\#c2d0da\],
+.dark-theme .text-\[\#cdc5b7\]  { color: #94a3b8 !important; }
+/* — brand accents: legible as a fill, far too dark as text on #1e293b — */
+.dark-theme .text-\[\#c2410d\],
+.dark-theme .text-\[\#9a3412\]  { color: #fb923c !important; }
+.dark-theme .text-\[\#8a6d1a\]  { color: #fbbf24 !important; }
+.dark-theme .text-\[\#0f766e\]  { color: #5eead4 !important; }
+.dark-theme .hover\:text-\[\#9a3412\]:hover { color: #fdba74 !important; }
+
+/* Inputs. Preflight gives them `color: inherit`; the base rule above now sets
+   a foreground, but inputs that hardcode a light-mode colour still need it,
+   and placeholders were mapped almost to the background. */
+.dark-theme input::placeholder,
+.dark-theme textarea::placeholder { color: #64748b !important; }
+.dark-theme .placeholder-\[\#b0bec5\]::placeholder,
+.dark-theme .placeholder\:text-\[\#768994\]::placeholder { color: #64748b !important; }
+
+/* Scrollbars: the light thumb was hardcoded, and there is already a
+   .scrollbar-thin-dark for exactly this. */
+.dark-theme .scrollbar-thin::-webkit-scrollbar-thumb { background-color: #475569 !important; }
+.dark-theme .scrollbar-thin::-webkit-scrollbar-track { background-color: transparent !important; }
+
+/* Links inside campaign notes (written as raw HTML — see parseFormatting). */
+.rne-note-link { color: #c2410d; text-decoration: underline; font-weight: 700; }
+.dark-theme .rne-note-link { color: #fb923c; }
+.dark-theme .wrike-matrix-render a { color: #fb923c !important; }
+
+/* ── HOVER / FOCUS TEXT STATES ──────────────────────────────────
+   The base colour overrides above have to be !important to beat Tailwind's
+   own utilities — but that also made them beat every NON-important `hover:`
+   and `group-hover:` variant sitting on the same element. So a menu row whose
+   title turns white on hover kept its subtitle stubbornly grey: the title only
+   looked right because its override (#f8fafc) happens to be near-white
+   already, while the subtitle's (#94a3b8) is mid-grey.
+
+   Re-asserting the state variants with an extra class in the selector
+   (.group:hover, or :hover on the element itself) outranks the two-class base
+   rules, so hover wins again — in dark mode as it does in light.
+   ─────────────────────────────────────────────────────────────── */
+
+/* Rows that wash to a gradient on hover: their text must go white and stay
+   white, at every opacity the app uses. */
+.dark-theme .group:hover .group-hover\:text-white,
+.dark-theme .group:focus .group-focus\:text-white,
+.dark-theme .hover\:text-white:hover            { color: #ffffff !important; }
+.dark-theme .group:hover .group-hover\:text-white\/85,
+.dark-theme .group:hover .group-hover\:text-white\/80,
+.dark-theme .group:focus .group-focus\:text-white\/80,
+.dark-theme .hover\:text-white\/80:hover        { color: rgba(255,255,255,0.85) !important; }
+.dark-theme .group:hover .group-hover\:text-white\/60 { color: rgba(255,255,255,0.6) !important; }
+.dark-theme .group:hover .group-hover\:text-white\/40 { color: rgba(255,255,255,0.45) !important; }
+
+/* Accent hovers, lifted to the same shades the resting overrides use. */
+.dark-theme .group:hover .group-hover\:text-\[\#12a0e1\],
+.dark-theme .hover\:text-\[\#12a0e1\]:hover,
+.dark-theme .hover\:text-\[\#0d8bc4\]:hover     { color: #38bdf8 !important; }
+.dark-theme .group:hover .group-hover\:text-\[\#c2410d\],
+.dark-theme .hover\:text-\[\#c2410d\]:hover     { color: #fb923c !important; }
+.dark-theme .hover\:text-\[\#1cc1a5\]:hover     { color: #2dd4bf !important; }
+.dark-theme .hover\:text-rose-500:hover,
+.dark-theme .hover\:text-rose-600:hover         { color: #fb7185 !important; }
+
+/* Neutral hovers. In light mode these darken toward the ink; in dark mode the
+   equivalent gesture is to brighten, so they're inverted rather than copied. */
+.dark-theme .group:hover .group-hover\:text-slate-600,
+.dark-theme .hover\:text-slate-500:hover,
+.dark-theme .hover\:text-slate-600:hover,
+.dark-theme .hover\:text-slate-700:hover        { color: #e2e8f0 !important; }
+.dark-theme .hover\:text-slate-300:hover        { color: #cbd5e1 !important; }
 
 /* ── LEGACY TIMESHEET TABLE ─────────────────────────────────── */
 /* Table header row bg-slate-800 is fine dark already */

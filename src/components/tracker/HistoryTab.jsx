@@ -4,7 +4,9 @@ import {
   Clock, FolderInput, FileText, Check, X, Save, Plus,
 } from "lucide-react";
 import SearchableSelect from "../shared/SearchableSelect";
-import { TERRITORIES, TERRITORY_FLAGS, CATEGORIES } from "../../constants";
+import MultiCountrySelect from "../shared/MultiCountrySelect";
+import { territoryFlags } from "../../utils/territories";
+import { CATEGORIES } from "../../constants";
 import { formatTimerDisplay, getTimesheetValue } from "../../utils/timeHelpers";
 import { getBorderColorClass } from "../../utils/tagStyles";
 
@@ -115,7 +117,7 @@ export default function HistoryTab({
             <div className="bg-slate-50 px-5 py-4 border-b border-[#dce4ec] space-y-3 relative z-30">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <SearchableSelect options={jobOptions} value={editGroupForm.jobNumber} onChange={(v) => setEditGroupForm({ ...editGroupForm, jobNumber: v })} placeholder="Search Job String..." icon={Film} isGrouped={true} dropdownId="hist-job" activeDropdown={activeDropdown} setActiveDropdown={setActiveDropdown} />
-                <SearchableSelect options={TERRITORIES} value={editGroupForm.territory} onChange={(v) => setEditGroupForm({ ...editGroupForm, territory: v })} placeholder="Search Territory..." getPrefix={(val) => TERRITORY_FLAGS[val]} dropdownId="hist-territory" activeDropdown={activeDropdown} setActiveDropdown={setActiveDropdown} />
+                <MultiCountrySelect value={editGroupForm.territory} onChange={(v) => setEditGroupForm({ ...editGroupForm, territory: v })} placeholder="Pick countries..." variant="form" dropdownId="hist-territory" activeDropdown={activeDropdown} setActiveDropdown={setActiveDropdown} needsAttention />
                 <SearchableSelect options={CATEGORIES} value={editGroupForm.category} onChange={(v) => setEditGroupForm({ ...editGroupForm, category: v })} placeholder="Search Category..." icon={Tag} isGrouped={true} alignRight={true} dropdownId="hist-category" activeDropdown={activeDropdown} setActiveDropdown={setActiveDropdown} />
               </div>
               <div className="flex justify-end gap-2 pt-2">
@@ -130,8 +132,8 @@ export default function HistoryTab({
           {/* Group metadata row */}
           <div className="bg-[#f8fafc] px-5 py-2.5 border-b border-[#dce4ec] flex flex-wrap items-center gap-2 text-[10px] font-black text-[#12a0e1] uppercase tracking-widest">
             <span className={`flex items-center gap-1.5 bg-[#12a0e1]/10 px-2.5 py-1 rounded ${group.territory === "⚠️ Unassigned" ? "text-rose-500 bg-rose-50" : ""}`}>
-              {TERRITORY_FLAGS[group.territory] ? <span className="text-[12px] leading-none">{TERRITORY_FLAGS[group.territory]}</span> : <Globe className="w-3.5 h-3.5" />}
-              {group.territory}
+              {territoryFlags(group.territory, 6) ? <span className="text-[12px] leading-none">{territoryFlags(group.territory, 6)}</span> : <Globe className="w-3.5 h-3.5" />}
+              <span className="truncate max-w-[260px]" title={group.territory}>{group.territory}</span>
             </span>
             <span className={`flex items-center gap-1 bg-[#12a0e1]/10 px-2 py-1 rounded truncate max-w-[300px] ${group.category === "⚠️ Unassigned" ? "text-rose-500 bg-rose-50" : ""}`}>
               <Tag className="w-3 h-3" /> {group.category}

@@ -86,7 +86,10 @@ create table public.campaign_eoc_notes (
   campaign_id text not null,
   content text not null default ''::text,
   updated_at timestamp with time zone default now(),
-  department text not null default 'Motion'::text
+  department text not null default 'Motion'::text,
+  -- profiles.wrike_user_id of the writer. '' = the shared team note that
+  -- predates per-member notes (see 20260804170000).
+  author_id text not null default ''::text
 );
 
 create table public.campaign_links (
@@ -188,10 +191,22 @@ create table public.films (
 create table public.job_categories (
   id bigint generated always as identity not null,
   name text not null,
-  created_at timestamp with time zone default now()
+  created_at timestamp with time zone default now(),
+  -- Bill this category at another position's rate (null = the logger's own
+  -- position); unbilled categories never bill at all.
+  rate_position_id bigint,
+  unbilled boolean not null default false
 );
 
 create table public.job_departments (
+  id bigint generated always as identity not null,
+  name text not null,
+  created_at timestamp with time zone default now()
+);
+
+-- The job-level work category (AUS - Publicity, …). Separate list from
+-- job_categories, which holds the per-timesheet-line Item Categories.
+create table public.job_work_categories (
   id bigint generated always as identity not null,
   name text not null,
   created_at timestamp with time zone default now()
@@ -224,7 +239,8 @@ create table public.jobs (
 create table public.positions (
   id bigint generated always as identity not null,
   title text not null,
-  created_at timestamp with time zone default now()
+  created_at timestamp with time zone default now(),
+  hourly_rate numeric(10,2) default 150
 );
 
 create table public.profiles (
@@ -336,7 +352,7 @@ create table public.board_now (
 -- ---------------------------------------------------------------------------
 alter table public.board_now add constraint board_now_pkey primary key (wrike_user_id, task_id);
 alter table public.board_now replica identity full;  -- realtime DELETEs must carry department for the client's dept filter
-alter table public.campaign_eoc_notes add constraint campaign_eoc_notes_pkey primary key (campaign_id, department);
+alter table public.campaign_eoc_notes add constraint campaign_eoc_notes_pkey primary key (campaign_id, department, author_id);
 alter table public.campaign_links add constraint campaign_links_pkey primary key (id);
 alter table public.campaign_meta add constraint campaign_meta_pkey primary key (campaign_id);
 alter table public.canvas_covers add constraint canvas_covers_pkey primary key (id);
@@ -355,8 +371,11 @@ alter table public.films add constraint films_pkey primary key (id);
 alter table public.films add constraint films_title_key unique (title);
 alter table public.job_categories add constraint job_categories_pkey primary key (id);
 alter table public.job_categories add constraint job_categories_name_key unique (name);
+alter table public.job_categories add constraint job_categories_rate_position_id_fkey foreign key (rate_position_id) references positions(id) on delete set null;
 alter table public.job_departments add constraint job_departments_pkey primary key (id);
 alter table public.job_departments add constraint job_departments_name_key unique (name);
+alter table public.job_work_categories add constraint job_work_categories_pkey primary key (id);
+alter table public.job_work_categories add constraint job_work_categories_name_key unique (name);
 alter table public.jobs add constraint jobs_pkey primary key (id);
 alter table public.jobs add constraint jobs_job_number_key unique (job_number);
 alter table public.jobs add constraint jobs_status_check check ((status = ANY (ARRAY['Inactive'::text, 'Active'::text, 'Closed'::text])));
@@ -423,6 +442,7 @@ alter table public.dooh_folders enable row level security;
 alter table public.films enable row level security;
 alter table public.job_categories enable row level security;
 alter table public.job_departments enable row level security;
+alter table public.job_work_categories enable row level security;
 alter table public.jobs enable row level security;
 alter table public.positions enable row level security;
 alter table public.profiles enable row level security;
@@ -455,10 +475,15 @@ create policy "anon all" on public.dooh_folders as permissive for all to authent
 create policy "auth_all" on public.films as permissive for all to authenticated using (true) with check (true);
 create policy "auth_all" on public.job_categories as permissive for all to authenticated using (true) with check (true);
 create policy "auth_all" on public.job_departments as permissive for all to public using (true) with check (true);
+create policy "auth_all" on public.job_work_categories as permissive for all to authenticated using (true) with check (true);
 create policy "auth_all" on public.jobs as permissive for all to authenticated using (true) with check (true);
 create policy "auth_all" on public.positions as permissive for all to authenticated using (true) with check (true);
 create policy "profiles_read" on public.profiles as permissive for select to authenticated using (true);
-create policy "profiles_write" on public.profiles as permissive for all to authenticated using ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)));
+-- Self-write (the path that stamps wrike_user_id at first login) plus the
+-- management ids, which need to edit other people's department/position and to
+-- run the Sync-from-Wrike upsert. Keep the id list in step with MANAGEMENT_IDS
+-- in src/lib/access.js.
+create policy "profiles_write" on public.profiles as permissive for all to authenticated using ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)) or (((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text) in ('KUAWDLVN', 'KUAQT4JC'))) with check ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)) or (((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text) in ('KUAWDLVN', 'KUAQT4JC')));
 create policy "auth_all" on public.project_descriptions as permissive for all to authenticated using (true) with check (true);
 create policy "wrike_user_isolation" on public.tasks as permissive for all to public using ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text))) with check ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)));
 create policy "auth_all" on public.translation_countries as permissive for all to public using (true) with check (true);

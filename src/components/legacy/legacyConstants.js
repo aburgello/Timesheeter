@@ -24,9 +24,12 @@ export const DAYS = [
   "Sunday",
 ];
 
+// 0.25 steps: some jobs on the timesheet site (the UK-folder ones) accept
+// quarter hours, so a manual pick has to be able to say 0.25. Jobs that only
+// take half hours are snapped back up by the bookmarklet when the row is filled.
 export const TIME_OPTIONS = [
   "none",
-  ...Array.from({ length: 48 }, (_, i) => ((i + 1) * 0.5).toString()),
+  ...Array.from({ length: 96 }, (_, i) => ((i + 1) * 0.25).toString()),
 ];
 
 // --- HELPER: Dark Mode Dynamic Status Tags --
