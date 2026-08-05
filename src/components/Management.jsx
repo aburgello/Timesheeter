@@ -119,6 +119,14 @@ function findNavItem(id) {
   return null;
 }
 
+// The open item as read from `#management/<section>`. Validated against
+// NAV_GROUPS, so a stale or hand-edited link lands on the hub rather than on a
+// panel that renders nothing.
+const sectionFromHash = () => {
+  const [page, section] = window.location.hash.slice(1).split("/");
+  return page === "management" && section && findNavItem(section) ? section : null;
+};
+
 // ── Project Description quick-filter chips ────────────────────────────────────
 // keyword uses "<CODE> " (with trailing space) so "UK Something" matches but
 // hypothetical "BULK" wouldn't. Gradients mirror DESCRIPTION_GROUPS.
@@ -5614,7 +5622,9 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
   // activeTab is the real navigation: null means "still on the hub"
   // (accordion open or not), a value means "showing that item's content".
   const [expandedGroup, setExpandedGroup] = useState(null);
-  const [activeTab, setActiveTab] = useState(null);
+  // Seeded from the hash so a refresh or a shared link opens straight onto the
+  // section instead of dropping you back on the hub.
+  const [activeTab, setActiveTab] = useState(sectionFromHash);
   // Film whose bulk campaign is open in a modal (from the Films tab).
   const [campaignFilm, setCampaignFilm] = useState(null);
   // Tracks which way the content panel should slide: forward opening an
@@ -5622,21 +5632,48 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
   const [navDirection, setNavDirection] = useState(1);
 
   const toggleGroup = (id) => setExpandedGroup((g) => (g === id ? null : id));
-  const openItem = (id) => { setNavDirection(1); setActiveTab(id); };
+
+  // The open item lives in the hash's second segment (`#management/films`), so
+  // it's a history entry of its own: back leaves an item for the hub instead of
+  // leaving Administration altogether, and a section can be linked to. App.jsx
+  // reads only the first segment, so it stays on "management" throughout.
+  const setSectionHash = (id, replace) => {
+    const hash = id ? `#management/${id}` : "#management";
+    if (window.location.hash === hash) return;
+    if (replace) window.history.replaceState({}, "", hash);
+    else window.history.pushState({}, "", hash);
+  };
+
+  const openItem = (id) => { setNavDirection(1); setActiveTab(id); setSectionHash(id); };
   // The accordion stays exactly as it was — going back doesn't collapse
   // the group you were just looking at.
-  const backToHub = () => { setNavDirection(-1); setActiveTab(null); };
+  const backToHub = () => { setNavDirection(-1); setActiveTab(null); setSectionHash(null); };
   // Same, but guarantees the group is open on arrival. Identical to backToHub
   // when you drilled in through the accordion; the difference shows on a deep
   // link (sessionStorage openAdminSection), where no group was ever expanded.
-  const backToGroup = (groupId) => { setNavDirection(-1); setExpandedGroup(groupId); setActiveTab(null); };
+  const backToGroup = (groupId) => { setNavDirection(-1); setExpandedGroup(groupId); setActiveTab(null); setSectionHash(null); };
+
+  // Back/forward between sections. The browser has already changed the hash by
+  // the time this fires, so it only mirrors — never writes history back.
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = sectionFromHash();
+      setNavDirection(next ? 1 : -1);
+      setActiveTab(next);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   // One-shot deep link: another page (e.g. Jobs Setup's "Manage films") can stash
   // a section id before switching to #management, and we open it straight away.
   useEffect(() => {
     let target = null;
     try { target = sessionStorage.getItem("openAdminSection"); sessionStorage.removeItem("openAdminSection"); } catch { /* ignore */ }
-    if (target) openItem(target);
+    // replace, not push: the entry the caller created by setting #management is
+    // the one that should carry the section, otherwise Back lands on an empty
+    // Administration hub the user never actually visited.
+    if (target) { setNavDirection(1); setActiveTab(target); setSectionHash(target, true); }
   }, []);
 
   // Administration is a first-class page for PMs; the hardcoded allowlist
