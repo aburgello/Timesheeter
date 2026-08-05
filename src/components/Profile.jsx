@@ -296,6 +296,48 @@ function Empty({ icon: Icon, message }) {
 // place with no opacity fade on the type (see the useGSAP block in Profile).
 // ── Wrike task card — mirrors the RecentJobsModal style ───────────────────────
 
+// The single row vocabulary for anything task-shaped on this page — a Wrike job
+// under Completed, a timesheet entry under History. White card, a 4px identity
+// edge on the left, one line, and the same hover the rest of the app uses.
+//
+// It exists because the two lists had drifted into looking like different
+// products: the job rows followed the rule stated below (one coloured element,
+// everything else muted) while the history rows had grown a bordered category
+// pill, a blue duration, a teal supplementary duration and italic notes — four
+// decorations in three unrelated hues, which is exactly what the rule was
+// written to prevent.
+//
+// `interactive` drives the gradient sweep. Rows that actually go somewhere get
+// HubRow's wash; rows that don't get a quiet tint instead, because a sweep that
+// promises navigation and delivers nothing is worse than no hover.
+//
+// Deeper gradient stops than HubRow's own: those are tuned for white type at
+// display size (3:1), and these rows are 15px, which is normal text needing
+// 4.5:1. On the stock gradient white lands at 2.94:1 (blue) / 2.28:1 (teal),
+// and the meta sits at the teal end — the worst of it. These are the same hue
+// family at 5.5:1 / 5.3:1.
+function TaskRow({ edgeClass, dimmed, onClick, cascadeRef, children }) {
+  const interactive = !!onClick;
+  return (
+    <div
+      ref={cascadeRef}
+      onClick={onClick}
+      className={`group relative overflow-hidden flex items-center gap-3 px-4 py-3 border-y border-r border-l-4 rounded-xl bg-white border-y-[#dce4ec] border-r-[#dce4ec] ${edgeClass} ${
+        dimmed ? "opacity-60" : ""
+      } ${
+        interactive
+          ? "cursor-pointer"
+          : "transition-colors duration-300 hover:bg-slate-50/80"
+      }`}
+    >
+      {interactive && (
+        <div className="absolute inset-0 bg-gradient-to-r from-[#12a0e1] to-[#1cc1a5] origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-out" />
+      )}
+      {children}
+    </div>
+  );
+}
+
 function WrikeTaskCard({ task, filter, onClick, cascadeRef }) {
   const statusName = task.customStatusName || task.status;
   const borderColor = getBorderColorClass(statusName);
@@ -305,27 +347,7 @@ function WrikeTaskCard({ task, filter, onClick, cascadeRef }) {
   const dueStr = fmtDate(task.dueDate);
 
   return (
-    <div
-      ref={cascadeRef}
-      onClick={onClick}
-      className={`group relative overflow-hidden flex items-center gap-3 px-4 py-3 border-y border-r border-l-4 rounded-xl bg-white border-y-[#dce4ec] border-r-[#dce4ec] ${borderColor} ${
-        isMatrix ? "opacity-60" : ""
-      } ${
-        onClick
-          ? "cursor-pointer"
-          : ""
-      }`}
-    >
-      {/* The app's one hover idiom, borrowed from HubRow: a gradient sweep from
-          the left in the section's own colours — deepened here.
-          HubRow's own #12a0e1→#1cc1a5 is tuned for white type at DISPLAY size
-          (large text, 3:1); these rows are 15px, which is normal text and needs
-          4.5:1. On the stock gradient white lands at 2.94:1 (blue) / 2.28:1
-          (teal) — and the dates sit at the teal end, the worst of it. These
-          deeper stops are the same hue family at 5.5:1 / 5.3:1. */}
-      {onClick && (
-        <div className="absolute inset-0 bg-gradient-to-r from-[#12a0e1] to-[#1cc1a5] origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-out" />
-      )}
+    <TaskRow edgeClass={borderColor} dimmed={isMatrix} onClick={onClick} cascadeRef={cascadeRef}>
       {/* One row: title leads, status + dates ride the right edge. Stacking
           them cost ~100px of height per job for ~15 characters of content —
           with most campaigns holding a single job, the list was mostly air. */}
@@ -366,7 +388,7 @@ function WrikeTaskCard({ task, filter, onClick, cascadeRef }) {
           {dueStr && <span>Due {dueStr}</span>}
         </div>
       </div>
-    </div>
+    </TaskRow>
   );
 }
 
@@ -1237,51 +1259,47 @@ function HistorySection({ tasks }) {
                   {rows.map((t, i) => {
                     const dc = DAY_COLORS[t.dayOfWeek] || DEFAULT_DAY;
                     return (
-                      <div
-                        key={t.id}
-                        ref={getCascadeRef(t.id, i)}
-                        className={`flex items-center gap-3 px-4 py-2.5 border-y border-r border-l-4 rounded-xl bg-white border-y-[#dce4ec] border-r-[#dce4ec] ${dc.border}`}
-                      >
-                        {/* Title + inline meta, single row like the
-                            Completed job cards — the date stamp this used to
-                            carry is redundant now that the whole card is
-                            grouped under a dated header. */}
-                        <div className="flex-1 min-w-0 flex items-baseline gap-2.5">
-                          <p className="font-display font-bold tracking-tight text-[15px] text-[#122027] truncate">
-                            {t.jobNumber || "Unknown job"}
-                          </p>
-                          <div className="hidden sm:flex items-center gap-2 shrink-0">
-                            {t.territory && (
-                              <span className="text-[11px] font-semibold text-[#768994] whitespace-nowrap">
-                                {territoryFlags(t.territory, 4) || "🌍"}{" "}
-                                {t.territory}
-                              </span>
-                            )}
-                            {t.category && (
-                              <span className="text-[10px] font-black text-[#768994] bg-white border border-[#dce4ec] px-2 py-0.5 rounded-full whitespace-nowrap">
-                                {t.category}
-                              </span>
-                            )}
-                          </div>
-                          {t.notes && (
-                            <p className="text-[11px] text-[#768994] italic truncate">
-                              {t.notes}
-                            </p>
+                      <TaskRow key={t.id} edgeClass={dc.border} cascadeRef={getCascadeRef(t.id, i)}>
+                        {/* Job number leads, exactly as the title does on a job
+                            row. The date stamp this used to carry is redundant
+                            now the whole card sits under a dated header. */}
+                        <p className="relative z-10 flex-1 min-w-0 font-display font-bold tracking-tight leading-snug text-[15px] text-[#122027] truncate">
+                          {t.jobNumber || "Unknown job"}
+                        </p>
+
+                        {/* Everything else is muted text at one weight,
+                            separated by dots — the job rows' treatment of
+                            "Updated · Due". The category was a bordered pill
+                            and the notes were italic; neither encodes a state,
+                            so neither earns a decoration of its own. */}
+                        <div className="relative z-10 hidden sm:flex items-center gap-2 min-w-0 text-[11px] font-semibold text-[#768994] whitespace-nowrap">
+                          {t.territory && (
+                            <span className="shrink-0">
+                              {territoryFlags(t.territory, 4) || "🌍"} {t.territory}
+                            </span>
                           )}
+                          {t.territory && t.category && <span className="text-[#dce4ec]">·</span>}
+                          {t.category && <span className="shrink-0">{t.category}</span>}
+                          {t.notes && (t.territory || t.category) && (
+                            <span className="text-[#dce4ec]">·</span>
+                          )}
+                          {t.notes && <span className="truncate font-normal">{t.notes}</span>}
                         </div>
 
-                        {/* Time */}
-                        <div className="text-right shrink-0">
-                          <p className="text-sm font-black text-[#12a0e1]">
-                            {formatDurationText(totalSecs(t))}
-                          </p>
+                        {/* The duration is this row's one coloured element —
+                            the equivalent of the status tag on a job row, since
+                            the logged time is the whole point of the entry.
+                            Supplementary time joins it as a muted suffix rather
+                            than arriving in a second unrelated hue. */}
+                        <p className="relative z-10 shrink-0 font-display text-[15px] font-bold tracking-tight tabular-nums text-[#0f766e]">
+                          {formatDurationText(totalSecs(t))}
                           {(t.additionalSeconds ?? 0) > 0 && (
-                            <p className="text-[10px] text-[#1cc1a5] font-bold">
-                              +{formatDurationText(t.additionalSeconds)}
-                            </p>
+                            <span className="ml-1.5 font-sans text-[11px] font-semibold text-[#768994]">
+                              incl. +{formatDurationText(t.additionalSeconds)}
+                            </span>
                           )}
-                        </div>
-                      </div>
+                        </p>
+                      </TaskRow>
                     );
                   })}
                 </div>
