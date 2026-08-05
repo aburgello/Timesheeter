@@ -4,8 +4,15 @@
 //
 //   • getBoundingClientRect() / clientX / clientY report VISUAL pixels —
 //     already multiplied by the zoom factor.
-//   • window.innerWidth/Height, and any inline style length (top/left/width),
-//     are LAYOUT pixels — the browser multiplies THEM by the zoom on paint.
+//   • Any inline style length (top/left/width) is a LAYOUT pixel — the browser
+//     multiplies it by the zoom on paint.
+//   • window.innerWidth/Height are VISUAL pixels, like a rect. This line used
+//     to claim they were layout pixels, and every dropdown that clamped itself
+//     against them inherited the error: a panel positioned at
+//     `left: innerWidth - w` with `width: w` paints 10% too far right and 10%
+//     too wide, so it hangs off the right edge by roughly the zoom factor.
+//     Measured on a 1200px viewport: right edge at 1320px, over by 120px.
+//     Use layoutViewport() below whenever the number will be written to a style.
 //
 // A dropdown that reads a trigger's rect (visual) and writes it to a
 // position:fixed element's style (layout, then re-zoomed) therefore double-
@@ -20,6 +27,15 @@
 
 export function zoomFactor() {
   return parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+}
+
+// The viewport in LAYOUT pixels — the space inline style lengths are written
+// in. Pair it with layoutRect() so a clamp compares like with like; comparing a
+// layout-space left/width against window.innerWidth overstates the room
+// available by the zoom factor.
+export function layoutViewport() {
+  const z = zoomFactor();
+  return { vw: window.innerWidth / z, vh: window.innerHeight / z };
 }
 
 // getBoundingClientRect() for `el`, converted from visual to layout pixels —

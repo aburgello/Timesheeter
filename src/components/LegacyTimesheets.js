@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import { useLegacyRows, getCurrentWeekStart, hmToHours } from "../hooks/useLegacyRows";
 import { useColumnResize } from "../lib/useColumnResize";
-import { layoutRect } from "../utils/zoom";
+import { layoutRect, layoutViewport } from "../utils/zoom";
 import { useJobLookup } from "../hooks/useJobLookup";
 import {
   supabase,
@@ -1835,8 +1835,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     if (addEntryFor === jobNumber) { setAddEntryFor(null); return; }
     const rect = layoutRect(e.currentTarget);
     const w = 256, estH = 380;
-    let left = Math.max(8, Math.min(rect.right - w, window.innerWidth - w - 8));
-    const spaceBelow = window.innerHeight - rect.bottom;
+    // Layout pixels, matching layoutRect and the style this ends up in.
+    const { vw, vh } = layoutViewport();
+    let left = Math.max(8, Math.min(rect.right - w, vw - w - 8));
+    const spaceBelow = vh - rect.bottom;
     const top = spaceBelow < estH && rect.top > spaceBelow
       ? Math.max(8, rect.top - estH)
       : rect.bottom + 6;
