@@ -268,11 +268,15 @@ function StatCard({ label, value, unit, icon: Icon, accent = "#12a0e1", format }
   );
 }
 
+// The page's top heading level, and it has to be the largest thing on it. At
+// text-base it was 16px, sitting above 19px day headings and 17px job numbers —
+// the outline read backwards, every level quieter than the one it contained.
+// The scale now descends: section 22px → day 19px → row 17px → meta 11px.
 function SectionTitle({ icon: Icon, children, right }) {
   return (
-    <div className="flex items-center justify-between mb-5">
-      <h2 className="text-base font-black text-[#122027] tracking-tight flex items-center gap-2">
-        <Icon className="w-4 h-4 text-[#12a0e1]" /> {children}
+    <div className="flex items-center justify-between gap-4 mb-5">
+      <h2 className="font-display text-[22px] font-bold text-[#122027] tracking-[-0.03em] leading-none flex items-center gap-2.5 min-w-0">
+        <Icon className="w-4 h-4 text-[#12a0e1] shrink-0" /> <span className="truncate">{children}</span>
       </h2>
       {right}
     </div>
@@ -1243,37 +1247,71 @@ function HistorySection({ tasks }) {
             // actual date, so which week each group belongs to is explicit.
             const weekdayName = rows[0]?.dayOfWeek || "Unknown";
             const dc = DAY_COLORS[weekdayName] || DEFAULT_DAY;
-            const dateLabel =
-              dayKey !== "Unknown"
-                ? new Date(`${dayKey}T00:00:00`).toLocaleDateString(undefined, {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                  })
-                : null;
+            // Split into parts rather than one formatted string, because the
+            // header sets them at three different sizes now.
+            const dateObj = dayKey !== "Unknown" ? new Date(`${dayKey}T00:00:00`) : null;
+            const dayNum = dateObj?.toLocaleDateString(undefined, { day: "numeric" }) ?? null;
+            const monthAbbr = dateObj?.toLocaleDateString(undefined, { month: "short" }) ?? null;
+            const yearLabel = dateObj?.getFullYear() ?? null;
             return (
               // Same "each group is its own bordered/shadowed white card"
               // treatment as Completed's per-campaign cards (JobsSection),
               // just grouped by day instead of by campaign.
               <div key={dayKey} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
-                {/* Day group header — mirrors the campaign header: identity
-                    chip, label, count/total pill on the right. */}
-                <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#dce4ec] bg-white">
-                  <span className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${dc.pill}`}>
-                    <Clock className="w-3.5 h-3.5" />
-                  </span>
-                  <span className="font-display font-bold tracking-tight text-[#122027] text-sm truncate">
+                {/* A day is a date, so the date is the graphic element: the day
+                    of the month set large, the way a diary or a tear-off
+                    calendar does it, with the weekday as the actual heading
+                    beside it. What was here before was a 28px clock chip and a
+                    14px label — the same header five times over with one hue
+                    swapped, and a heading smaller than the rows beneath it.
+                    The clock is gone because everything in this card is time;
+                    an icon repeating the container tells you nothing.
+
+                    The day's colour moves onto the numeral, which is where it
+                    can legally live: violet/sky/teal/amber/rose measure
+                    5.70 / 4.10 / 3.74 / 3.19 / 4.70 against white, so three of
+                    the five fail AA as body text but all five clear the 3:1
+                    large-text bar at 32px bold. Big is what makes the colour
+                    usable, not just prettier.
+
+                    Baseline-aligned, and it carries the same dotted leader the
+                    rows do, so the header reads as the top line of the ledger
+                    rather than a lid on a box. */}
+                <div className="flex items-baseline gap-3 sm:gap-4 px-4 py-4 border-b border-[#dce4ec] bg-white">
+                  {dayNum && (
+                    <div className="shrink-0 flex items-baseline gap-1.5">
+                      <span className={`font-display text-[28px] sm:text-[32px] font-bold leading-none tracking-[-0.05em] tabular-nums ${dc.text}`}>
+                        {dayNum}
+                      </span>
+                      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-[#768994]">
+                        {monthAbbr}
+                      </span>
+                    </div>
+                  )}
+
+                  <h3 className="font-display text-[19px] font-bold tracking-tight leading-none text-[#122027] truncate shrink-0">
                     {weekdayName}
-                  </span>
-                  {dateLabel && (
-                    <span className="text-[11px] font-semibold text-[#768994] truncate">
-                      {dateLabel}
+                  </h3>
+                  {yearLabel && (
+                    <span className="hidden md:inline text-[10px] font-black uppercase tracking-[0.16em] text-[#b0bec5] shrink-0">
+                      {yearLabel}
                     </span>
                   )}
-                  <span className="ml-auto bg-slate-50 text-[#768994] px-2 py-0.5 rounded-full text-[10px] font-bold border border-[#dce4ec] shrink-0">
-                    {formatDurationText(groupTotal)} · {rows.length}{" "}
-                    {rows.length === 1 ? "row" : "rows"}
-                  </span>
+
+                  <span
+                    aria-hidden="true"
+                    className="hidden sm:block flex-1 min-w-[1.5rem] border-b border-dotted border-[#cbd5e1]"
+                  />
+
+                  {/* The day's total, set like the row figures it sums. */}
+                  <div className="shrink-0 text-right leading-none">
+                    <p className="font-display text-[19px] font-bold tracking-[-0.02em] tabular-nums text-[#0f766e]">
+                      {formatDurationText(groupTotal)}
+                    </p>
+                    <p className="mt-1.5 text-[10px] font-semibold text-[#768994] tabular-nums">
+                      {rows.length} {rows.length === 1 ? "entry" : "entries"}
+                    </p>
+                  </div>
                 </div>
 
                 {/* Faint tint so the white rows read as cards, same as the
