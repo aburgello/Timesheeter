@@ -49,3 +49,41 @@ export function isoToUk(iso) {
  * visibly undated, not silently dated today.
  */
 export const toDbDate = (value) => toIsoDate(value);
+
+// Weekday name → JS getDay() index. Both day vocabularies in the app spell them
+// out in full and start the week on Monday (constants.DAYS_OF_WEEK is Mon–Fri,
+// legacyConstants.DAYS is Mon–Sun), so one map serves both.
+const WEEKDAY_INDEX = {
+  Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4,
+  Friday: 5, Saturday: 6, Sunday: 0,
+};
+
+/**
+ * The date of `dayName` within the Mon–Sun week containing `now`, as
+ * "DD/MM/YYYY" — the shape the `date` column stores.
+ *
+ * Both timesheet surfaces let you pick which weekday you are logging against,
+ * then stamped the row with TODAY regardless. A row could therefore say
+ * dayOfWeek "Monday" and date Sunday, and since work_date is derived from
+ * date, the grid grouped it under Monday while the week filter judged it by
+ * Sunday — so backfilling Monday's hours on a Wednesday wrote Wednesday's date
+ * onto a Monday row, and an entry made on Sunday for Monday dropped out of the
+ * grid the moment the week rolled over.
+ *
+ * Monday-based to match getCurrentWeekStart, which is what the week filter
+ * compares against. An unrecognised name falls back to today rather than
+ * guessing a weekday.
+ */
+export function ukDateForWeekday(dayName, now = new Date()) {
+  const target = WEEKDAY_INDEX[dayName];
+  if (target === undefined) return isoToUk(isoToday(now));
+
+  const monday = new Date(now);
+  // Sunday (0) belongs to the week that started six days earlier, not the one
+  // about to start — the same rule getCurrentWeekStart uses.
+  monday.setDate(now.getDate() - (now.getDay() === 0 ? 6 : now.getDay() - 1));
+
+  const d = new Date(monday);
+  d.setDate(monday.getDate() + (target === 0 ? 6 : target - 1));
+  return isoToUk(isoToday(d));
+}

@@ -53,19 +53,31 @@ export function whenIdentityReady() {
  * `tweak` receives the query so callers can add filters:
  *   selectAll("jobs", "*", (q) => q.eq("film_title", film))
  */
-export async function selectAll(table, columns = "*", tweak) {
+export async function selectAll(table, columns = "*", tweak, orderBy = "id") {
   const PAGE = 1000;
   let out = [];
   for (let page = 0; ; page++) {
     let q = supabase
       .from(table)
       .select(columns)
-      .order("id")
+      // `orderBy` because not every table has an `id`. job_sync_kept is keyed
+      // on `code`, so the hardcoded .order("id") made every read of it 400 —
+      // caught below, logged to a console nobody was watching, and returned as
+      // an empty array indistinguishable from "nothing kept". The Keep feature
+      // was write-only across reloads for as long as it has existed.
+      .order(orderBy)
       .range(page * PAGE, (page + 1) * PAGE - 1);
     if (tweak) q = tweak(q);
     const { data, error } = await q;
     if (error) {
-      console.warn(`selectAll(${table}) failed on page ${page}:`, error.message);
+      // Loud about the cause that actually bites: an ORDER BY on a column the
+      // table hasn't got looks exactly like an empty table to every caller.
+      console.warn(
+        `selectAll(${table}) failed on page ${page}: ${error.message}` +
+        (/column .* does not exist/i.test(error.message || "")
+          ? ` — pass the right orderBy for ${table}; it has no "${orderBy}" column.`
+          : "")
+      );
       break;
     }
     if (!data?.length) break;
@@ -82,15 +94,26 @@ export async function selectAll(table, columns = "*", tweak) {
  */
 export async function fetchExistingTimelogIds(wrikeUserId, source = null) {
   await identityReady;
-  let query = supabase
-    .from("tasks")
-    .select("wrike_timelog_id")
-    .not("wrike_timelog_id", "is", null);
-  if (wrikeUserId) query = query.eq("wrike_user_id", wrikeUserId);
-  if (source) query = query.eq("source", source);
-  const { data } = await query;
+  // selectAll, not a plain .select(): this asks for every row the user has EVER
+  // pulled that carries a timelog id — no date scoping — so it grows for the
+  // life of the account. A plain read stops at PostgREST's 1000-row cap and
+  // reports no error, and since the query carries no ORDER BY, the 1000 it
+  // returned were an arbitrary subset that could differ between calls.
+  //
+  // This Set is the only thing preventing a duplicate: tasks has no unique
+  // index on wrike_timelog_id, so a timelog missing from it is re-inserted
+  // silently. At ~20 rows/week for an active member the cap was under a year
+  // away.
+  const data = await selectAll("tasks", "wrike_timelog_id", (q) => {
+    q = q.not("wrike_timelog_id", "is", null);
+    if (wrikeUserId) q = q.eq("wrike_user_id", wrikeUserId);
+    if (source) q = q.eq("source", source);
+    return q;
+  });
   return new Set(
     (data ?? []).flatMap((r) =>
+      // Legacy aggregates a task's same-day logs into one row as "id1,id2,id3",
+      // so a row can carry several ids — the cap was on rows, not ids.
       r.wrike_timelog_id ? r.wrike_timelog_id.split(",") : []
     )
   );

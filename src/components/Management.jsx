@@ -3442,7 +3442,9 @@ function StudioJobScanModal({ onClose, onApplied }) {
       const [found, existing, kept] = await Promise.all([
         scanStudioJobNumbers(),
         selectAll("jobs", "id, job_number, film_title, client"),
-        selectAll("job_sync_kept", "code"),
+        // Ordered by `code` — this table is keyed on it and has no `id`, and
+        // selectAll's default ORDER BY id made every read of it 400 silently.
+        selectAll("job_sync_kept", "code", undefined, "code"),
       ]);
       // One code can own several book rows (a bare stub plus the properly filed
       // row, or two spellings of the same description). Keep the most complete

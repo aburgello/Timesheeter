@@ -1,5 +1,6 @@
 import { DAYS_OF_WEEK } from "../constants";
 import { guessFieldsFromTask } from "../utils/wrikeHelpers";
+import { ukDateForWeekday } from "../utils/dates";
 import { fetchExistingTimelogIds } from "../lib/supabaseClient";
 import {
   splitTerritories,
@@ -87,7 +88,13 @@ export function useTaskActions(state) {
       dayOfWeek: selectedDay,
       rawSeconds: finalSeconds,
       additionalSeconds: 0,
-      date: new Date().toLocaleDateString("en-GB"),
+      // The day the user PICKED, not the day they clicked. These two used to
+      // disagree — dayOfWeek said Monday while date said today — and because
+      // work_date is derived from date, the grid grouped the row under Monday
+      // while the week filter judged it by today's date. Backfilling Monday on
+      // a Wednesday wrote Wednesday onto a Monday row; logging Monday's hours
+      // on the Sunday before dropped the row out of the grid at the rollover.
+      date: ukDateForWeekday(selectedDay),
       timeLogged: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
@@ -498,7 +505,13 @@ export function useTaskActions(state) {
       dayOfWeek: selectedDay,
       rawSeconds: finalSeconds,
       additionalSeconds: 0,
-      date: new Date().toLocaleDateString("en-GB"),
+      // The day the user PICKED, not the day they clicked. These two used to
+      // disagree — dayOfWeek said Monday while date said today — and because
+      // work_date is derived from date, the grid grouped the row under Monday
+      // while the week filter judged it by today's date. Backfilling Monday on
+      // a Wednesday wrote Wednesday onto a Monday row; logging Monday's hours
+      // on the Sunday before dropped the row out of the grid at the rollover.
+      date: ukDateForWeekday(selectedDay),
       timeLogged: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
     // Deliberately does NOT write the time back to Wrike, unlike the task

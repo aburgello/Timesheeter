@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef } from "react";
 import { useTasks } from "./useTasks";
 import { parseTimeToHours, parseTimeToSeconds } from "../utils/timeHelpers";
+import { ukDateForWeekday } from "../utils/dates";
 
 // Hours from any stored shape — "1:30", "1.5", "2", "none". Kept as a named
 // export because the day/week totals in LegacyTimesheets read in hours, but it
@@ -42,10 +43,6 @@ export function getCurrentWeekStart() {
   return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
 }
 
-// dd/mm/yyyy — the canonical stored format for task dates
-const dmyDate = (d = new Date()) =>
-  `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
-
 export function useLegacyRows(triggerToast, wrikeUserId = null) {
   const weekStart = useRef(getCurrentWeekStart()).current;
 
@@ -60,9 +57,17 @@ export function useLegacyRows(triggerToast, wrikeUserId = null) {
     justSaved,
   } = useTasks(triggerToast, null, wrikeUserId, weekStart);
 
-  // Add a single blank row (from the + button) — always stamp today's date
+  // Add a single blank row (from the + button, or from the Generate Today's
+  // Timesheet grid). Stamps the date of the DAY THE ROW IS FOR, not today:
+  // every caller sets dayOfWeek from the day tab in view, and stamping today
+  // instead left the row's own label and its date disagreeing — which the week
+  // filter then judged by the date while the grid grouped by the label.
   const addRow = useCallback(async (row) => {
-    await addTask({ ...normaliseLegacyRow(row), source: "legacy", date: row.date || dmyDate() });
+    await addTask({
+      ...normaliseLegacyRow(row),
+      source: "legacy",
+      date: row.date || ukDateForWeekday(row.dayOfWeek),
+    });
   }, [addTask]);
 
   // Add multiple rows at once (from Wrike pull) — ensure a valid dd/mm/yyyy date on each
@@ -70,7 +75,10 @@ export function useLegacyRows(triggerToast, wrikeUserId = null) {
     await addTasks(newRows.map((r) => ({
       ...normaliseLegacyRow(r),
       source: "legacy",
-      date: /^\d{2}\/\d{2}\/\d{4}$/.test(r.date) ? r.date : dmyDate(),
+      // A pulled row carries the timelog's own date; the fallback is for a row
+      // that somehow arrived without one, and it uses the row's weekday rather
+      // than today for the same reason addRow does.
+      date: /^\d{2}\/\d{2}\/\d{4}$/.test(r.date) ? r.date : ukDateForWeekday(r.dayOfWeek),
     })));
   }, [addTasks]);
 
