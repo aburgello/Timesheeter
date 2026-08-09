@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>How job numbers, films and territories are resolved — notes</title>
+<style>
+  :root {
+    --teal: #1cc1a5;
+    --blue: #12a0e1;
+    --ink: #122027;
+    --muted: #5b6b75;
+    --line: #dce4ec;
+    --soft: #f4f7fa;
+    --code-bg: #0f1a20;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 12.4px; }
+  body {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+  .page { max-width: 178mm; margin: 0 auto; }
+
+  .kicker { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--blue); margin-bottom: 0.35rem; }
+  h1 { font-size: 1.6rem; line-height: 1.15; font-weight: 800; letter-spacing: -0.015em; margin-bottom: 0.5rem; }
+  .subtitle { font-size: 0.98rem; color: var(--muted); }
+  .title-rule { height: 4px; width: 62mm; background: linear-gradient(90deg, var(--teal), var(--blue)); border-radius: 2px; margin: 1rem 0 1.4rem 0; }
+
+  h2 { font-size: 1.12rem; font-weight: 800; margin: 1.5rem 0 0.5rem 0; padding-top: 0.4rem; border-top: 1px solid var(--line); }
+  h2 .num { color: var(--teal); margin-right: 0.35rem; }
+  h3 { font-size: 0.95rem; font-weight: 700; margin: 0.95rem 0 0.25rem 0; }
+  p { margin: 0.4rem 0; }
+  ul, ol { margin: 0.4rem 0 0.4rem 1.1rem; }
+  li { margin: 0.2rem 0; }
+  strong { font-weight: 700; }
+  code { font-family: "Consolas", "SF Mono", monospace; font-size: 0.9em; background: var(--soft); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; }
+  .file { font-family: "Consolas", monospace; font-size: 0.78rem; color: var(--blue); background: var(--soft); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; white-space: nowrap; }
+
+  pre { background: var(--code-bg); color: #d7e2e8; border-radius: 10px; padding: 10px 13px; font-size: 0.78rem; line-height: 1.45; overflow-x: auto; margin: 0.5rem 0; break-inside: avoid; }
+  pre code { background: none; border: none; padding: 0; color: inherit; }
+  .cmt { color: #7d9aa7; }
+
+  .note { border-left: 3px solid #b45309; background: #fdf3e3; border-radius: 0 8px 8px 0; padding: 8px 12px; margin: 0.6rem 0; font-size: 0.84rem; break-inside: avoid; }
+  .note strong { color: #b45309; }
+
+  .flow { border: 1px solid var(--line); border-radius: 10px; margin: 0.6rem 0; overflow: hidden; break-inside: avoid; }
+  .flow .fh { background: var(--soft); border-bottom: 1px solid var(--line); padding: 5px 12px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+  .flow ol { padding: 8px 12px 8px 30px; margin: 0; }
+  .flow li { font-size: 0.87rem; margin: 0.3rem 0; }
+
+  table { width: 100%; border-collapse: collapse; margin: 0.6rem 0; font-size: 0.8rem; break-inside: avoid; }
+  th { text-align: left; font-weight: 700; background: var(--soft); padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td code, th code { font-size: 0.85em; }
+
+  footer { margin-top: 1.8rem; padding-top: 0.6rem; border-top: 1px solid var(--line); font-size: 0.72rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="kicker">Engineering notes</div>
+  <h1>How job numbers, films and territories are resolved</h1>
+  <p class="subtitle">The exact mechanics behind the guide — data sources, resolution order, and the rules that keep the three sources from disagreeing. Pairs with <em>job-data-guide.pdf</em>.</p>
+  <div class="title-rule"></div>
+
+  <h2><span class="num">1</span>The identity model — everything keys on the XY code</h2>
+  <p>
+    Everything keys on the <strong>XY code</strong>, not the human-readable string. A job number arrives in
+    several shapes and is normalised before it is ever used as a key:
+  </p>
+  <pre><code><span class="cmt">// src/utils/wrikeHelpers.js — jobKey()</span>
+"XY025716"                            <span class="cmt">// bare code</span>
+"XY025716_LUG_D6"                     <span class="cmt">// suffix → still XY025716</span>
+"The Odyssey : XY025716, Finishing"   <span class="cmt">// canonical → still XY025716</span>
+
+const jobKey = (jobNumber) =&gt; {
+  const m = String(jobNumber).match(/XY\d{5,6}/i);
+  return m ? m[0].toUpperCase() : String(jobNumber).trim();   <span class="cmt">// fallback: free-text internal jobs</span>
+};</code></pre>
+  <p>The same regex is a uniqueness index in the database:</p>
+  <pre><code><span class="cmt">-- supabase/schema.sql — jobs_job_code_key</span>
+create unique index jobs_job_code_key
+  on public.jobs (substring(job_number from 'XY\d{5,6}'));</code></pre>
+  <p>
+    So a bare code from an old row, a suffixed code from a folder, and the curated canonical string all collapse
+    onto one job, and a job can never be registered twice under two different spellings.
+  </p>
+
+  <h3>The two stores</h3>
+  <ul>
+    <li><strong>Job Book — <code>jobs</code>.</strong> The curated, admin-editable record. Holds a canonical
+        <code>"Film : XY…, Description"</code> string plus <code>film_title</code> and <code>client</code>.
+        Loaded via <span class="file">src/hooks/useJobLookup.js</span>.</li>
+    <li><strong>Timesheet rows — <code>tasks</code>.</strong> One row per entry, carrying
+        <code>job_number</code>, <code>territory</code>, <code>film_title</code>, <code>client</code>,
+        <code>source</code> (<code>"tracker"</code> | <code>"legacy"</code>).</li>
+  </ul>
+
+  <h2><span class="num">2</span>Management — the Wrike scan (src/lib/wrikeCampaign.js)</h2>
+  <p>
+    <code>scanStudioJobNumbers()</code> walks the entire visible Wrike folder tree and returns one candidate Job
+    Book row per unique XY code. Real job folders sit at
+    <code>Studio space → &lt;Studio&gt; → &lt;Film&gt; → &lt;Job&gt;</code>.
+  </p>
+  <div class="flow">
+    <div class="fh">For every folder whose title carries an XY code</div>
+    <ol>
+      <li>Take the <strong>code</strong>.</li>
+      <li>Read the <strong>description</strong> from the folder-title suffix after the code
+          (<code>_Germany_Launch_Assets</code> → “Germany Launch Assets”) via <code>deUnderscore()</code>.</li>
+      <li><strong>Climb the ancestry</strong> (<code>ancestryOf</code> → <code>describeChain</code>) to the studio
+          folder. The studio’s <em>keyword</em> (<code>studioKwOf</code>) names the client; the
+          <em>deepest non-year folder</em> between the studio and the job is the <strong>film</strong>
+          (year folders like <code>2026</code> are skipped — <code>isYearFolder</code>).</li>
+      <li><strong>Region marker</strong> off the studio folder’s full title
+          (<code>regionOf(studioTitle, studioKw)</code>): “UNIVERSAL UK” → UK arm, plain “UNIVERSAL” →
+          International, XYi → none. This decides the <em>client</em>
+          (“Universal Pictures UK” / “Universal Pictures International”) and the description prefix
+          (“UK - …”), not the country territory.</li>
+      <li>Assemble the canonical line: <code>"Film : CODE, Description"</code>. A folder already in canonical
+          shape (title contains <code> : </code>) is taken verbatim.</li>
+    </ol>
+  </div>
+  <p>
+    Each candidate carries <code>code, jobNumber, filmTitle, projectDescription, client, archived, region,
+    folderId, folderPath</code>. The <code>folderPath</code> breadcrumb (studio › film › folder) is computed from
+    the winning ancestry chain and is what the review panel shows next to a disagreement. Wrike’s
+    <code>createdDate</code> per folder is fetched in batches of 100 for ordering.
+  </p>
+
+  <div class="note">
+    <strong>Multi-parent folders.</strong> <code>parentsOf</code> is a <em>list</em> map, not a single-parent
+    map — a shared folder can sit under several paths at once. <code>ancestryOf</code> walks every path
+    (bounded: depth 40, 24 chains) and ranks them: live-and-placed &gt; placed &gt; live &gt; anything. A job is
+    only “archived” when it has <em>no</em> live home, so one path through <code>_Archive</code> doesn’t hide a
+    job that also lives in a campaign folder.
+  </div>
+
+  <h3>Reconciliation with the Job Book</h3>
+  <p>
+    Candidates are matched against the book on the code. “Containment counts as agreement” — a book description
+    and a scan description legitimately carry different amounts of the same information, so agreement is
+    <em>contains</em>, not <em>equals</em>. Genuine disagreements surface in the Review panel as
+    <strong>corrections</strong> (book row disagrees with Wrike) and <strong>redundant rows</strong> (several
+    book rows collapse onto one code). Each row shows the book’s line, the proposed Wrike line, and the Wrike
+    folder path. <strong>Fix</strong> rewrites the book to match Wrike; <strong>Keep</strong> records the code in
+    <code>job_sync_kept</code> (<span class="file">supabase/migrations/20260809220000_job_sync_kept.sql</span>)
+    and future scans skip it.
+  </p>
+
+  <h2><span class="num">3</span>Legacy — resolving a pulled task</h2>
+  <p>
+    Legacy rows come from Wrike timelogs (or <code>handleSyncMyJobs</code>). Each task is resolved through
+    <code>guessFieldsFromTask()</code> (<span class="file">src/utils/wrikeHelpers.js</span>; the component keeps
+    a copy tuned for its data shape) in this order:
+  </p>
+  <div class="flow">
+    <div class="fh">Resolution order for one task</div>
+    <ol>
+      <li><strong>Job number</strong> — the dedicated “Job Number” custom field first (raw value, suffix
+          preserved so <code>XY025716_LUG_D6</code> survives), else the first <code>XY\d{5,6}</code> in the
+          task title/description/path. The bare code is then fed to
+          <code>resolveJobNumber(fullCode, bookJobNumbers)</code>.</li>
+      <li><strong>Job Book match</strong> — <code>resolveJobNumber</code> finds the book row whose string
+          contains the code and returns that string <em>whole</em>. The book wins; anything the suffix might add
+          belongs in the description, not the code. Unknown codes return the <strong>bare</strong> code (never
+          the suffixed one) so the Studio Scan can fill them in.</li>
+      <li><strong>Territory (country)</strong> — <code>resolveCountries(task, parentTaskName, …)</code>, see
+          §4. Multiple countries join via <code>joinTerritories()</code> into e.g. “UK, Ireland”.</li>
+      <li><strong>Film</strong> — priority: the job number’s own <code>"Film : …"</code> prefix (split on
+          <code> : </code> specifically, so a film title containing a colon is safe) → the Job Book’s
+          <code>film_title</code> → <code>task.projectName</code> / path-derived title (most-frequent folder
+          before <code>DIGITAL</code> across paths, to dodge reference trees) → the task title’s first token →
+          <code>FILM_MAPPINGS</code> overrides. All-caps names are title-cased.</li>
+      <li><strong>Client</strong> — path contains UNIVERSAL/PARAMOUNT/SONY → client from studio + resolved
+          territory (“Universal Pictures UK” if UK, “Universal Pictures Australia” if Australia, else
+          “Universal Pictures International”).</li>
+      <li><strong>Job Book override</strong> — <code>jobLookup.getJob(code)</code>: a known book row replaces
+          <em>any</em> guess above for <code>film_title</code> and <code>client</code>, and upgrades a bare code
+          to the book’s canonical string.</li>
+      <li><strong>Self-registration</strong> — <code>jobLookup.ensureJob(number, { filmTitle, client })</code>
+          inserts the row verbatim the first time the code is seen, or fills only blank fields on an existing
+          row. Never overwrites a set field; ignores the <code>23505</code> duplicate-violation (another tab
+          already wrote it).</li>
+    </ol>
+  </div>
+
+  <h2><span class="num">4</span>Territory resolution — read, never guessed</h2>
+  <p>
+    The old rule scanned every scrap of text on a task (title, path, notes, custom fields) and kept whichever
+    country matched first — and since 44 of the ~120 short codes are two letters, it read countries out of plain
+    prose: <code>"ODYSSEY_IN_PROGRESS"</code> → India, “No changes needed” → Norway. That was removed. A country
+    code is now only read <em>where someone deliberately put one</em>, in priority order
+    (<span class="file">src/utils/countryCodes.js</span>, <span class="file">src/lib/countryField.js</span>):
+  </p>
+  <table>
+    <tr><th>Order</th><th>Source</th><th>Notes</th></tr>
+    <tr><td>1</td><td>Last token of the <strong>task name</strong></td><td>Anchored — <code>…_IT</code> resolves; <code>…_IT_Deck</code> does not.</td></tr>
+    <tr><td>2</td><td>Last token of the <strong>parent task name</strong></td><td>Only when the task itself has no suffix.</td></tr>
+    <tr><td>3</td><td><strong>Folder tree</strong> climb (<code>getFolderCountries</code>)</td><td>Nearest folder first, whole level before climbing; bounded depth.</td></tr>
+    <tr><td>4</td><td><strong>Country custom field</strong></td><td>Matched by field <em>id</em> (<code>countryFieldIds()</code>), never by the shape of its value.</td></tr>
+  </table>
+  <p>
+    The alias table is ordered weakest-first so real codes can’t be shadowed: territory names &lt;
+    <code>REGION_ALIASES</code> &lt; <code>MAGI_MARKET_CODES</code> (what production actually writes) &lt; agreed
+    exceptions (<code>COUNTRY_SUFFIX_EXCEPTIONS</code>). Keys are punctuation-stripped (<code>codeKey</code>), so
+    MAGI’s <code>BE-FL</code> arrives as <code>BEFL</code> however it was typed. A task that deliberately carries
+    no country now gets <em>no</em> country rather than a guessed one — the row pulls and the field is left for a
+    human.
+  </p>
+
+  <div class="note">
+    <strong>Territory vs. region marker.</strong> “Territory” here — the <code>tasks.territory</code> column,
+    what <code>resolveCountries</code> returns — means the <strong>country</strong> (UK, Ireland, “UK, Ireland”).
+    The INT/UK/NM/AUS short codes from <code>regionOf()</code> and <code>REGION_SHORT</code> are studio region
+    markers that shape the client name and description prefix; they are a different concept and shouldn’t be
+    called territory.
+  </div>
+
+  <h2><span class="num">5</span>Where the pieces live</h2>
+  <table>
+    <tr><th>Concern</th><th>File</th><th>Responsibility</th></tr>
+    <tr><td>Job lookup / registration</td><td><span class="file">src/hooks/useJobLookup.js</span></td><td>Loads <code>jobs</code> keyed by code; <code>getJob</code>, <code>ensureJob</code>, <code>jobNumbers</code>.</td></tr>
+    <tr><td>Wrike scan / film &amp; client derivation</td><td><span class="file">src/lib/wrikeCampaign.js</span></td><td><code>scanStudioJobNumbers</code>, <code>ancestryOf</code>, <code>describeChain</code>, <code>regionOf</code>.</td></tr>
+    <tr><td>Task → fields guess</td><td><span class="file">src/utils/wrikeHelpers.js</span></td><td><code>jobKey</code>, <code>resolveJobNumber</code>, <code>guessFieldsFromTask</code>.</td></tr>
+    <tr><td>Territory (country) resolution</td><td><span class="file">src/utils/countryCodes.js</span> + <span class="file">src/lib/countryField.js</span></td><td><code>resolveCountries</code>, <code>countriesFromTaskName</code>, <code>countriesFromCustomFields</code>.</td></tr>
+    <tr><td>Folder → countries / description</td><td><span class="file">src/lib/wrikeEnrich.js</span></td><td><code>getFolderCountries</code>, <code>jobFolderDescription</code>, <code>buildChildToParent</code>.</td></tr>
+    <tr><td>Multi-country join</td><td><span class="file">src/utils/territories.js</span></td><td><code>joinTerritories</code> / <code>splitTerritories</code>.</td></tr>
+    <tr><td>Legacy timesheet UI / pull</td><td><span class="file">src/components/LegacyTimesheets.js</span>, <span class="file">src/hooks/useLegacyRows.js</span></td><td>Pulls timelogs, runs <code>guessFieldsFromTask</code>, writes rows via <code>useTasks</code> scoped to <code>source="legacy"</code>.</td></tr>
+    <tr><td>Management UI / scan review</td><td><span class="file">src/components/Management.jsx</span></td><td>Film picker (grouped by studio), Job Book, <code>StudioJobScanModal</code> with Fix/Keep.</td></tr>
+    <tr><td>Keep table</td><td><span class="file">supabase/migrations/20260809220000_job_sync_kept.sql</span></td><td>XY codes whose disagreements the scan should stop re-asking.</td></tr>
+  </table>
+
+  <h3>Data model (relevant columns)</h3>
+  <table>
+    <tr><th>Table</th><th>Columns</th></tr>
+    <tr><td><code>jobs</code></td><td><code>id, job_number, client, film_title, project_description, wrike_folder_id, wrike_folder_title, start_date, completed_date, status, notes, created_at, updated_at</code></td></tr>
+    <tr><td><code>tasks</code></td><td><code>id, job_number, territory, category, notes, date, work_date, film_title, client, project_description, time_spent, additional_time, source, wrike_user_id, task_id, wrike_timelog_id</code></td></tr>
+    <tr><td><code>films</code></td><td><code>id, title, studio</code> (studio added for the grouped picker; backfilled from the client most of the film’s jobs bill to)</td></tr>
+    <tr><td><code>job_sync_kept</code></td><td><code>code, created_at</code></td></tr>
+  </table>
+
+  <footer>
+    Engineering notes for the Timesheeter app · Describes the exact resolution of job numbers, films and
+    territories for tasks in Management and Legacy. For the plain-English version see job-data-guide.pdf.
+  </footer>
+
+</div>
+</body>
+</html>

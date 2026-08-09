@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Where job numbers, films and countries come from — one page</title>
+<style>
+  :root {
+    --teal: #1cc1a5;
+    --blue: #12a0e1;
+    --ink: #122027;
+    --muted: #5b6b75;
+    --line: #dce4ec;
+    --soft: #f4f7fa;
+    --amber: #b45309;
+    --amber-bg: #fdf3e3;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 11.4px; }
+  body {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink); line-height: 1.42;
+  }
+  @page { size: A4; margin: 13mm 15mm 13mm 15mm; }
+  .page { max-width: 180mm; margin: 0 auto; }
+
+  .kicker { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--blue); margin-bottom: 2px; }
+  h1 { font-size: 1.35rem; line-height: 1.12; font-weight: 800; letter-spacing: -0.015em; }
+  .rule { height: 3px; width: 44mm; background: linear-gradient(90deg, var(--teal), var(--blue)); border-radius: 2px; margin: 7px 0 9px 0; }
+  .intro { font-size: 0.84rem; color: var(--muted); }
+
+  h2 { font-size: 0.78rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: var(--teal); margin: 10px 0 4px 0; }
+  p, li { font-size: 0.84rem; }
+  ul, ol { margin: 3px 0 3px 1.1rem; }
+  li { margin: 1.5px 0; }
+  strong { font-weight: 700; }
+  .mono { font-family: "Consolas", monospace; font-size: 0.9em; background: var(--soft); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; white-space: nowrap; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 7px; margin: 5px 0 2px 0; }
+  .col { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+  .col .chip { display: inline-block; font-size: 0.58rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #fff; background: var(--blue); border-radius: 999px; padding: 1px 7px; margin-bottom: 3px; }
+  .col h4 { font-size: 0.82rem; margin-bottom: 1px; }
+  .col .ex { color: var(--muted); font-size: 0.72rem; }
+  .col p { font-size: 0.76rem; }
+
+  .flows { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin: 4px 0; }
+  .flowbox { border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; break-inside: avoid; }
+  .flowbox h3 { font-size: 0.8rem; font-weight: 800; margin-bottom: 3px; }
+  .flowbox .sub { font-size: 0.68rem; color: var(--muted); margin-bottom: 4px; }
+  .flowbox ol { margin-left: 1.05rem; }
+  .flowbox li { font-size: 0.78rem; margin: 2px 0; }
+
+  .book { border: 1px solid #bfe8de; background: #f0fbf8; border-radius: 9px; padding: 7px 11px; margin: 5px 0; break-inside: avoid; }
+  .book h3 { color: #0d8a72; font-size: 0.82rem; margin-bottom: 2px; }
+  .book p, .book li { font-size: 0.8rem; }
+
+  .fixkeep { display: flex; gap: 8px; margin: 5px 0; }
+  .fixkeep .box { flex: 1; border-radius: 8px; padding: 6px 10px; font-size: 0.8rem; }
+  .fixkeep .fix { background: var(--soft); border: 1px solid var(--line); }
+  .fixkeep .keep { background: var(--amber-bg); border: 1px solid #f0d9ac; }
+  .fixkeep h4 { font-size: 0.78rem; margin-bottom: 1px; }
+  .fixkeep .fix h4 { color: var(--blue); }
+  .fixkeep .keep h4 { color: var(--amber); }
+
+  .closer { margin-top: 8px; font-size: 0.82rem; font-weight: 600; }
+  footer { margin-top: 9px; padding-top: 4px; border-top: 1px solid var(--line); font-size: 0.62rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="kicker">One page</div>
+  <h1>Where job numbers, films and countries come from</h1>
+  <div class="rule"></div>
+  <p class="intro">
+    Every piece of work starts life in <strong>Wrike</strong>, where folders and tasks are organised as a tree.
+    Each one carries a job number — an <span class="mono">XY</span> code like <span class="mono">XY025563</span>.
+    When time is recorded, the app needs three things about that work: <strong>which job</strong>,
+    <strong>which film</strong>, and <strong>which country</strong>. Here is how it finds them.
+  </p>
+
+  <h2>The three things</h2>
+  <div class="cols">
+    <div class="col">
+      <span class="chip">Job number</span>
+      <h4>The job's identity</h4>
+      <p class="ex"><span class="mono">XY025563</span></p>
+      <p>The XY code is the job's real identity. It never changes; the name around it can.</p>
+    </div>
+    <div class="col">
+      <span class="chip">Film</span>
+      <h4>The project</h4>
+      <p class="ex">“The Odyssey”</p>
+      <p>Read off <em>where</em> the job sits in Wrike's folder tree — or taken from the Job Book once known.</p>
+    </div>
+    <div class="col">
+      <span class="chip">Country</span>
+      <h4>The territory</h4>
+      <p class="ex">“UK”, “UK, Ireland”</p>
+      <p>Read deliberately — from a Country field or the end of the task name — never guessed from a sentence.</p>
+    </div>
+  </div>
+
+  <h2>How Management gets it — “Scan Wrike for job numbers”</h2>
+  <p style="font-size:0.82rem;">
+    The scan walks every folder in Wrike, finds each <span class="mono">XY</span> code, reads the description
+    off the folder name, looks at where the folder sits in the tree for the film and which studio arm it
+    belongs to, and assembles one clean line:
+    <span class="mono">The Odyssey : XY025563, Germany Launch Assets</span>. New jobs are offered to the Job
+    Book; book rows that disagree with Wrike are flagged for review, with <em>where in Wrike</em> the folder
+    lives shown, so you can judge which side is right.
+  </p>
+
+  <h2>How the two sides compare</h2>
+  <div class="flows">
+    <div class="flowbox">
+      <h3>Management · Job Book</h3>
+      <div class="sub">The shared, editable list of every job.</div>
+      <ol>
+        <li>Walks all of Wrike's folders; finds each XY code.</li>
+        <li>Reads description, film, and studio arm from the folder's name and place in the tree.</li>
+        <li>New codes → added to the book; disagreements → review, then <strong>Fix</strong> or <strong>Keep</strong>.</li>
+      </ol>
+    </div>
+    <div class="flowbox">
+      <h3>Legacy timesheet</h3>
+      <div class="sub">The timesheet we use.</div>
+      <ol>
+        <li>Reads the XY code off each task.</li>
+        <li>Looks it up in the Job Book — the book wins if it's known.</li>
+        <li>Country read from a Country field or the task name; unknown jobs are registered for next time.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="book">
+    <h3>The Job Book — one shared memory</h3>
+    <p>
+      The first time a code appears, it is recorded automatically. Once it's in the book, the book's
+      film, country and client <strong>win</strong> over any fresh guess — because a human has checked it.
+      Everything matches on the XY code, so an old bare <span class="mono">XY025563</span> still inherits the
+      full name and film. Corrections are made once, in Management, and apply everywhere.
+    </p>
+  </div>
+
+  <div class="fixkeep">
+    <div class="box fix">
+      <h4>Fix</h4>
+      Rewrite the book row to match Wrike — use when Wrike is right and the book is behind.
+    </div>
+    <div class="box keep">
+      <h4>Keep</h4>
+      Keep the book as it is — use when the book is right. The decision is remembered, so the scan stops
+      asking about that job.
+    </div>
+  </div>
+
+  <footer>
+    Companion guide to the Timesheeter app — how job numbers, films and territories are resolved for tasks in
+    Management and the Legacy timesheet.
+  </footer>
+
+</div>
+</body>
+</html>
