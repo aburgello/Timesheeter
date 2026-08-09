@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import { Briefcase, FolderPlus, Activity } from "lucide-react";
@@ -20,6 +20,16 @@ const TABS = [
   { id: "feed",      label: "Project/Time", desc: "Every logged hour by job", icon: Activity },
 ];
 
+// The open tab lives in the hash's second segment (`#jobbook/jobsSetup`), the
+// same shape Administration uses for its sections — so a tab is bookmarkable
+// and the quick-actions bubble can land straight on one instead of dropping
+// you on whichever tab happened to be the default.
+const TAB_IDS = TABS.map((t) => t.id);
+const tabFromHash = () => {
+  const [page, tab] = window.location.hash.slice(1).split("/");
+  return page === "jobbook" && TAB_IDS.includes(tab) ? tab : null;
+};
+
 // Play the masked-rise entrance once per session — same contract as
 // Profile Hub's own hub rows (see profileEntrancePlayed in Profile.jsx).
 let jobBookEntrancePlayed = false;
@@ -28,8 +38,23 @@ const prefersReducedMotion = () =>
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export default function JobBook() {
-  const [tab, setTab] = useState("jobs");
+  const [tab, setTabState] = useState(() => tabFromHash() || "jobs");
   const navRef = useRef(null);
+
+  // Mirror the tab into the hash so Back/Forward move between tabs, and a
+  // reload or shared link reopens the one you were on. Never write history on
+  // the way in — only when the tab actually changes.
+  const setTab = useCallback((id) => {
+    setTabState(id);
+    const hash = `#jobbook/${id}`;
+    if (window.location.hash !== hash) window.history.pushState({}, "", hash);
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => { const t = tabFromHash(); if (t) setTabState(t); };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   // Same masked-rise reveal as Profile Hub's rows (data-hub-rise, translated
   // fully below its own overflow-hidden mask, then eased up into view) —

@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Zap, StickyNote, Activity, Briefcase, Settings, FileScan } from "lucide-react";
+import { Zap, StickyNote, Activity, Briefcase, Settings, FileScan,
+         FolderPlus, FileBarChart, ClipboardList } from "lucide-react";
 import { PAGE_GRADIENTS } from "../../lib/pageGradients";
 import { pageIdsFor } from "../../lib/departments";
 
@@ -30,6 +31,47 @@ const ACTIONS = [
     section: "settings",
     gradient: "from-slate-500 to-slate-700",
     requires: "profile",
+  },
+  // ── Desk-specific entries ──────────────────────────────────────────────
+  // Reached by hash rather than onNavigate: Administration and Job Book both
+  // route their inner position through the URL (`#management/<section>`,
+  // `#jobbook/<tab>`), so setting the hash lands *inside* the page. Profile's
+  // sections aren't hash-routed, hence the two mechanisms.
+  {
+    id: "jobsSetup",
+    label: "Jobs Setup",
+    icon: FolderPlus,
+    kind: "hash",
+    hash: "jobbook/jobsSetup",
+    gradient: PAGE_GRADIENTS.jobbook,
+    requires: "jobbook",
+  },
+  {
+    id: "jobbook",
+    label: "Job Book",
+    icon: Briefcase,
+    kind: "hash",
+    hash: "jobbook/jobs",
+    gradient: PAGE_GRADIENTS.jobbook,
+    requires: "jobbook",
+  },
+  {
+    id: "projectTime",
+    label: "Project/Time",
+    icon: FileBarChart,
+    kind: "hash",
+    hash: "management/project-time",
+    gradient: PAGE_GRADIENTS.management,
+    requires: "management",
+  },
+  {
+    id: "timesheetCompletion",
+    label: "Timesheet Completion",
+    icon: ClipboardList,
+    kind: "hash",
+    hash: "management/timesheet-completion",
+    gradient: PAGE_GRADIENTS.management,
+    requires: "management",
   },
   {
     id: "jobs",
@@ -73,6 +115,16 @@ const ACTIONS = [
   },
 ];
 
+// Desks whose shortcuts are named explicitly rather than derived from page
+// access. PM and Operations both reach Administration and Job Book, so the
+// access filter alone would offer them the same generic set — but they use
+// different halves of it: PM sets jobs up and runs the book, Operations reads
+// the time that came out the other end.
+const DEPARTMENT_ACTIONS = {
+  PM: ["jobsSetup", "jobbook", "jobs", "settings"],
+  Operations: ["projectTime", "timesheetCompletion", "settings"],
+};
+
 export default function QuickActions({ activePage, department, onNavigate, onOpenNotes, onScanPdf }) {
   // Two independent reasons to be open, OR'd together, rather than one flag
   // both handlers write to: with a single flag, mouseenter opens the stack
@@ -95,7 +147,15 @@ export default function QuickActions({ activePage, department, onNavigate, onOpe
   // can never offer a page this member has no access to. Entries with no
   // `requires` (Scan PDF) are always allowed.
   const allowed = pageIdsFor(department);
-  const actions = ACTIONS.filter((a) => !a.requires || allowed.includes(a.requires));
+  // A desk with a named shortcut set gets exactly that, in that order — the
+  // bubble is meant to be the two or three things you actually reach for, and
+  // for PM/Operations those aren't the production tools the default list
+  // offers. Anything else keeps the access-filtered default.
+  const preferred = DEPARTMENT_ACTIONS[department];
+  const actions = preferred
+    ? preferred.map((id) => ACTIONS.find((a) => a.id === id))
+                .filter((a) => a && (!a.requires || allowed.includes(a.requires)))
+    : ACTIONS.filter((a) => !a.requires || allowed.includes(a.requires));
   if (!actions.length) return null;
 
   const runAction = (action) => {
@@ -109,6 +169,13 @@ export default function QuickActions({ activePage, department, onNavigate, onOpe
       // gesture; closing the stack afterwards doesn't cancel the open dialog.
       fileInputRef.current?.click();
       close();
+      return;
+    }
+    if (action.kind === "hash") {
+      // Administration and Job Book read their inner position from the hash,
+      // and App mirrors the first segment back into the active page.
+      close();
+      window.location.hash = action.hash;
       return;
     }
     close();
