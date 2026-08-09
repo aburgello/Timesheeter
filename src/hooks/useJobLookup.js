@@ -18,7 +18,7 @@ import { jobKey } from "../utils/wrikeHelpers";
  * IMPORTANT — the lookup is keyed on the XY CODE (e.g. "XY025716"), not the
  * full "Film Title : XY025716, Description" string. A single job surfaces in
  * three inconsistent shapes: the admin panel writes the full canonical string,
- * DEFAULT_JOBS carries the full string, but a raw Wrike timelog often carries
+ * a curated book row carries the full string, but a raw Wrike timelog carries
  * only the bare code. Keying on the code lets a bare-code pull inherit the
  * curated film/client from a full-string Job Book row (and vice versa), and
  * stops the same job being registered twice under two different keys.

@@ -3,27 +3,36 @@ import { countryFieldIds } from "../lib/countryField";
 import { joinTerritories, hasTerritory } from "./territories";
 
 /**
- * Turns a job code found on a task (possibly suffixed, e.g. "XY025953_LUG_D6"
- * or "XY017137_Social_Content") into the job number to put on a timesheet row,
- * given the list of canonical job strings.
+ * Turns a job code found on a task (possibly suffixed, e.g. "XY025953_LUG_D6")
+ * into the job number to put on a timesheet row, given the canonical job
+ * strings to match against.
  *
- * A suffix means one of two very different things, and the difference is what
- * the canonical entry already says:
+ * THE SUFFIX NEVER ENTERS THE CODE POSITION. The canonical form is
+ * "Film : CODE, Description"; a folder suffix is description, not identity.
+ * This used to splice the whole suffixed code in where the bare code belongs
+ * whenever the suffix looked like it added information:
  *
- *  - A *delivery/package* suffix ("XY025953_LUG_D6") names a specific
- *    localized package that the canonical string knows nothing about, so it
- *    has to survive onto the row — that's the case this suffix handling was
- *    written for.
- *  - A *descriptive* suffix ("XY017137_Social_Content") just restates what the
- *    canonical entry already describes ("XYi Design House Job : XY017137, XYI
- *    - SOCIAL CONTENT"). Splicing it in produced the corrupted
- *    "XY017137_SOCIAL_CONTENT" job number that the timesheet site won't
- *    recognize — in-house/non-film work hit this every time, since those
- *    folders carry a word-suffixed job field rather than a bare code.
+ *     The Odyssey : XY025716_INTL_DIGITAL_OUTDOOR_CAMPAIGN_MARKETS, INT - DOOH…
  *
- * So: keep the suffix only when it adds information the canonical entry
- * doesn't already carry. Every suffix word already present there means the
- * suffix is descriptive, and the canonical string is used unchanged.
+ * 23 of 293 Legacy rows written between 13 Jul and 7 Aug 2026 carry that shape.
+ * It is self-perpetuating, because ensureJob then wrote the mangled string into
+ * the Job Book, and every later pull adopted it back out again — the backstop
+ * became the carrier.
+ *
+ * Two returns, both of which keep the code bare:
+ *
+ *  - A match in `jobOptions` is used AS IT STANDS. When the options are the
+ *    live Job Book (they now are; they used to be a hardcoded 343-entry
+ *    constant), its description was derived by the folder scan from the very
+ *    folder the suffix came from — so the suffix is describing what the entry
+ *    already says. "XY025716_INTL_DIGITAL_OUTDOOR_CAMPAIGN_MARKETS" against
+ *    "The Odyssey : XY025716, INTL DIGITAL Outdoor Campaign Markets" adds
+ *    nothing at all.
+ *  - No match returns the BARE code. That is an honest stub: callers have
+ *    better sources for the description (the job folder's own name, the Job
+ *    Book once the code reaches it), and a bare code is one the Studio Scan
+ *    flags and fills in, where a suffixed one looked well-formed and was
+ *    silently kept forever.
  */
 /**
  * Any job-number shape reduced to the thing that identifies the job: its code.
@@ -51,28 +60,21 @@ export const jobKey = (jobNumber) => {
 };
 
 export const resolveJobNumber = (fullCode, jobOptions = []) => {
-  const rawXy = (fullCode.match(/XY\d{5,6}/i) || [""])[0].toUpperCase();
+  const rawXy = (String(fullCode).match(/XY\d{5,6}/i) || [""])[0].toUpperCase();
+  // No code at all — a free-text internal job. Nothing to normalise.
   if (!rawXy) return fullCode;
 
-  const matchingOption = jobOptions.find((job) =>
-    job.toUpperCase().includes(rawXy)
+  const matchingOption = (jobOptions || []).find((job) =>
+    String(job).toUpperCase().includes(rawXy)
   );
-  if (!matchingOption) return fullCode;
 
-  const optionUpper = matchingOption.toUpperCase();
-  if (optionUpper.includes(fullCode.toUpperCase())) return matchingOption;
+  // The registered string wins whole. Anything the suffix might add belongs in
+  // the description, and the caller has better sources for that than a folder
+  // name fragment.
+  if (matchingOption) return matchingOption;
 
-  const suffixWords = fullCode
-    .toUpperCase()
-    .slice(fullCode.toUpperCase().indexOf(rawXy) + rawXy.length)
-    .split(/[^A-Z0-9]+/)
-    .filter(Boolean);
-  const describedAlready =
-    suffixWords.length > 0 &&
-    suffixWords.every((w) => new RegExp(`\\b${w}\\b`).test(optionUpper));
-  if (describedAlready) return matchingOption;
-
-  return matchingOption.replace(new RegExp(rawXy, "i"), fullCode.toUpperCase());
+  // Unknown code: the bare code, never the suffixed one.
+  return rawXy;
 };
 
 /**

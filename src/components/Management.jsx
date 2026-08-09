@@ -27,7 +27,7 @@ import { isServiceAccount, DEPT_GROUPS } from "../lib/people";
 import { layoutRect } from "../utils/zoom";
 import { useColumnResize } from "../lib/useColumnResize";
 import { SEED_CLIENTS, SEED_PROJECT_DESCRIPTIONS } from "../data/seedData";
-import { DEFAULT_JOBS, CATEGORIES } from "../constants";
+import { CATEGORIES } from "../constants";
 import { builtInAliasesFor } from "../utils/countryCodes";
 import { loadCountryAliases } from "../lib/countryAliases";
 import { fullName as cleanFullName, cleanNamePart } from "../lib/formatName";
@@ -37,10 +37,10 @@ import DateField from "./shared/DateField";
 import OrgChart from "./OrgChart";
 import StudioAnalytics from "./StudioAnalytics";
 
-// Film titles extracted from DEFAULT_JOBS (everything before " : XY")
-const SEED_FILMS = [...new Set(
-  DEFAULT_JOBS.map(j => j.split(" : ")[0]?.trim()).filter(f => f && !f.startsWith("XYi "))
-)].sort();
+// SEED_FILMS is gone with DEFAULT_JOBS. It only ever rendered a "seed this
+// table" button while `films` was empty, and that table has been populated for
+// a while — Film Setup pulls films straight from Wrike (planFilmSync), which is
+// a better source than film titles scraped out of a hardcoded job catalogue.
 
 // Access control lives in lib/access.js (App and the Rail read it at startup;
 // importing it from this lazy-loaded chunk would drag Administration into the
@@ -571,7 +571,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
   };
 
   // job_categories uses the same CATEGORIES list used across Tracker / Legacy dropdowns
-  const seedMap = { films: SEED_FILMS, clients: SEED_CLIENTS, job_categories: CATEGORIES, project_descriptions: SEED_PROJECT_DESCRIPTIONS };
+  const seedMap = { clients: SEED_CLIENTS, job_categories: CATEGORIES, project_descriptions: SEED_PROJECT_DESCRIPTIONS };
   const seedArr = seedMap[table];
 
   // sorted list

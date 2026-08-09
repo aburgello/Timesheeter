@@ -37,7 +37,6 @@ import {
   Database,
 } from "lucide-react";
 import {
-  DEFAULT_JOBS,
   TERRITORIES,
   CATEGORIES,
   TERRITORY_FLAGS,
@@ -628,6 +627,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     }
   };
 
+  // Every job number the Job Book holds, matched against instead of the old
+  // hardcoded DEFAULT_JOBS constant.
+  //
+  // That constant held 343 strings against the book's 949, and — worse — its
+  // descriptions had drifted from the Wrike folder names the scan derives the
+  // book's from. resolveJobNumber compared a task's folder suffix against those
+  // stale descriptions, decided the suffix added information, and spliced it
+  // into the code position. Matching against the book instead means the
+  // description came from the same folder as the suffix, so there is nothing to
+  // add and the registered string is returned intact.
+  //
+  // Empty until the book loads; resolveJobNumber then returns the bare code,
+  // which the Job Book override a few lines down resolves anyway.
+  const bookJobNumbers = jobLookup?.jobNumbers || [];
+
   const guessFieldsFromTask = (linkedTask) => {
     if (!linkedTask)
       return { jobNumber: "", territory: "", category: "", notes: "" };
@@ -679,11 +693,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       );
       if (jobField) {
         // Custom field value may carry a suffix beyond the base code — see
-        // resolveJobNumber for which suffixes survive onto the row and why.
+        // resolveJobNumber for what happens to it and why.
         const cfMatch = jobField.value.match(/(XY\d{5,6}(?:_[A-Za-z0-9]+)*)/i);
         const fullCode = cfMatch[1].toUpperCase();
         rawPrefix = fullCode.match(/XY\d{5,6}/i)[0];
-        guessedJob = resolveJobNumber(fullCode, DEFAULT_JOBS);
+        guessedJob = resolveJobNumber(fullCode, bookJobNumbers);
       }
     }
 
@@ -692,10 +706,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       if (xyMatch) {
         const fullCode = xyMatch[1].toUpperCase();
         rawPrefix = fullCode.match(/XY\d{5,6}/i)[0];
-        guessedJob = resolveJobNumber(fullCode, DEFAULT_JOBS);
+        guessedJob = resolveJobNumber(fullCode, bookJobNumbers);
       } else {
         const rawSplit = linkedTask.title?.split(/[_|-]/)[0]?.trim();
-        for (const job of DEFAULT_JOBS) {
+        for (const job of bookJobNumbers) {
           const shortJob = job.split("-")[0].trim().toUpperCase();
           if (shortJob.length > 3 && searchTarget.includes(shortJob)) {
             guessedJob = job;
@@ -1699,7 +1713,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         exportDate: new Date().toISOString(),
         tasks: getConsolidatedTasks(mappedTasks),
         rawTasks: mappedTasks,
-        jobOptions: DEFAULT_JOBS,
+        // No jobOptions field. It carried DEFAULT_JOBS, and the bookmarklet has
+        // never read it — it resolves each row against the timesheet site's own
+        // job dropdown, which is the only list that can be authoritative there.
       };
 
       const jsonString = JSON.stringify(exportData);
@@ -1857,7 +1873,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     const seen = new Set();
     const out = [];
     const codeKey = (j) => (j.match(/XY\d{5,6}/i)?.[0] || j).toUpperCase();
-    [...recentJobs, ...DEFAULT_JOBS].forEach((j) => {
+    [...recentJobs, ...bookJobNumbers].forEach((j) => {
       const k = codeKey(j);
       if (!seen.has(k)) { seen.add(k); out.push(j); }
     });
@@ -1866,7 +1882,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       return /^\d{2,4}$/.test(f) || !/[a-z]/i.test(f);
     };
     return out.sort((a, b) => (nonFilm(a) ? 1 : 0) - (nonFilm(b) ? 1 : 0));
-  }, [recentJobs]);
+    // bookJobNumbers, not just recentJobs: the book arrives after first paint,
+    // so without it here the picker would keep whatever it built while the book
+    // was still empty.
+  }, [recentJobs, bookJobNumbers]);
 
   const [expandedSessions, setExpandedSessions] = useState({});
   const toggleSessions = (rowKey) =>

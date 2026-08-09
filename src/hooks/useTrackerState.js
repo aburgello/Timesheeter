@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { DEFAULT_JOBS, DAYS_OF_WEEK } from "../constants";
+import { DAYS_OF_WEEK } from "../constants";
 import { notify } from "../lib/toast";
 
 /**
@@ -53,8 +53,11 @@ export function useTrackerState() {
 
   // --- Job options (persisted locally — just a UI convenience dropdown list) ---
   const [jobOptions, setJobOptions] = useState(() => {
+    // Starts empty rather than from a hardcoded catalogue. Tracker.jsx merges
+    // jobLookup.jobNumbers over this list, so the Job Book is the real source;
+    // this only remembers jobs logged on this device that the book hasn't seen.
     const saved = localStorage.getItem("xyi_job_options_v5");
-    return saved ? JSON.parse(saved) : DEFAULT_JOBS;
+    return saved ? JSON.parse(saved) : [];
   });
 
   useEffect(() => {

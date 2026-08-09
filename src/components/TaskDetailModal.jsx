@@ -24,7 +24,6 @@ import {
   TERRITORY_FLAGS,
   TERRITORIES,
   CATEGORIES,
-  DEFAULT_JOBS,
 } from "../constants";
 import { supabase } from "../lib/supabaseClient";
 import { parseWrikeData } from "../lib/wrikeEnrich";
@@ -823,7 +822,7 @@ function fmtClock(totalSecs) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, triggerToast, getJob, ensureJob }) {
+function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, triggerToast, getJob, ensureJob, bookJobNumbers = [] }) {
   // getJob comes from the modal's shared useJobLookup — see the note there for
   // what its absence used to cost.
   const prefill = React.useMemo(
@@ -1007,8 +1006,10 @@ function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, trigger
           <div>
             <label className={labelCls}>Job number</label>
             <SearchableSelect
+              // The Job Book when the caller passed no list, rather than a
+              // hardcoded catalogue that had drifted from it.
               options={
-                jobOptions && jobOptions.length ? jobOptions : DEFAULT_JOBS
+                jobOptions && jobOptions.length ? jobOptions : (getJob ? bookJobNumbers : [])
               }
               value={jobNumber}
               onChange={setJobNumber}
@@ -1483,6 +1484,7 @@ export default function TaskDetailModal({
                   triggerToast={triggerToast}
                   getJob={jobLookup.getJob}
                   ensureJob={jobLookup.ensureJob}
+                  bookJobNumbers={jobLookup.jobNumbers}
                   onLogged={(secs) => {
                     triggerToast?.(`Logged ${fmtClock(secs)} to your timesheet.`, "success");
                   }}
