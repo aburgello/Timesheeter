@@ -26,13 +26,15 @@ import {
 import { isServiceAccount, DEPT_GROUPS } from "../lib/people";
 import { layoutRect } from "../utils/zoom";
 import { useColumnResize } from "../lib/useColumnResize";
-import { toIsoDate } from "../utils/dates";
+import { toIsoDate, isoToday } from "../utils/dates";
+import { tokenMatch } from "../utils/search";
 import { SEED_CLIENTS, SEED_PROJECT_DESCRIPTIONS } from "../data/seedData";
 import { CATEGORIES } from "../constants";
 import { builtInAliasesFor } from "../utils/countryCodes";
 import { loadCountryAliases } from "../lib/countryAliases";
 import { fullName as cleanFullName, cleanNamePart } from "../lib/formatName";
 import PageHeader from "./shared/PageHeader";
+import MonthPicker from "./shared/MonthPicker";
 import HubRow from "./shared/HubRow";
 import DateField from "./shared/DateField";
 import OrgChart from "./OrgChart";
@@ -2951,8 +2953,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
         <div className="flex items-center justify-between mb-1.5">
           <label className="block text-[10px] font-black uppercase tracking-widest text-[#768994]">Film</label>
           <button onClick={() => {
-              try { sessionStorage.setItem("openAdminSection", "films"); } catch { /* ignore */ }
-              window.location.hash = "management";
+              window.location.hash = "management/films";
             }}
             title="Open the Films page (in Administration) to add or sync films"
             className="flex items-center gap-1.5 text-[11px] font-bold text-[#12a0e1] hover:text-[#0d8bc4] transition-colors">
@@ -2965,7 +2966,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
           <p className="text-xs text-[#768994] mt-1.5">
             No films yet — <button onClick={() => setShowFilmSync(true)} className="text-[#1cc1a5] font-bold hover:underline">sync them from Wrike</button>{" "}
             or add one on the{" "}
-            <button onClick={() => { try { sessionStorage.setItem("openAdminSection", "films"); } catch { /* ignore */ } window.location.hash = "management"; }}
+            <button onClick={() => { window.location.hash = "management/films"; }}
               className="text-[#12a0e1] font-bold hover:underline">Films</button> page.
           </p>
         )}
@@ -3730,7 +3731,9 @@ export function JobBookSection({ setActiveTab }) {
   const [jobs, setJobs]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState("");
-  const [monthFilter, setMonthFilter] = useState(() => new Date().toISOString().slice(0, 7));
+  // Local, not UTC: toISOString() rolls back a day west of Greenwich, which on
+  // the 1st of a month would default this filter to the previous month.
+  const [monthFilter, setMonthFilter] = useState(() => isoToday().slice(0, 7));
   const [showModal, setShowModal] = useState(false);
   const [showScan, setShowScan] = useState(false);
   const [editJob, setEditJob]   = useState(null);
@@ -3781,13 +3784,12 @@ export function JobBookSection({ setActiveTab }) {
   useEffect(() => { loadRef(); }, [loadRef]);
   useEffect(() => { loadJobs(); setPage(0); }, [loadJobs]);
 
+  // Every word in the query has to appear somewhere across the job's fields, in
+  // any order — so "Eben Titles" finds "Ebenezer : XY026043, INT - Teaser
+  // Titles". Also searches the project description, which the old rule ignored.
   const filtered = useMemo(() =>
-    jobs.filter(j =>
-      !search ||
-      (j.job_number || "").toLowerCase().includes(search.toLowerCase()) ||
-      (j.client || "").toLowerCase().includes(search.toLowerCase()) ||
-      (j.film_title || "").toLowerCase().includes(search.toLowerCase())
-    ),
+    jobs.filter(j => tokenMatch(search, j.job_number, j.client, j.film_title,
+                                j.project_description, j.job_work_category)),
     [jobs, search]
   );
 
@@ -3944,20 +3946,11 @@ export function JobBookSection({ setActiveTab }) {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-5">
-        <div className="flex items-center gap-2 bg-white border border-[#dce4ec] rounded-xl px-3 py-2">
-          <span className="text-[10px] font-black text-[#768994] uppercase tracking-widest">Month</span>
-          <input type="month" value={monthFilter} onChange={e => setMonthFilter(e.target.value)}
-            className="text-sm font-bold text-[#122027] outline-none bg-transparent" />
-          {monthFilter && (
-            <button onClick={() => setMonthFilter("")} className="text-slate-400 hover:text-rose-500">
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+        <MonthPicker value={monthFilter} onChange={setMonthFilter} />
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#768994]" />
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search job number, client, film…"
+            placeholder="Search — try “Eben Titles”…"
             className="w-full pl-9 pr-4 py-2 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#1cc1a5] bg-white"
           />
         </div>
@@ -5743,7 +5736,8 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
   const backToHub = () => { setNavDirection(-1); setActiveTab(null); setSectionHash(null); };
   // Same, but guarantees the group is open on arrival. Identical to backToHub
   // when you drilled in through the accordion; the difference shows on a deep
-  // link (sessionStorage openAdminSection), where no group was ever expanded.
+  // link (arriving straight at `#management/films`), where no group was ever
+  // expanded.
   const backToGroup = (groupId) => { setNavDirection(-1); setExpandedGroup(groupId); setActiveTab(null); setSectionHash(null); };
 
   // Back/forward between sections. The browser has already changed the hash by
@@ -5794,17 +5788,6 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // One-shot deep link: another page (e.g. Jobs Setup's "Manage films") can stash
-  // a section id before switching to #management, and we open it straight away.
-  useEffect(() => {
-    let target = null;
-    try { target = sessionStorage.getItem("openAdminSection"); sessionStorage.removeItem("openAdminSection"); } catch { /* ignore */ }
-    // replace, not push: the entry the caller created by setting #management is
-    // the one that should carry the section, otherwise Back lands on an empty
-    // Administration hub the user never actually visited.
-    if (target) { setNavDirection(1); setActiveTab(target); setSectionHash(target, true); }
-  }, []);
 
   // Administration is a first-class page for PMs; the hardcoded allowlist
   // remains as an admin override for everyone else.
