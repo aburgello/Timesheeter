@@ -21,23 +21,18 @@ begin;
 -- ---------------------------------------------------------------------------
 -- Sequences (standalone; identity-column sequences are created with the tables)
 -- ---------------------------------------------------------------------------
+-- Orphaned since 9 Aug 2026. It fed set_job_number(), a second job-number
+-- allocator that never knew what codes were in use: it sat at 25903 while the
+-- book's highest was XY026128, so it would have minted XY025904 — already
+-- "Forgotten Island : XY025904, HoytsBLB" — and collided on essentially every
+-- attempt for the next 203 jobs. Kept only because dropping it is the one
+-- irreversible part of removing it; nothing references it.
+-- See migrations/20260809200000_drop_set_job_number_trigger.sql.
 create sequence if not exists public.job_number_seq;
 
 -- ---------------------------------------------------------------------------
 -- Functions (defined before triggers that reference them)
 -- ---------------------------------------------------------------------------
-create or replace function public.set_job_number()
- returns trigger
- language plpgsql
-as $function$
-BEGIN
-  IF NEW.job_number IS NULL THEN
-    NEW.job_number := 'XY0' || nextval('job_number_seq')::TEXT;
-  END IF;
-  RETURN NEW;
-END;
-$function$;
-
 create or replace function public.touch_updated_at()
  returns trigger
  language plpgsql
@@ -432,7 +427,10 @@ create index wrike_tasks_cache_updated_date_idx on public.wrike_tasks_cache usin
 -- Triggers
 -- ---------------------------------------------------------------------------
 create trigger trg_jobs_updated_at before update on public.jobs for each row execute function touch_updated_at();
-create trigger trg_set_job_number before insert on public.jobs for each row execute function set_job_number();
+-- trg_set_job_number was dropped on 9 Aug 2026 — it invented a job number from
+-- a counter that had no idea what was in use. A job arriving without a number
+-- is a bug in whatever sent it, and is now left null and visible rather than
+-- papered over. See migrations/20260809200000_drop_set_job_number_trigger.sql.
 create trigger board_now_touch before update on public.board_now for each row execute function set_board_now_updated_at();
 
 -- ---------------------------------------------------------------------------

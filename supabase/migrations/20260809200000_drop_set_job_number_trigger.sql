@@ -1,0 +1,44 @@
+-- Remove the second, independent job-number allocator.
+--
+-- trg_set_job_number fired BEFORE INSERT on jobs and, whenever job_number came
+-- in NULL, stamped one on from its own sequence:
+--
+--     NEW.job_number := 'XY0' || nextval('job_number_seq')::TEXT;
+--
+-- That counter has never known what job numbers are actually in use. The app
+-- allocates by reading the highest code in the book and adding one
+-- (nextJobCode), and the two have never been in contact. Measured on
+-- 9 Aug 2026:
+--
+--     job_number_seq                     25903  → would mint XY025904
+--     XY025904 already belongs to        Forgotten Island : XY025904, HoytsBLB
+--     highest code actually in the book  XY026128
+--     real jobs in the range it would
+--     hand out next                      203
+--
+-- So it was 224 codes behind and would have collided on essentially every
+-- attempt for the next couple of hundred — with a value that looks entirely
+-- normal. Right shape, right length, right range; nothing about XY025904 says
+-- "this came from the wrong place".
+--
+-- It never fired, because every write path supplies a number. The exposure was
+-- always a FUTURE one: an integration, a bulk load or a hand-written insert
+-- that omits job_number, by someone with no reason to suspect the database
+-- would invent one. jobs_job_code_key (added earlier today) already downgraded
+-- that from silent corruption to a rejected write, but protection by accident
+-- is not protection by design.
+--
+-- A job row arriving without a number is a bug in whatever sent it. It should
+-- be refused, not papered over. Dropping the trigger makes such a row insert
+-- with job_number NULL, which is visible and harmless — the app treats a
+-- null-numbered row as unfiled, and the code-unique index ignores NULLs.
+--
+-- NOT NULL on jobs.job_number is the stronger form of this and is deliberately
+-- left for a separate decision.
+--
+-- job_number_seq itself is intentionally NOT dropped: it holds no data anyone
+-- needs, but dropping it is the one irreversible part of this change, and
+-- nothing references it once the function is gone.
+
+drop trigger if exists trg_set_job_number on public.jobs;
+drop function if exists public.set_job_number();
