@@ -24,7 +24,7 @@ import {
   discoverItemPriceField, fetchFolderItemPrice, descriptionsAgree,
 } from "../lib/wrikeCampaign";
 import { isServiceAccount, DEPT_GROUPS } from "../lib/people";
-import { layoutRect } from "../utils/zoom";
+import { layoutRect, layoutViewport } from "../utils/zoom";
 import { useColumnResize } from "../lib/useColumnResize";
 import { toIsoDate, isoToday } from "../utils/dates";
 import { tokenMatch } from "../utils/search";
@@ -1182,11 +1182,19 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
     return options.filter(o => o.toLowerCase().includes(q.toLowerCase())).slice(0, limit);
   }, [options, q, limit]);
 
+  // layoutRect, not getBoundingClientRect: the panel below is position:fixed
+  // and styled from this rect, so under html{zoom:1.1} a raw (visual) rect
+  // would be zoomed a second time on paint and land offset from the button.
+  // The viewport height rides along so the panel can decide which way to open.
+  const measure = () => {
+    const r = layoutRect(btnRef.current);
+    if (!r) return null;
+    const { vh } = layoutViewport();
+    return { top: r.top, bottom: r.bottom, left: r.left, width: r.width, vh };
+  };
+
   const toggle = () => {
-    // layoutRect, not getBoundingClientRect: the panel below is position:fixed
-    // and styled from this rect, so under html{zoom:1.1} a raw (visual) rect
-    // would be zoomed a second time on paint and land offset from the button.
-    if (!open) setRect(layoutRect(btnRef.current));
+    if (!open) setRect(measure());
     setOpen(o => !o);
   };
 
@@ -1200,14 +1208,27 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
   // page doesn't leave it stranded over the wrong spot.
   useEffect(() => {
     if (!open) return;
-    const reposition = () => setRect(layoutRect(btnRef.current));
+    const reposition = () => setRect(measure());
     window.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
     return () => {
       window.removeEventListener("scroll", reposition, true);
       window.removeEventListener("resize", reposition);
     };
-  }, [open]);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Open upwards when there isn't room below — the film picker sits low in the
+  // Bulk Campaign panel, where a downward list ran off the bottom of the page
+  // and its options couldn't be reached at all. Anchored by `bottom` when
+  // flipped, so it needs no height measurement to sit right above the button.
+  // Either way the list is capped to the space actually available, so it can
+  // never overflow the viewport, and gets as tall as that space allows rather
+  // than a fixed ~5 rows.
+  const GAP = 6, EDGE = 12, CHROME = 56; // CHROME ≈ the search box above the list
+  const spaceBelow = rect ? rect.vh - rect.bottom - GAP - EDGE : 0;
+  const spaceAbove = rect ? rect.top - GAP - EDGE : 0;
+  const dropUp = !!rect && spaceBelow < 220 && spaceAbove > spaceBelow;
+  const listMax = Math.max(140, Math.round((dropUp ? spaceAbove : spaceBelow) - CHROME));
 
   return (
     <div className={className}>
@@ -1224,7 +1245,9 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
           <div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} />
           <div
             className="fixed z-[9999] bg-white border border-[#dce4ec] rounded-2xl shadow-2xl overflow-hidden"
-            style={{ top: rect.bottom + 6, left: rect.left, width: rect.width }}
+            style={dropUp
+              ? { bottom: rect.vh - rect.top + GAP, left: rect.left, width: rect.width }
+              : { top: rect.bottom + GAP, left: rect.left, width: rect.width }}
           >
             <div className="p-2 border-b border-[#dce4ec]/60">
               <div className="relative">
@@ -1234,7 +1257,7 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
                   className="w-full pl-8 pr-2 py-1.5 text-sm text-[#122027] outline-none bg-slate-50 rounded-xl" />
               </div>
             </div>
-            <div className="max-h-52 overflow-y-auto">
+            <div className="overflow-y-auto" style={{ maxHeight: listMax }}>
               {hits.length === 0 && <p className="px-4 py-3 text-sm text-[#768994]">No matches</p>}
               {hits.map(o => (
                 <button key={o} type="button"
@@ -2930,7 +2953,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
             <div className="relative flex-1 max-w-[220px] ml-auto">
               <Search className="w-3.5 h-3.5 text-[#b0bec5] absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input value={slotQuery} onChange={(e) => setSlotQuery(e.target.value)}
-                placeholder="Search slots\u2026"
+                placeholder="Search slots…"
                 className="w-full pl-8 pr-2 py-1.5 text-[11px] bg-white border border-[#dce4ec] rounded-lg outline-none focus:border-[#12a0e1] transition-colors" />
             </div>
             <button type="button"
@@ -2943,7 +2966,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
             {renderTree(templateTree, "template")}
           </div>
           <p className="px-4 pb-3 pt-1 text-[10px] text-[#768994] shrink-0">
-            {templateLeaves.length} job slot{templateLeaves.length === 1 ? "" : "s"} \u00b7 click one to activate another job of that type.
+            {templateLeaves.length} job slot{templateLeaves.length === 1 ? "" : "s"} · click one to activate another job of that type.
           </p>
         </div>
       )}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Activity, CheckCircle2, Clock, Film, Table2, BarChart3, RefreshCw } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { cleanNamePart } from "../lib/formatName";
@@ -132,7 +132,9 @@ function ChartCard({ title, subtitle, rows, valueFmt, children }) {
 
 // Shared tooltip: one absolutely-positioned pill per chart, driven by hover.
 function useTooltip() {
-  const [tip, setTip] = useState(null); // { x, y, text }
+  const [tip, setTip] = useState(null); // { x, y, text, boxW, boxH }
+  const pillRef = useRef(null);
+
   const show = (e, text) => {
     const box = e.currentTarget.closest("[data-chart]").getBoundingClientRect();
     // clientX and box.left are both visual pixels under html{zoom:1.1}; their
@@ -140,11 +142,40 @@ function useTooltip() {
     // (zoomed) chart, so its left/top are re-zoomed on paint. Divide back to
     // layout space or the pill drifts ~10% off the cursor.
     const z = zoomFactor();
-    setTip({ x: (e.clientX - box.left) / z, y: (e.clientY - box.top) / z, text });
+    setTip({
+      x: (e.clientX - box.left) / z,
+      y: (e.clientY - box.top) / z,
+      text,
+      boxW: box.width / z,
+      boxH: box.height / z,
+    });
   };
   const hide = () => setTip(null);
+
+  // Keep the pill inside its chart. It sits to the cursor's right by default,
+  // but it's nowrap and the rightmost bars are the tall ones people hover — so
+  // near the right edge it would run out of the card. Measured and clamped
+  // here rather than guessed at, because the width depends on the label text.
+  //
+  // Written straight to the node in a layout effect (not through state) so it
+  // lands before paint and can't loop: measuring re-renders would re-measure.
+  useLayoutEffect(() => {
+    const el = pillRef.current;
+    if (!el || !tip) return;
+    const PAD = 8;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const left = Math.max(PAD, Math.min(tip.x + 12, tip.boxW - w - PAD));
+    // Flip below the cursor if there's no room above, so it never clips the top.
+    const above = tip.y - h - 10;
+    const top = above >= PAD ? above : Math.min(tip.y + 16, tip.boxH - h - PAD);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [tip]);
+
   const node = tip && (
     <div
+      ref={pillRef}
       className="pointer-events-none absolute z-10 bg-[#122027] text-white text-[11px] font-bold rounded-lg px-2.5 py-1.5 shadow-lg whitespace-nowrap"
       style={{ left: tip.x + 12, top: tip.y - 34 }}
     >
