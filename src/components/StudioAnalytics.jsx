@@ -384,13 +384,22 @@ export default function StudioAnalytics({ wrikeData = [] }) {
   const [filmNorms, setFilmNorms] = useState([]); // curated film titles, normalized
   const [deptMap, setDeptMap] = useState({}); // wrike_user_id -> department
 
+  // Read the whole studio's time through the Worker, not straight from
+  // Supabase. `tasks` carries an RLS policy (wrike_user_isolation) that limits
+  // a browser to rows where wrike_user_id is the caller's own — so a direct
+  // query here returned only the viewer's timesheet, and every chart on this
+  // page silently described one person while claiming to describe the studio.
+  // (It also duplicated the Jobs Feed's own trap: no pagination, so PostgREST's
+  // 1000-row default would have truncated the data anyway.)
   useEffect(() => {
     let cancelled = false;
-    supabase
-      .from("tasks")
-      .select("date, time_spent, additional_time, client, wrike_user_id")
-      .order("id")
-      .then(({ data }) => { if (!cancelled) setLogRows(data || []); });
+    fetch("/api/jobs-feed")
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((data) => { if (!cancelled) setLogRows(Array.isArray(data) ? data : []); })
+      .catch((e) => {
+        console.error("[StudioAnalytics] /api/jobs-feed failed", e);
+        if (!cancelled) setLogRows([]);
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -572,7 +581,6 @@ export default function StudioAnalytics({ wrikeData = [] }) {
       {/* Campaign progress — the health hero: completed vs backlog per film. */}
       <ChartCard
         title="Campaign progress"
-        subtitle="Completion by film, busiest first — counts are Wrike task tallies, a rough proxy for order volume, so read them as estimates"
         rows={campaigns.top.map((c) => ({ label: c.label, value: c.pct }))}
         valueFmt={(v) => `${v}%`}
       >
@@ -588,7 +596,6 @@ export default function StudioAnalytics({ wrikeData = [] }) {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <ChartCard
           title="Tasks completed per month"
-          subtitle="Studio throughput, last 12 months"
           rows={monthly.map((m) => ({ label: m.full, value: m.value }))}
           valueFmt={fmtInt}
         >
@@ -597,7 +604,6 @@ export default function StudioAnalytics({ wrikeData = [] }) {
 
         <ChartCard
           title="Hours logged per week"
-          subtitle="Timesheet effort, last 10 weeks — a capacity read alongside output"
           rows={weekly.map((w) => ({ label: w.full, value: w.value }))}
           valueFmt={fmtHours}
         >
@@ -606,7 +612,6 @@ export default function StudioAnalytics({ wrikeData = [] }) {
 
         <ChartCard
           title="Hours by department"
-          subtitle="Where the logged time goes across teams"
           rows={hoursByDept}
           valueFmt={fmtHours}
         >
@@ -621,7 +626,6 @@ export default function StudioAnalytics({ wrikeData = [] }) {
 
         <ChartCard
           title="Hours logged by client"
-          subtitle="From the new timesheets — young data (started July 2026), grows as the team logs time"
           rows={hoursByClient}
           valueFmt={fmtHours}
         >
