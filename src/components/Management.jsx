@@ -1237,7 +1237,8 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
 
   // Optional grouping: bucket hits under uppercase headers (e.g. studio),
   // ordered by groupOrder with any group not listed sorting after in alpha
-  // order. When groupBy is absent the picker stays a flat list.
+  // order. The renderer draws each group as a card (see the render block
+  // below). When groupBy is absent the picker stays a flat list.
   const groups = useMemo(() => {
     if (!groupBy) return null;
     const m = new Map();
@@ -1312,6 +1313,18 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
     </button>
   );
 
+  // Compact, borderless row for inside a studio card — the card is the visual
+  // unit here, so rows lose their dividers and just sit on hover like a chip.
+  const renderCardRow = (o) => (
+    <button key={o} type="button"
+      onClick={() => { onChange(o); setQ(""); setOpen(false); }}
+      className={`w-full text-left px-2.5 py-1.5 text-[13px] leading-snug rounded-lg transition-colors ${
+        o === value ? "bg-[#12a0e1]/10 text-[#12a0e1] font-bold" : "text-[#122027] hover:bg-slate-50"
+      }`}>
+      {o}
+    </button>
+  );
+
   return (
     <div className={className}>
       <button ref={btnRef} type="button" disabled={loading}
@@ -1341,12 +1354,23 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
             </div>
             <div className="overflow-y-auto" style={{ maxHeight: listMax }}>
               {hits.length === 0 && <p className="px-4 py-3 text-sm text-[#768994]">No matches</p>}
-              {groups ? groups.map(([g, items]) => (
-                <div key={g}>
-                  <div className="px-4 pt-2.5 pb-1 text-[10px] font-black uppercase tracking-widest text-[#768994]">{g}</div>
-                  {items.map(renderRow)}
+              {groups ? (
+                // Studio groups render as a 2-column grid of cards — each card
+                // carries its studio's name in blue over the list of films, the
+                // same card idiom as the Studio Analytics tiles. Two groups sit
+                // side by side (Universal next to Paramount), and within a card
+                // films keep the picker's activity sort (newest on top).
+                <div className="grid grid-cols-2 gap-2 p-2">
+                  {groups.map(([g, items]) => (
+                    <div key={g} className="bg-white border border-[#dce4ec] rounded-2xl shadow-sm overflow-hidden">
+                      <div className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#12a0e1] border-b border-[#eef2f6] bg-slate-50/60">{g}</div>
+                      <div className="py-1">
+                        {items.map(renderCardRow)}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              )) : hits.map(renderRow)}
+              ) : hits.map(renderRow)}
             </div>
           </div>
         </>,
