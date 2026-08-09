@@ -1,13 +1,14 @@
 import React, {
   useState,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useCallback,
 } from "react";
 import { useLegacyRows, getCurrentWeekStart, hmToHours } from "../hooks/useLegacyRows";
 import { useColumnResize } from "../lib/useColumnResize";
-import { layoutRect } from "../utils/zoom";
+import { layoutRect, layoutViewport } from "../utils/zoom";
 import { useJobLookup } from "../hooks/useJobLookup";
 import {
   supabase,
@@ -61,6 +62,41 @@ import {
   territoryCode,
   toTimesheetTerritories,
 } from "../utils/territories";
+
+// A grid textarea that grows to fit its text instead of hiding it.
+//
+// The description and notes cells were rows={2} with overflow-hidden, so a
+// three-line entry — "INTL DIGITAL Outdoor Campaign Markets" is exactly three —
+// lost its last line silently: no scrollbar, no ellipsis, and no way to read the
+// rest short of clicking in and arrowing down.
+//
+// Height comes off scrollHeight, reset to auto first so deleting text shrinks it
+// back. Keyed to `value` rather than to typing, so it also follows text that
+// arrives from a Wrike pull or the job lookup's autofill. Because `rows` still
+// sets the natural height, scrollHeight can't fall below two lines, and cells
+// with short descriptions stay the height they are today.
+//
+// Module level, not nested in LegacyTimesheet: a component redefined on every
+// render is a new type each time, which would remount these on every keystroke
+// and take the caret with it.
+function AutoGrowTextarea({ value, ...rest }) {
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    // Add the borders back. scrollHeight covers content + padding but not
+    // border, while Tailwind's preflight puts these on border-box — so
+    // assigning scrollHeight straight across leaves the content box short by
+    // the border and still clips the last line's descenders. Measured: 2px on
+    // these cells, which is precisely the sort of "nearly right" that put a
+    // line of text out of reach in the first place.
+    const cs = getComputedStyle(el);
+    const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    el.style.height = `${el.scrollHeight + border}px`;
+  }, [value]);
+  return <textarea ref={ref} value={value} {...rest} />;
+}
 
 export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Drag-resizable column configs (persisted per table).
@@ -179,6 +215,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     updateRow,
     deleteRow,
     weekStart,
+    justSaved,
   } = useLegacyRows(showToast, wrikeUserId);
 
   // "dd/mm/yyyy" -> "yyyy-mm-dd", for comparing against weekStart (ISO)
@@ -1798,8 +1835,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     if (addEntryFor === jobNumber) { setAddEntryFor(null); return; }
     const rect = layoutRect(e.currentTarget);
     const w = 256, estH = 380;
-    let left = Math.max(8, Math.min(rect.right - w, window.innerWidth - w - 8));
-    const spaceBelow = window.innerHeight - rect.bottom;
+    // Layout pixels, matching layoutRect and the style this ends up in.
+    const { vw, vh } = layoutViewport();
+    let left = Math.max(8, Math.min(rect.right - w, vw - w - 8));
+    const spaceBelow = vh - rect.bottom;
     const top = spaceBelow < estH && rect.top > spaceBelow
       ? Math.max(8, rect.top - estH)
       : rect.bottom + 6;
@@ -1887,7 +1926,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         ).length > 1
     );
 
-  const textAreaClass = `w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 outline-none text-[12px] text-slate-800 font-medium p-2 transition-all rounded-md resize-none overflow-hidden leading-tight ${
+  const textAreaClass = `w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 outline-none text-[12px] text-slate-800 font-medium p-2 transition-all rounded-md resize-none overflow-hidden leading-tight placeholder:text-slate-500 ${
     !rowsAreEditable ? "opacity-60 cursor-not-allowed" : ""
   }`;
 
@@ -2316,17 +2355,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                             >
                                               {label}
                                               {isOverdue && (
-                                                <span className="text-[9px] font-black uppercase tracking-wider text-rose-500">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-rose-500">
                                                   overdue
                                                 </span>
                                               )}
                                               {isToday && (
-                                                <span className="text-[9px] font-black uppercase tracking-wider text-amber-500">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-amber-500">
                                                   today
                                                 </span>
                                               )}
                                               {isTomorrow && (
-                                                <span className="text-[9px] font-black uppercase tracking-wider text-yellow-500">
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-yellow-500">
                                                   tmrw
                                                 </span>
                                               )}
@@ -2482,7 +2521,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             >
               <Layers className="w-3.5 h-3.5" />
               Consolidated
-              <span className={`ml-0.5 text-[9px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-400"}`}>
+              <span className={`ml-0.5 text-[10px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-600"}`}>
                 {consolidatedView ? "ON" : "OFF"}
               </span>
             </button>
@@ -2582,7 +2621,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                               />
                             </div>
                           )}
-                          <span className="text-[9px] font-black text-[#768994] bg-white border border-slate-200 rounded-full px-1.5 py-0.5 shrink-0">
+                          <span className="text-[10px] font-black text-[#768994] bg-white border border-slate-200 rounded-full px-1.5 py-0.5 shrink-0">
                             {g._subRows.length}
                           </span>
                           {rowsAreEditable && (
@@ -2618,7 +2657,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                       <Plus className="w-3.5 h-3.5" /> One blank entry
                                     </button>
                                     <div className="my-1.5 border-t border-slate-100" />
-                                    <p className="px-1.5 py-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                                    <p className="px-1.5 py-1 text-[10px] font-black uppercase tracking-widest text-slate-500">
                                       One entry, several countries
                                     </p>
                                     <input
@@ -2682,7 +2721,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       </td>
                       <td className="p-2 border-r border-slate-200/60 align-middle text-[12px] font-semibold text-slate-600 truncate px-3">{g.client}</td>
                       <td className="p-2 border-r border-slate-200/60 align-middle text-[12px] font-black text-slate-800 truncate px-3">{g.filmTitle}</td>
-                      <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-400 truncate px-3">{g.projectDescription}</td>
+                      <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-600 truncate px-3">{g.projectDescription}</td>
                       <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-500 px-3">
                         {g.territories.length ? (
                           <span className="flex flex-wrap items-center gap-x-1 gap-y-0.5" title={g.territories.join(", ")}>
@@ -2714,6 +2753,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   } ${isSub ? "bg-white" : ""}`}
                 >
                   <td className={`p-2 border-r border-slate-100 align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
+                    {/* Save confirmation. Absolute against the row (the <tr> is
+                        position:relative), so it sweeps the full width from
+                        inside the first cell — a <tr> can only hold cells, so it
+                        can't live directly on the row.
+                        Keyed by the nonce: React remounts it on each save, which
+                        restarts the animation. Re-applying a class would not,
+                        and a fast tab across cells saves the same row twice in
+                        well under a second. */}
+                    {justSaved?.[row.id] && (
+                      <span key={justSaved[row.id]} className="row-saved-flash" aria-hidden="true" />
+                    )}
                     <div className="flex items-start gap-2 pl-1">
                       <button
                         onClick={() => handleDeleteRow(row.id)}
@@ -2738,7 +2788,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           // The job is set once at the group top, never per subrow —
                           // the subrow just carries its own country/category identity.
                           <div className="flex items-center gap-1.5 pl-3 border-l-2 border-[#12a0e1]/25 py-1 min-w-0" title={row.territory}>
-                            <span className="text-slate-300 text-[11px] shrink-0">↳</span>
+                            <span className="text-slate-500 text-[11px] shrink-0">↳</span>
                             {/* Capped: this sits on one line next to the category,
                                 so a 20-country row can't be allowed to run away. */}
                             <span className="text-[13px] leading-none shrink-0">{territoryFlags(row.territory, 6) || "🌐"}</span>
@@ -2746,12 +2796,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                               {splitTerritories(row.territory).length > 6
                                 ? `${splitTerritories(row.territory).length} countries`
                                 : row.territory || "No country"}
-                              {row.category ? <span className="font-medium text-slate-400"> · {row.category.replace(/^(Digital|Print|XYi)\s*-\s*/, "")}</span> : null}
+                              {row.category ? <span className="font-medium text-slate-600"> · {row.category.replace(/^(Digital|Print|XYi)\s*-\s*/, "")}</span> : null}
                             </span>
                           </div>
                         ) : (
                           <div className={`flex items-center gap-1.5 w-full min-w-0 ${isSub ? "pl-2 border-l-2 border-[#12a0e1]/25" : ""}`}>
-                            {isSub && <span className="text-slate-300 text-[11px] shrink-0" title="Set a job for this entry">↳</span>}
+                            {isSub && <span className="text-slate-500 text-[11px] shrink-0" title="Set a job for this entry">↳</span>}
                             <div className="flex-1 min-w-0">
                               <TableSearchableSelect
                                 options={jobOptions}
@@ -2800,7 +2850,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   </td>
 
                   <td className="p-2 border-r border-slate-100 align-middle w-[220px]">
-                    <textarea
+                    <AutoGrowTextarea
                       rows={2}
                       value={row.projectDescription}
                       onChange={(e) =>
@@ -2869,7 +2919,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   </td>
 
                   <td className="p-2 border-r border-slate-100 align-middle w-[140px]">
-                    <textarea
+                    <AutoGrowTextarea
                       value={row.notes || ""}
                       onChange={(e) =>
                         handleUpdateRow(row.id, "notes", e.target.value)
@@ -2877,7 +2927,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       placeholder="Notes…"
                       rows={2}
                       disabled={!rowsAreEditable}
-                      className={`w-full text-[11px] bg-transparent border border-transparent rounded-lg px-2 py-1 resize-none overflow-hidden transition-colors leading-relaxed placeholder:text-slate-300 ${
+                      className={`w-full text-[11px] bg-transparent border border-transparent rounded-lg px-2 py-1 resize-none overflow-hidden transition-colors leading-relaxed placeholder:text-slate-500 ${
                         !rowsAreEditable
                           ? "text-slate-400 cursor-not-allowed"
                           : "text-slate-700 hover:border-slate-200 focus:border-[#12a0e1] focus:bg-[#12a0e1]/5 outline-none"
@@ -2944,7 +2994,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     colSpan={COLUMNS.length + 1}
                     className="px-4 py-3 text-center"
                   >
-                    <span className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-slate-300 group-hover/addrow:text-[#12a0e1] transition-colors">
+                    <span className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-slate-600 group-hover/addrow:text-[#12a0e1] transition-colors">
                       <Plus className="w-3.5 h-3.5" />
                       Add row
                     </span>

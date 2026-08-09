@@ -41,7 +41,7 @@ import TaskDetailModal, { CsvPreviewModal } from "./TaskDetailModal";
 import DeliverySpecsModal from "./DeliverySpecsModal";
 import { parsePdfDeliverySpecs } from "../utils/pdfTableParser";
 import { formatDurationText } from "../utils/timeHelpers";
-import { getTagStyle, getBorderColorClass } from "../utils/tagStyles";
+import { getTagStyle } from "../utils/tagStyles";
 import { TERRITORY_FLAGS } from "../constants";
 import { splitTerritories, territoryFlags } from "../utils/territories";
 import {
@@ -191,9 +191,63 @@ function timeAgo(iso) {
   return days === 1 ? "yesterday" : `${days}d ago`;
 }
 
-function StatCard({ label, value, unit, icon: Icon, accent = "#12a0e1" }) {
+// Count a figure up to its value once, the first time there is one to show.
+//
+// This is the one page where that's the right call. Per the motion budget, a
+// hundred-times-a-day surface gets no animation at all — but a profile is
+// somewhere you look occasionally, and "1,284 tasks all time" arriving by
+// counting is the difference between a number and an achievement. It also does
+// something useful: the figure moving is what tells you the lifetime stats
+// finished loading, which a static number swapping in from "—" does not.
+//
+// Once only. These values refetch, and a card that re-counted every time the
+// cache refreshed would be a fidget toy. Non-numeric values (a formatted
+// string, the "—" placeholder) pass straight through untouched.
+const COUNT_UP_MS = 900;
+function useCountUp(target) {
+  const isNum = typeof target === "number" && Number.isFinite(target);
+  const [shown, setShown] = useState(isNum ? 0 : target);
+  const counted = useRef(false);
+
+  useEffect(() => {
+    if (!isNum) { setShown(target); return; }
+    // Already run, or the user asked for stillness: land on the real number.
+    if (counted.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      counted.current = true;
+      setShown(target);
+      return;
+    }
+    counted.current = true;
+    const start = performance.now();
+    let raf;
+    const step = (now) => {
+      const p = Math.min((now - start) / COUNT_UP_MS, 1);
+      // power3.out — the same decelerating family as the GSAP reveals on this
+      // page and the chart bars on Analytics, so the whole app counts and
+      // arrives with one accent.
+      setShown(Math.round(target * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, isNum]);
+
+  return shown;
+}
+
+function StatCard({ label, value, unit, icon: Icon, accent = "#12a0e1", format }) {
+  const counted = useCountUp(value);
+  // A formatter turns the counter into its own unit as it climbs — "Total time"
+  // counts seconds but reads "1h 23m", so the figure is legible at every frame
+  // rather than being a bare number until it lands.
+  const display = typeof counted === "number" && format ? format(counted) : counted;
+
   return (
-    <div className="bg-white border border-[#dce4ec] rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+    <div
+      className="group bg-white border border-[#dce4ec] rounded-2xl p-5 shadow-sm flex flex-col gap-3
+                 transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]
+                 hover:-translate-y-px hover:border-[#c6d0da] hover:shadow-[0_10px_26px_-12px_rgba(18,32,39,0.22)]"
+    >
       <div className="flex items-center gap-2">
         <div
           className="p-1.5 rounded-lg"
@@ -201,22 +255,28 @@ function StatCard({ label, value, unit, icon: Icon, accent = "#12a0e1" }) {
         >
           <Icon className="w-3.5 h-3.5" />
         </div>
-        <span className="text-[10px] font-black text-[#768994] uppercase tracking-widest">
+        <span className="text-[10px] font-black text-[#768994] uppercase tracking-[0.18em]">
           {label}
         </span>
       </div>
-      <div className="text-2xl font-black text-[#122027] leading-none">
-        {value} <span className="text-sm font-bold text-[#768994]">{unit}</span>
+      {/* Display weight and tabular figures, matching Analytics' KPI tiles —
+          tabular so a counting number doesn't jitter its own width per frame. */}
+      <div className="font-display text-[clamp(1.75rem,3vw,2.5rem)] font-bold text-[#122027] leading-[0.9] tracking-[-0.04em] tabular-nums">
+        {display} <span className="font-sans text-sm font-bold tracking-normal text-[#768994]">{unit}</span>
       </div>
     </div>
   );
 }
 
+// The page's top heading level, and it has to be the largest thing on it. At
+// text-base it was 16px, sitting above 19px day headings and 17px job numbers —
+// the outline read backwards, every level quieter than the one it contained.
+// The scale now descends: section 22px → day 19px → row 17px → meta 11px.
 function SectionTitle({ icon: Icon, children, right }) {
   return (
-    <div className="flex items-center justify-between mb-5">
-      <h2 className="text-base font-black text-[#122027] tracking-tight flex items-center gap-2">
-        <Icon className="w-4 h-4 text-[#12a0e1]" /> {children}
+    <div className="flex items-center justify-between gap-4 mb-5">
+      <h2 className="font-display text-[22px] font-bold text-[#122027] tracking-[-0.03em] leading-none flex items-center gap-2.5 min-w-0">
+        <Icon className="w-4 h-4 text-[#12a0e1] shrink-0" /> <span className="truncate">{children}</span>
       </h2>
       {right}
     </div>
@@ -240,36 +300,81 @@ function Empty({ icon: Icon, message }) {
 // place with no opacity fade on the type (see the useGSAP block in Profile).
 // ── Wrike task card — mirrors the RecentJobsModal style ───────────────────────
 
+// The single row vocabulary for anything task-shaped on this page — a Wrike job
+// under Completed, a timesheet entry under History. White card, a 4px identity
+// edge on the left, one line, and the same hover the rest of the app uses.
+//
+// It exists because the two lists had drifted into looking like different
+// products: the job rows followed the rule stated below (one coloured element,
+// everything else muted) while the history rows had grown a bordered category
+// pill, a blue duration, a teal supplementary duration and italic notes — four
+// decorations in three unrelated hues, which is exactly what the rule was
+// written to prevent.
+//
+// `interactive` drives the gradient sweep. Rows that actually go somewhere get
+// HubRow's wash; rows that don't get a quiet tint instead, because a sweep that
+// promises navigation and delivers nothing is worse than no hover.
+//
+// Deeper gradient stops than HubRow's own: those are tuned for white type at
+// display size (3:1), and these rows are 15px, which is normal text needing
+// 4.5:1. On the stock gradient white lands at 2.94:1 (blue) / 2.28:1 (teal),
+// and the meta sits at the teal end — the worst of it. These are the same hue
+// family at 5.5:1 / 5.3:1.
+//
+// No coloured rail down the left edge, deliberately. Both lists had one and
+// neither carried information:
+//
+//   • A history row's rail was DAY_COLORS[dayOfWeek], inside a card grouped by
+//     day, under a header already showing a day chip, the weekday name and the
+//     date. Every row in a card got the same colour, so it could not vary
+//     within its own container — it had nothing left to tell you.
+//   • A job row's rail was getBorderColorClass(status), duplicating the status
+//     pill sitting beside it with the status written out.
+//
+// Together that was seventeen unrelated hues carrying nothing, which is why it
+// read as generic: the 4px coloured rail is the device every admin template
+// ships with, applied without asking what it encodes. The colour a row does
+// need is already in the one element that means something — the status pill on
+// a job, the duration on a timesheet entry — and the sweep supplies the rest on
+// hover. Type and spacing carry the resting state.
+// `align` is baseline for the ledger-style rows, where a dotted leader has to
+// sit on the type's baseline rather than float at the vertical centre of the
+// row. A zero-height flex item has no baseline of its own, so the spec aligns it
+// by its bottom edge — which lands the rule exactly on the baseline with no
+// magic offset.
+function TaskRow({ dimmed, onClick, cascadeRef, align = "center", children }) {
+  const interactive = !!onClick;
+  return (
+    <div
+      ref={cascadeRef}
+      onClick={onClick}
+      className={`group relative overflow-hidden flex ${
+        align === "baseline" ? "items-baseline" : "items-center"
+      } gap-3 px-4 py-3 rounded-xl bg-white border border-[#dce4ec] shadow-[0_1px_2px_rgba(18,32,39,0.03)] ${
+        dimmed ? "opacity-60" : ""
+      } ${
+        interactive
+          ? "cursor-pointer"
+          : "transition-colors duration-300 hover:bg-slate-50/80"
+      }`}
+    >
+      {interactive && (
+        <div className="absolute inset-0 bg-gradient-to-r from-[#12a0e1] to-[#1cc1a5] origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-out" />
+      )}
+      {children}
+    </div>
+  );
+}
+
 function WrikeTaskCard({ task, filter, onClick, cascadeRef }) {
   const statusName = task.customStatusName || task.status;
-  const borderColor = getBorderColorClass(statusName);
   const isMatrix = task.title?.toUpperCase().includes("MATRIX");
   const updatedStr = fmtDate(task.updatedDate);
   const completedStr = fmtDate(task.completedDate);
   const dueStr = fmtDate(task.dueDate);
 
   return (
-    <div
-      ref={cascadeRef}
-      onClick={onClick}
-      className={`group relative overflow-hidden flex items-center gap-3 px-4 py-3 border-y border-r border-l-4 rounded-xl bg-white border-y-[#dce4ec] border-r-[#dce4ec] ${borderColor} ${
-        isMatrix ? "opacity-60" : ""
-      } ${
-        onClick
-          ? "cursor-pointer"
-          : ""
-      }`}
-    >
-      {/* The app's one hover idiom, borrowed from HubRow: a gradient sweep from
-          the left in the section's own colours — deepened here.
-          HubRow's own #12a0e1→#1cc1a5 is tuned for white type at DISPLAY size
-          (large text, 3:1); these rows are 15px, which is normal text and needs
-          4.5:1. On the stock gradient white lands at 2.94:1 (blue) / 2.28:1
-          (teal) — and the dates sit at the teal end, the worst of it. These
-          deeper stops are the same hue family at 5.5:1 / 5.3:1. */}
-      {onClick && (
-        <div className="absolute inset-0 bg-gradient-to-r from-[#12a0e1] to-[#1cc1a5] origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-out" />
-      )}
+    <TaskRow dimmed={isMatrix} onClick={onClick} cascadeRef={cascadeRef}>
       {/* One row: title leads, status + dates ride the right edge. Stacking
           them cost ~100px of height per job for ~15 characters of content —
           with most campaigns holding a single job, the list was mostly air. */}
@@ -310,7 +415,7 @@ function WrikeTaskCard({ task, filter, onClick, cascadeRef }) {
           {dueStr && <span>Due {dueStr}</span>}
         </div>
       </div>
-    </div>
+    </TaskRow>
   );
 }
 
@@ -859,7 +964,7 @@ function OverviewSection({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard
           label="Tasks logged"
           value={tasks.length}
@@ -867,9 +972,12 @@ function OverviewSection({
           icon={Clock}
           accent="#12a0e1"
         />
+        {/* Seconds plus the formatter, rather than a pre-formatted string, so
+            the figure can climb and still read as a duration on the way. */}
         <StatCard
           label="Total time"
-          value={formatDurationText(totalSeconds)}
+          value={totalSeconds}
+          format={formatDurationText}
           unit=""
           icon={TrendingUp}
           accent="#1cc1a5"
@@ -932,12 +1040,12 @@ function OverviewSection({
                       {a.label}
                     </p>
                     {a.live && (
-                      <span className="text-[9px] font-black text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
+                      <span className="text-[10px] font-black text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
                         Live timer
                       </span>
                     )}
                     {!a.live && a.pending && (
-                      <span className="text-[9px] font-black text-orange-600 bg-orange-50 border border-orange-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
+                      <span className="text-[10px] font-black text-orange-600 bg-orange-50 border border-orange-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
                         Not pulled
                       </span>
                     )}
@@ -1139,90 +1247,134 @@ function HistorySection({ tasks }) {
             // actual date, so which week each group belongs to is explicit.
             const weekdayName = rows[0]?.dayOfWeek || "Unknown";
             const dc = DAY_COLORS[weekdayName] || DEFAULT_DAY;
-            const dateLabel =
-              dayKey !== "Unknown"
-                ? new Date(`${dayKey}T00:00:00`).toLocaleDateString(undefined, {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                  })
-                : null;
+            // Split into parts rather than one formatted string, because the
+            // header sets them at three different sizes now.
+            const dateObj = dayKey !== "Unknown" ? new Date(`${dayKey}T00:00:00`) : null;
+            const dayNum = dateObj?.toLocaleDateString(undefined, { day: "numeric" }) ?? null;
+            const monthAbbr = dateObj?.toLocaleDateString(undefined, { month: "short" }) ?? null;
+            const yearLabel = dateObj?.getFullYear() ?? null;
             return (
               // Same "each group is its own bordered/shadowed white card"
               // treatment as Completed's per-campaign cards (JobsSection),
               // just grouped by day instead of by campaign.
               <div key={dayKey} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
-                {/* Day group header — mirrors the campaign header: identity
-                    chip, label, count/total pill on the right. */}
-                <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#dce4ec] bg-white">
-                  <span className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${dc.pill}`}>
-                    <Clock className="w-3.5 h-3.5" />
-                  </span>
-                  <span className="font-display font-bold tracking-tight text-[#122027] text-sm truncate">
+                {/* A day is a date, so the date is the graphic element: the day
+                    of the month set large, the way a diary or a tear-off
+                    calendar does it, with the weekday as the actual heading
+                    beside it. What was here before was a 28px clock chip and a
+                    14px label — the same header five times over with one hue
+                    swapped, and a heading smaller than the rows beneath it.
+                    The clock is gone because everything in this card is time;
+                    an icon repeating the container tells you nothing.
+
+                    The day's colour moves onto the numeral, which is where it
+                    can legally live: violet/sky/teal/amber/rose measure
+                    5.70 / 4.10 / 3.74 / 3.19 / 4.70 against white, so three of
+                    the five fail AA as body text but all five clear the 3:1
+                    large-text bar at 32px bold. Big is what makes the colour
+                    usable, not just prettier.
+
+                    Baseline-aligned, and it carries the same dotted leader the
+                    rows do, so the header reads as the top line of the ledger
+                    rather than a lid on a box. */}
+                <div className="flex items-baseline gap-3 sm:gap-4 px-4 py-4 border-b border-[#dce4ec] bg-white">
+                  {dayNum && (
+                    <div className="shrink-0 flex items-baseline gap-1.5">
+                      <span className={`font-display text-[28px] sm:text-[32px] font-bold leading-none tracking-[-0.05em] tabular-nums ${dc.text}`}>
+                        {dayNum}
+                      </span>
+                      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-[#768994]">
+                        {monthAbbr}
+                      </span>
+                    </div>
+                  )}
+
+                  <h3 className="font-display text-[19px] font-bold tracking-tight leading-none text-[#122027] truncate shrink-0">
                     {weekdayName}
-                  </span>
-                  {dateLabel && (
-                    <span className="text-[11px] font-semibold text-[#768994] truncate">
-                      {dateLabel}
+                  </h3>
+                  {yearLabel && (
+                    <span className="hidden md:inline text-[10px] font-black uppercase tracking-[0.16em] text-[#b0bec5] shrink-0">
+                      {yearLabel}
                     </span>
                   )}
-                  <span className="ml-auto bg-slate-50 text-[#768994] px-2 py-0.5 rounded-full text-[10px] font-bold border border-[#dce4ec] shrink-0">
-                    {formatDurationText(groupTotal)} · {rows.length}{" "}
-                    {rows.length === 1 ? "row" : "rows"}
-                  </span>
+
+                  <span
+                    aria-hidden="true"
+                    className="hidden sm:block flex-1 min-w-[1.5rem] border-b border-dotted border-[#cbd5e1]"
+                  />
+
+                  {/* The day's total, set like the row figures it sums. */}
+                  <div className="shrink-0 text-right leading-none">
+                    <p className="font-display text-[19px] font-bold tracking-[-0.02em] tabular-nums text-[#0f766e]">
+                      {formatDurationText(groupTotal)}
+                    </p>
+                    <p className="mt-1.5 text-[10px] font-semibold text-[#768994] tabular-nums">
+                      {rows.length} {rows.length === 1 ? "entry" : "entries"}
+                    </p>
+                  </div>
                 </div>
 
                 {/* Faint tint so the white rows read as cards, same as the
                     campaign cards' job-list body. */}
                 <div className="p-2.5 space-y-1.5 bg-slate-50/50">
                   {rows.map((t, i) => {
-                    const dc = DAY_COLORS[t.dayOfWeek] || DEFAULT_DAY;
                     return (
-                      <div
-                        key={t.id}
-                        ref={getCascadeRef(t.id, i)}
-                        className={`flex items-center gap-3 px-4 py-2.5 border-y border-r border-l-4 rounded-xl bg-white border-y-[#dce4ec] border-r-[#dce4ec] ${dc.border}`}
-                      >
-                        {/* Title + inline meta, single row like the
-                            Completed job cards — the date stamp this used to
-                            carry is redundant now that the whole card is
-                            grouped under a dated header. */}
-                        <div className="flex-1 min-w-0 flex items-baseline gap-2.5">
-                          <p className="font-display font-bold tracking-tight text-[15px] text-[#122027] truncate">
-                            {t.jobNumber || "Unknown job"}
-                          </p>
-                          <div className="hidden sm:flex items-center gap-2 shrink-0">
-                            {t.territory && (
-                              <span className="text-[11px] font-semibold text-[#768994] whitespace-nowrap">
-                                {territoryFlags(t.territory, 4) || "🌍"}{" "}
-                                {t.territory}
-                              </span>
-                            )}
-                            {t.category && (
-                              <span className="text-[10px] font-black text-[#768994] bg-white border border-[#dce4ec] px-2 py-0.5 rounded-full whitespace-nowrap">
-                                {t.category}
-                              </span>
-                            )}
-                          </div>
-                          {t.notes && (
-                            <p className="text-[11px] text-[#768994] italic truncate">
-                              {t.notes}
-                            </p>
+                      <TaskRow key={t.id} align="baseline" cascadeRef={getCascadeRef(t.id, i)}>
+                        {/* A timesheet entry is a ledger line: a label on the
+                            left, a figure on the right, and a leader binding
+                            them. Setting it as one — job number, then quiet
+                            metadata, then a dotted rule running to a large
+                            right-aligned duration — is the typographic answer to
+                            the actual problem of a wide row, which is that the
+                            eye loses which label the far-right number belongs
+                            to. It also reads as what it is. An invoice, not a
+                            dashboard card.
+                            Baseline-aligned rather than centred, so the leader
+                            sits on the type's baseline the way it does in a
+                            printed table of contents. */}
+                        <p className="relative z-10 shrink-0 font-display font-bold tracking-tight leading-none text-[17px] text-[#122027]">
+                          {t.jobNumber || "Unknown job"}
+                        </p>
+
+                        <div className="relative z-10 hidden sm:flex items-baseline gap-2 min-w-0 text-[11px] font-semibold text-[#768994] whitespace-nowrap">
+                          {t.territory && (
+                            <span className="shrink-0">
+                              {territoryFlags(t.territory, 4) || "🌍"} {t.territory}
+                            </span>
                           )}
+                          {t.territory && t.category && <span className="text-[#dce4ec]">·</span>}
+                          {t.category && <span className="shrink-0">{t.category}</span>}
+                          {t.notes && (t.territory || t.category) && (
+                            <span className="text-[#dce4ec]">·</span>
+                          )}
+                          {t.notes && <span className="truncate font-normal">{t.notes}</span>}
                         </div>
 
-                        {/* Time */}
-                        <div className="text-right shrink-0">
-                          <p className="text-sm font-black text-[#12a0e1]">
+                        {/* The leader. A dotted rule on its own baseline, taking
+                            whatever width is left — so short rows get a long
+                            run and busy rows get almost none, and the row's
+                            density becomes visible at a glance. Hidden with the
+                            metadata on mobile, where there is no gap to span. */}
+                        <span
+                          aria-hidden="true"
+                          className="relative z-10 hidden sm:block flex-1 min-w-[1.5rem] border-b border-dotted border-[#cbd5e1] transition-colors duration-300 group-hover:border-[#94a3b8]"
+                        />
+
+                        {/* The figure the whole row exists to report, set like
+                            one: display weight, tabular, deep teal — the single
+                            colour in the row. Supplementary time rides beneath
+                            it as a muted note rather than in a hue of its own. */}
+                        <p className="relative z-10 shrink-0 text-right leading-none">
+                          <span className="font-display text-[19px] font-bold tracking-[-0.02em] tabular-nums text-[#0f766e]">
                             {formatDurationText(totalSecs(t))}
-                          </p>
+                          </span>
                           {(t.additionalSeconds ?? 0) > 0 && (
-                            <p className="text-[10px] text-[#1cc1a5] font-bold">
-                              +{formatDurationText(t.additionalSeconds)}
-                            </p>
+                            <span className="block mt-1 text-[10px] font-semibold text-[#768994] tabular-nums">
+                              incl. +{formatDurationText(t.additionalSeconds)}
+                            </span>
                           )}
-                        </div>
-                      </div>
+                        </p>
+                      </TaskRow>
                     );
                   })}
                 </div>
@@ -1676,7 +1828,7 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
               <div className="font-display text-2xl sm:text-3xl font-bold text-white leading-none">
                 {value}
               </div>
-              <div className="text-[9px] font-black text-white/70 uppercase tracking-widest mt-1">
+              <div className="text-[10px] font-black text-white/70 uppercase tracking-widest mt-1">
                 {label}
               </div>
             </div>

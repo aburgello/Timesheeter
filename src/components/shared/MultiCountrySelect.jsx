@@ -1,7 +1,7 @@
 import React, { useState, useLayoutEffect, useRef } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { TERRITORIES } from "../../constants";
-import { layoutRect } from "../../utils/zoom";
+import { layoutRect, layoutViewport } from "../../utils/zoom";
 import {
   splitTerritories,
   joinTerritories,
@@ -71,11 +71,20 @@ export default function MultiCountrySelect({
   useLayoutEffect(() => {
     if (!isOpen || !wrapperRef.current) return;
     const rect = layoutRect(wrapperRef.current);
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    // Layout pixels, like rect and like the styles below — window.innerWidth is
+    // visual, and mixing the two is what let this panel hang off the right edge.
+    const { vw, vh } = layoutViewport();
 
     const w = Math.min(isForm ? 900 : 800, vw - 16);
-    const left = Math.max(4, Math.min(rect.left, vw - w - 4));
+    // A 4-column, ~800px panel opened from a ~140px table cell isn't a dropdown
+    // hanging off a field, it's a picker. Anchoring its left edge to the cell
+    // sent it past the right of the screen; centring it in the viewport keeps
+    // the whole list reachable wherever the column happens to sit. The form
+    // variant is a full-width field, so there it still opens under its trigger.
+    const centred = w > rect.width * 2;
+    const left = centred
+      ? Math.max(4, (vw - w) / 2)
+      : Math.max(4, Math.min(rect.left, vw - w - 4));
 
     const spaceBelow = vh - rect.bottom;
     const flipUp = spaceBelow < 260 && rect.top > spaceBelow;
