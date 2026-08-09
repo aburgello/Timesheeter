@@ -302,7 +302,7 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // A job is only archived if it has no live home: one path through _Archive
   // doesn't archive a job that also sits in a live campaign folder. Preference
   // order is live-and-placed > placed > live > whatever we got.
-  const ancestryOf = (startId) => {
+  const ancestryOf = (startId, folderTitle) => {
     const chains = [];
     const walk = (id, chain, seen) => {
       // Bounded: shared folders can fan out, and this runs per job code across
@@ -317,9 +317,21 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     };
     walk(startId, [], new Set([startId]));
 
-    const scored = chains.map(describeChain);
+    // Keep the node list beside each summary so the winning path can be
+    // recovered for the "Wrike: studio › film › folder" breadcrumb the scan
+    // review shows next to a correction.
+    const scored = chains.map((chain) => ({ ...describeChain(chain), chain }));
     const rank = (d) => (d.hasStudio ? 2 : 0) + (d.archived ? 0 : 1);
-    return scored.reduce((best, d) => (rank(d) > rank(best) ? d : best), scored[0]);
+    const best = scored.reduce((a, b) => (rank(b) > rank(a) ? b : a), scored[0]);
+    const si = best.chain.findIndex((n) => n && studioKwOf(n.title));
+    // chain runs [job-parent … studio … root]; take up to and including the
+    // studio, prepend the job folder itself, reverse to studio-first, and read
+    // it as a breadcrumb. No studio (orphan/shared folder) → just the folder.
+    const folderPath = [folderTitle, ...best.chain.slice(0, si + 1).map((n) => n.title)]
+      .reverse()
+      .map((t) => deUnderscore(t))
+      .join(" › ");
+    return { ...best, folderPath };
   };
 
   const CODE = /XY\d{5,6}/i;
@@ -333,7 +345,7 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     if (seen.has(code)) return;          // one line per code
     seen.add(code);
 
-    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived } = ancestryOf(f.id);
+    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived, folderPath } = ancestryOf(f.id, title);
     const region = regionOf(studioTitle, studioKw);
     // "Universal Pictures UK" / "Universal Pictures International" — the client
     // the Job Book and the timesheet site both name, rather than every region's
@@ -368,7 +380,7 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     }
 
     out.push({ code, jobNumber, filmTitle, projectDescription, client, archived,
-               region: region ? region.short : null, folderId: f.id });
+               region: region ? region.short : null, folderId: f.id, folderPath });
   });
 
   // Pull each job folder's Wrike createdDate (the flat tree endpoint doesn't

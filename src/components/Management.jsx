@@ -3786,7 +3786,10 @@ function StudioJobScanModal({ onClose, onApplied }) {
                     className="ml-auto shrink-0 px-3 py-1.5 bg-white border border-amber-300 hover:border-amber-400 text-amber-700 text-[11px] font-bold rounded-lg transition-colors">
                     {showCorrections ? "Hide" : "Review"}
                   </button>
-                  <button onClick={fixMisfilmed} disabled={phase === "saving" || fixableCorrections.length + fixableRedundant.length === 0}
+                  {/* Fix is gated behind Review so nobody can accidentally fix
+                      everything at once — you have to see the rows (and can Keep
+                      some) before it unlocks. */}
+                  <button onClick={fixMisfilmed} disabled={phase === "saving" || !showCorrections || fixableCorrections.length + fixableRedundant.length === 0}
                     className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-[11px] font-bold rounded-lg transition-colors">
                     Fix {fixableCorrections.length + fixableRedundant.length}
                   </button>
@@ -3804,8 +3807,13 @@ function StudioJobScanModal({ onClose, onApplied }) {
                                   title={existingByCode[c.code]?.job_number}>
                                 {existingByCode[c.code]?.job_number || "—"}
                               </td>
-                              <td className="py-1 text-[#122027] truncate max-w-[240px]" title={c.jobNumber}>
-                                → {c.jobNumber}
+                              <td className="py-1 max-w-[240px]">
+                                <div className="text-[#122027] truncate" title={c.jobNumber}>→ {c.jobNumber}</div>
+                                {c.folderPath && (
+                                  <div className="text-[10px] text-slate-400 truncate" title={c.folderPath}>
+                                    Wrike: {c.folderPath}
+                                  </div>
+                                )}
                               </td>
                               <td className="py-1 pl-2 text-right whitespace-nowrap">
                                 {kept ? (
@@ -3840,9 +3848,15 @@ function StudioJobScanModal({ onClose, onApplied }) {
                                   title={r.job_number}>
                                 {r.job_number}
                               </td>
-                              <td className="py-1 text-slate-500 italic truncate max-w-[240px]"
-                                  title={existingByCode[rCode]?.job_number}>
-                                → duplicate, removed (kept: {existingByCode[rCode]?.job_number})
+                              <td className="py-1 max-w-[240px]">
+                                <div className="text-slate-500 italic truncate" title={existingByCode[rCode]?.job_number}>
+                                  → duplicate, removed (kept: {existingByCode[rCode]?.job_number})
+                                </div>
+                                {candByCode[rCode]?.folderPath && (
+                                  <div className="text-[10px] text-slate-400 truncate" title={candByCode[rCode].folderPath}>
+                                    Wrike: {candByCode[rCode].folderPath}
+                                  </div>
+                                )}
                               </td>
                               <td className="py-1 pl-2 text-right whitespace-nowrap">
                                 {kept ? (
