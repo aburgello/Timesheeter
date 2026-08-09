@@ -166,9 +166,10 @@ const STUDIO_LIST = [
 ];
 
 // ── Job Setup film picker group order ─────────────────────────────────────────
-// Films sort under their studio, newest first (created_at desc, tiebroken by
-// title) within each group. Films with no studio yet (typed in freeform, or
-// awaiting a re-sync) land in Other.
+// Films sort under their studio; within each group the film with the most
+// recently touched job (MAX(jobs.updated_at)) sits on top, tiebroken by title.
+// Films with no studio yet (typed in freeform, or awaiting a re-sync) land in
+// Other.
 const FILM_GROUP_ORDER = [...STUDIO_LIST, "Other"];
 
 // Row control on the Films page: set/clear which studio a film belongs to, so
@@ -2310,8 +2311,8 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   // title → { studio }. The picker groups on it; `films` stays a plain string
   // list for the job form / film-sync consumers, which expect titles.
   const [filmMeta, setFilmMeta] = useState(new Map());
-  // Same titles, ordered newest-first for the grouped picker — within each
-  // studio group the most recent film sits on top.
+  // Same titles, ordered by most recent job per film for the grouped picker —
+  // within each studio group the film being worked on right now sits on top.
   const [filmOptions, setFilmOptions] = useState([]);
   const [clients, setClients] = useState([]);
   const [workCategories, setWorkCategories] = useState([]);
@@ -2359,18 +2360,30 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   const [pushMode, setPushMode] = useState(null);          // null | "push" (req 5+1) | "retag" (req 2+4)
 
   // Reloadable so the Film-sync modal can refresh the picker after adding films.
-  // The picker groups films by studio, newest first within each group, so the
-  // most recent production for that studio sits on top. Studio is stored on the
-  // film (set when it's synced from Wrike, editable on the Films page).
+  // The picker groups films by studio; within each group the film whose most
+  // recent job is newest (MAX(jobs.updated_at)) sits on top — i.e. what's being
+  // worked on right now rises. Films with no jobs yet fall to the bottom of
+  // their group. Studio is stored on the film (set at sync, editable on Films).
   const loadFilms = useCallback(() => {
-    supabase.from("films").select("title, studio, created_at").order("title").then(({ data }) => {
-      const filmRows = data || [];
+    Promise.all([
+      supabase.from("films").select("title, studio").order("title"),
+      supabase.from("jobs").select("film_title, updated_at"),
+    ]).then(([filmRes, jobRes]) => {
+      const filmRows = filmRes.data || [];
+      // Most recent activity per film — the film's newest job touch.
+      const latestJob = new Map();
+      (jobRes.data || []).forEach((j) => {
+        if (!j.film_title) return;
+        const ts = new Date(j.updated_at || 0).getTime();
+        const prev = latestJob.get(j.film_title);
+        if (prev === undefined || ts > prev) latestJob.set(j.film_title, ts);
+      });
       const meta = new Map();
       filmRows.forEach(f => meta.set(f.title, { studio: f.studio || null }));
       setFilmMeta(meta);
       setFilms(filmRows.map(f => f.title));
       const byRecency = [...filmRows].sort((a, b) =>
-        (new Date(b.created_at || 0)) - (new Date(a.created_at || 0)) || a.title.localeCompare(b.title)
+        (latestJob.get(b.title) || 0) - (latestJob.get(a.title) || 0) || a.title.localeCompare(b.title)
       );
       setFilmOptions(byRecency.map(f => f.title));
       setFilmsLoading(false);
@@ -2378,8 +2391,8 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   }, []);
 
   // Which bucket a film lands in for the picker: under its studio, with
-  // no-studio films in Other. Within a group the most recent film sits on top
-  // (filmOptions is already newest-first).
+  // no-studio films in Other. Within a group the most recently worked-on film
+  // sits on top (filmOptions is already sorted that way).
   const filmGroup = (title) => filmMeta.get(title)?.studio || "Other";
 
   // Films are added in the Films tab first — this section only picks from that

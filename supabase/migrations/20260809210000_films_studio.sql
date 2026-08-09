@@ -1,8 +1,8 @@
 -- Films belong to a studio, but only the title was ever saved: Film Setup
 -- syncs projects out of a studio folder in Wrike, then inserts bare titles, so
 -- the studio association was dropped on the floor. The Job Setup film picker
--- now groups films by studio (newest first within each group), so the picker
--- needs it back.
+-- now groups films by studio (most recently worked-on film first within each
+-- group), so the picker needs it back.
 
 alter table public.films add column studio text;
 
