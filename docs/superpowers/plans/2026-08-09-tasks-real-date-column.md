@@ -1,12 +1,18 @@
 # Real Date Column for `tasks` Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Give `tasks` a real `date` column so the database can filter, sort and group by date, and delete the six hand-written date parsers scattered across the app.
 
 **Architecture:** Expand-then-contract. Add a new `work_date date` column beside the existing `date` text column, backfill it from both stored formats, teach every writer to fill both, move readers onto the new column one at a time, and only then retire the text column. Nothing reads the new column until it is fully populated, so every step before the last is reversible by ignoring it.
 
 **Tech Stack:** React 18, Supabase (PostgREST + Postgres 17), Cloudflare Worker, Vite. No test runner exists in this repo; Task 1 adds a minimal esbuild+node harness rather than a new dependency (esbuild already ships inside Vite).
+
+
+> **Status: Tasks 1-6 applied on 2026-08-09.** Migrations `tasks_work_date`
+> and `tasks_work_date_index` are live on `oozopadfrupwujsagagn`; backfill
+> verified (2729 filled / 2 blank / 0 mismatches). Task 7 remains open and
+> must not be started until the soak query below returns 0.
 
 ## Global Constraints
 
@@ -70,7 +76,7 @@ Six independent parsers convert it back:
   - `isoToday(d?: Date): string` — a Date → `"YYYY-MM-DD"` in **local** time
   - `isoToUk(iso: string|null): string` — `"YYYY-MM-DD"` → `"DD/MM/YYYY"`, `""` when unparseable
 
-- [ ] **Step 1: Write the test harness**
+- [x] **Step 1: Write the test harness**
 
 Create `tests/run.mjs`:
 
@@ -112,7 +118,7 @@ Add to `package.json` scripts:
 "test": "node tests/run.mjs"
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `tests/dates.test.mjs`:
 
@@ -148,12 +154,12 @@ check("iso to UK",        isoToUk("2026-08-09"), "09/08/2026");
 check("iso to UK, null",  isoToUk(null),         "");
 ```
 
-- [ ] **Step 3: Run it to make sure it fails**
+- [x] **Step 3: Run it to make sure it fails**
 
 Run: `npm test`
 Expected: FAIL — `Could not resolve "../src/utils/dates.js"`
 
-- [ ] **Step 4: Write the module**
+- [x] **Step 4: Write the module**
 
 Create `src/utils/dates.js`:
 
@@ -201,12 +207,12 @@ export function isoToUk(iso) {
 }
 ```
 
-- [ ] **Step 5: Run the tests and make sure they pass**
+- [x] **Step 5: Run the tests and make sure they pass**
 
 Run: `npm test`
 Expected: `14/14 passed`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/utils/dates.js tests/ package.json
@@ -226,7 +232,7 @@ git commit -m "Add one shared date module for tasks.date, with tests"
 - Consumes: nothing.
 - Produces: `public.tasks.work_date date` — nullable, populated for every row whose `date` text is parseable.
 
-- [ ] **Step 1: Record the before-counts**
+- [x] **Step 1: Record the before-counts**
 
 Run against project `oozopadfrupwujsagagn`:
 
@@ -240,7 +246,7 @@ from public.tasks;
 
 Expected today: `total 2731, iso 2232, uk 497, blank 2`. Write the numbers down — Step 4 checks against them.
 
-- [ ] **Step 2: Write the migration**
+- [x] **Step 2: Write the migration**
 
 Create `supabase/migrations/20260810090000_tasks_work_date.sql`:
 
@@ -281,11 +287,11 @@ comment on column public.tasks.work_date is
   'The day the work happened. Authoritative; tasks.date is the legacy text form kept for older clients.';
 ```
 
-- [ ] **Step 3: Apply it**
+- [x] **Step 3: Apply it**
 
 Apply as migration `tasks_work_date` to project `oozopadfrupwujsagagn`.
 
-- [ ] **Step 4: Verify the backfill against the before-counts**
+- [x] **Step 4: Verify the backfill against the before-counts**
 
 ```sql
 select count(*)                                          as total,
@@ -303,7 +309,7 @@ Expected: `filled = 2729`, `unfilled = 2` (the two blank rows), `uk_mismatches =
 
 **If `unfilled` is greater than the blank count, STOP.** It means a shape exists that neither branch matched. List them with `select distinct date from public.tasks where work_date is null and trim(coalesce(date,'')) <> '';` and extend the migration before going on.
 
-- [ ] **Step 5: Prove the original failure is fixed**
+- [x] **Step 5: Prove the original failure is fixed**
 
 ```sql
 select count(*) as july_via_real_date
@@ -313,7 +319,7 @@ where work_date between date '2026-07-01' and date '2026-07-31';
 
 Expected: `247` — the number the text-column query returned 0 for.
 
-- [ ] **Step 5b: Index it**
+- [x] **Step 5b: Index it**
 
 The whole point of the column is date-range queries, so give them an index.
 Create `supabase/migrations/20260810091000_tasks_work_date_index.sql`:
@@ -329,7 +335,7 @@ create index if not exists tasks_work_date_idx
 
 Apply as migration `tasks_work_date_index`.
 
-- [ ] **Step 5c: Confirm PostgREST can see the new column**
+- [x] **Step 5c: Confirm PostgREST can see the new column**
 
 Adding a column does not always refresh PostgREST's schema cache immediately.
 Until it does, any insert carrying `work_date` fails with
@@ -346,7 +352,7 @@ Expected: one row, `work_date | date`. Then confirm the API layer agrees by
 selecting the column through PostgREST (not just SQL) before starting Task 3.
 If it 404s on the column, run `notify pgrst, 'reload schema';` and retry.
 
-- [ ] **Step 6: Update schema.sql**
+- [x] **Step 6: Update schema.sql**
 
 In `supabase/schema.sql`, inside `create table public.tasks`, after the `date text` line:
 
@@ -358,7 +364,7 @@ In `supabase/schema.sql`, inside `create table public.tasks`, after the `date te
   work_date date,
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add supabase/migrations/20260810090000_tasks_work_date.sql \
@@ -379,7 +385,7 @@ git commit -m "Add tasks.work_date and backfill it from both stored formats"
 - Consumes: `toIsoDate`, `isoToday` from Task 1.
 - Produces: every row inserted through `useTasks` carries both `date` (text, unchanged) and `work_date` (real date). `fromDb` exposes `workDate`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/dates.test.mjs`:
 
@@ -393,12 +399,12 @@ check("unparseable → null", toDbDate("garbage"),   null);
 check("absent → null",     toDbDate(null),         null);
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npm test`
 Expected: FAIL — `toDbDate` is not exported.
 
-- [ ] **Step 3: Add `toDbDate` to the module**
+- [x] **Step 3: Add `toDbDate` to the module**
 
 In `src/utils/dates.js`:
 
@@ -411,12 +417,12 @@ In `src/utils/dates.js`:
 export const toDbDate = (value) => toIsoDate(value);
 ```
 
-- [ ] **Step 4: Run the tests and make sure they pass**
+- [x] **Step 4: Run the tests and make sure they pass**
 
 Run: `npm test`
 Expected: `18/18 passed`
 
-- [ ] **Step 5: Wire it into `toDb` and `fromDb`**
+- [x] **Step 5: Wire it into `toDb` and `fromDb`**
 
 In `src/hooks/useTasks.js`, add the import:
 
@@ -441,7 +447,7 @@ In `fromDb`, beside the existing `date` line:
   workDate: row.work_date ?? null,
 ```
 
-- [ ] **Step 6: Verify a new row carries both**
+- [x] **Step 6: Verify a new row carries both**
 
 Run: `npx vite build` — expect a clean build.
 
@@ -454,7 +460,7 @@ from public.tasks order by created_at desc limit 3;
 
 Expected: the new row has `work_date` populated and matching `date`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/utils/dates.js src/hooks/useTasks.js tests/dates.test.mjs
@@ -472,7 +478,7 @@ git commit -m "Write tasks.work_date alongside the legacy text date"
 - Consumes: `toIsoDate` from Task 1, `workDate` from Task 3.
 - Produces: no interface change. `useTasks` still returns the same task shape.
 
-- [ ] **Step 1: Replace the local parser and the filter**
+- [x] **Step 1: Replace the local parser and the filter**
 
 In `src/hooks/useTasks.js`, delete the inline `toIso` (lines ~141-146) and change the week filter to:
 
@@ -496,7 +502,7 @@ Add to the imports at the top:
 import { toIsoDate } from "../utils/dates";
 ```
 
-- [ ] **Step 2: Verify the week view is unchanged**
+- [x] **Step 2: Verify the week view is unchanged**
 
 Run: `npx vite build`, then open Legacy Timesheets. The current week's rows must be exactly the ones shown before this task — same count, same rows.
 
@@ -507,7 +513,7 @@ select count(*) from public.tasks
 where source = 'legacy' and work_date >= date_trunc('week', current_date)::date;
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/hooks/useTasks.js
@@ -527,7 +533,7 @@ git commit -m "Filter the week from work_date, dropping useTasks' local parser"
 - Consumes: `toIsoDate` from Task 1, `workDate` from Task 3.
 - Produces: nothing new. Four local functions deleted.
 
-- [ ] **Step 1: LegacyTimesheets — replace both parsers**
+- [x] **Step 1: LegacyTimesheets — replace both parsers**
 
 Delete the local `toIsoDate` at line 222 and add to the imports:
 
@@ -550,7 +556,7 @@ and update its caller at ~1852:
         if (!(k in recency) || t > recency[k]) recency[k] = t;
 ```
 
-- [ ] **Step 2: Management — replace `toIso`**
+- [x] **Step 2: Management — replace `toIso`**
 
 Delete the local `toIso` at line 4552, import the shared one, and change its three call sites (lines ~4569, ~4570, ~4613) to prefer the real column:
 
@@ -563,7 +569,7 @@ Delete the local `toIso` at line 4552, import the shared one, and change its thr
         _iso: t.work_date || toIsoDate(t.date),
 ```
 
-- [ ] **Step 3: Profile — replace `toIsoDate`**
+- [x] **Step 3: Profile — replace `toIsoDate`**
 
 Delete the local `toIsoDate` at line 1246, import the shared one, and change line ~1309:
 
@@ -571,7 +577,7 @@ Delete the local `toIsoDate` at line 1246, import the shared one, and change lin
       const key = t.work_date || toIsoDate(t.date) || "Unknown";
 ```
 
-- [ ] **Step 4: Verify no local parsers remain**
+- [x] **Step 4: Verify no local parsers remain**
 
 Run:
 
@@ -581,14 +587,14 @@ grep -rn "const toIso\|function toIsoDate\|const parseDate" src/ | grep -v "src/
 
 Expected: no output.
 
-- [ ] **Step 5: Verify the three screens are unchanged**
+- [x] **Step 5: Verify the three screens are unchanged**
 
 Run: `npx vite build`, then check each screen renders the same groupings as before:
 - Legacy Timesheets — job dropdown order (recency-sorted) unchanged
 - Administration → Jobs Feed — date sort unchanged
 - Profile Hub → day groups — same days, same order, no "Unknown" group that wasn't there before
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/LegacyTimesheets.js src/components/Management.jsx src/components/Profile.jsx
@@ -611,7 +617,7 @@ git commit -m "Delete the four remaining date parsers in favour of the shared on
 > just copies that value across, and Step 2 is SQL. Adding the import would
 > leave dead code in the Worker bundle.
 
-- [ ] **Step 1: Have the importer write both columns**
+- [x] **Step 1: Have the importer write both columns**
 
 `normaliseDate` in the Worker accepts shapes the app's parser does not — `dd.mm.yy`, a trailing time from a spreadsheet — so it stays as the CSV-shape reader. It already returns ISO, so the task row gains one line. In `handleJobsFeedImport`, in the `task` object:
 
@@ -622,7 +628,7 @@ git commit -m "Delete the four remaining date parsers in favour of the shared on
       work_date: date,
 ```
 
-- [ ] **Step 2: Have the jobs feed order by the real column**
+- [x] **Step 2: Have the jobs feed order by the real column**
 
 In `handleJobsFeed`, change the query from ordering by `id` to ordering by the date, which is what the feed actually presents:
 
@@ -630,13 +636,13 @@ In `handleJobsFeed`, change the query from ordering by `id` to ordering by the d
   const res = await sbFetch(env, "/tasks?select=*&order=work_date.desc.nullslast,id.desc&limit=20000");
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `npx vite build` — the Worker is bundled by the same build.
 
 Then run a **dry-run** import (the UI always previews first) with a small CSV and confirm the plan reports the same `toInsert` count as before this task. Then check the feed still lists newest-first.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add worker/index.js
