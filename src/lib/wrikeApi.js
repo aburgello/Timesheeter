@@ -30,25 +30,53 @@ export async function fetchWrikeOAuthStatus() {
 // not lost by leaving Wrike's own timelog entry bare; this only keeps
 // Wrike's activity feed from being cluttered with our internal shorthand.
 //
-// Returns true/false rather than throwing — every caller logs to Supabase
+// Returns { ok, id } rather than throwing — every caller logs to Supabase
 // first (that's this app's source of truth), so a Wrike-side failure
 // (permissions, locked timesheet period, etc.) must not roll back or block
 // a log that already succeeded locally.
-export async function logTimeToWrike(taskId, seconds) {
-  if (!taskId) return false;
+//
+// `id` is the id of the timelog Wrike just created, and the caller MUST store
+// it on the row as wrike_timelog_id. This used to return a bare `true` and
+// throw the response away, which quietly created a duplicate-hours loop: the
+// pull paths dedupe on wrike_timelog_id alone (see fetchExistingTimelogIds),
+// so a timelog this app created but never recorded the id of is one it has
+// never seen. Log an hour here, run Legacy's "Pull Wrike Times" the same day,
+// and that hour comes back as a second row — both of which then go out to the
+// timesheet site. Recording the id closes the loop using the dedupe machinery
+// that already exists, rather than adding another one.
+//
+// `ok` is separate from `id` on purpose: Wrike answering 200 without a
+// parseable id is a success we can't dedupe, not a failure. Collapsing the two
+// would either report a good write as failed, or store a bogus id.
+//
+// trackedDate is the caller's — the row it is logging alongside knows which
+// day it belongs to, and passing it keeps the two from drifting. The default
+// is LOCAL today, not `new Date().toISOString()`: that yields a UTC date, so
+// anywhere west of Greenwich an evening log was stamped onto tomorrow.
+const localIsoDate = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+export async function logTimeToWrike(taskId, seconds, trackedDate = localIsoDate()) {
+  if (!taskId) return { ok: false, id: null };
   const hours = seconds / 3600;
-  const trackedDate = new Date().toISOString().split("T")[0];
   const params = new URLSearchParams({ hours: String(hours), trackedDate });
   try {
     const res = await fetch(`/api/wrike/tasks/${taskId}/timelogs?${params}`, { method: "POST" });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       console.warn(`[wrikeApi] timelog POST failed (${res.status})`, body);
-      return false;
+      return { ok: false, id: null };
     }
-    return true;
+    // Wrike answers { kind: "timelogs", data: [{ id, … }] }. A body we can't
+    // read is still a successful write — don't turn it into a failed one.
+    const id = await res
+      .json()
+      .then((j) => j?.data?.[0]?.id || null)
+      .catch(() => null);
+    if (!id) console.warn("[wrikeApi] timelog created but no id returned — row cannot be deduped");
+    return { ok: true, id };
   } catch (e) {
     console.warn("[wrikeApi] timelog POST error", e);
-    return false;
+    return { ok: false, id: null };
   }
 }

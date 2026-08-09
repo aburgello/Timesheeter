@@ -137,7 +137,7 @@ export default function MultiCountrySelect({
         onClick={() => (isOpen ? close() : open())}
         disabled={disabled}
         title={selected.join(", ")}
-        className={`relative w-full flex items-start gap-1 border rounded-xl z-50 transition-all text-left ${
+        className={`relative w-full flex items-start gap-1 border rounded-xl z-50 transition-[border-color,background-color,box-shadow] text-left ${
           isForm ? "py-2.5 px-3 bg-white shadow-sm" : "py-2 px-2.5"
         } ${
           disabled
@@ -233,7 +233,7 @@ export default function MultiCountrySelect({
       {isOpen && (
         <div
           style={fixedStyle}
-          className={`fixed border shadow-2xl rounded-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 ${
+          className={`fixed border shadow-xl shadow-slate-200/40 rounded-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 ${
             isDarkModal
               ? "bg-[#19202b] border-[#2d3748]"
               : "bg-white border-slate-200"
@@ -268,7 +268,7 @@ export default function MultiCountrySelect({
                       key={opt}
                       onClick={() => toggle(opt)}
                       title={opt}
-                      className={`w-full flex items-center gap-2 px-2.5 py-2 text-[11px] font-semibold rounded-xl transition-all ${
+                      className={`w-full flex items-center gap-2 px-2.5 py-2 text-[11px] font-semibold rounded-xl transition-[background-color,color] ${
                         on
                           ? isDarkModal
                             ? "bg-[#12a0e1]/20 text-white"
@@ -299,7 +299,7 @@ export default function MultiCountrySelect({
                           and dropped entirely where we don't have one. */}
                       {territoryCode(opt) && (
                         <span
-                          className={`ml-auto shrink-0 font-mono text-[9.5px] tracking-wide ${
+                          className={`ml-auto shrink-0 font-mono text-[10px] tracking-wide ${
                             on
                               ? "opacity-70"
                               : isDarkModal

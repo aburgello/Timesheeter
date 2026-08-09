@@ -37,7 +37,7 @@ export default function HubRow({ section, onClick, badge, first, open, compact, 
       }`}
     >
       <div
-        className={`absolute inset-0 bg-gradient-to-r ${gradient} origin-left scale-x-0 group-hover:scale-x-100 group-focus:scale-x-100 transition-transform duration-300 ease-out`}
+        className={`absolute inset-0 bg-gradient-to-r ${gradient} origin-left scale-x-0 group-hover:scale-x-100 group-focus:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]`}
       />
 
       {/* Icon chip: gradient-filled at rest, translucent-white once the row
@@ -74,7 +74,7 @@ export default function HubRow({ section, onClick, badge, first, open, compact, 
       <div className="relative z-10 flex items-center gap-3 shrink-0">
         {badge}
         {open === undefined ? (
-          <ChevronRight className={`text-[#768994] group-hover:text-white group-focus:text-white group-hover:translate-x-1 transition-all duration-300 ${small ? "w-4 h-4" : "w-5 h-5"}`} />
+          <ChevronRight className={`text-[#768994] group-hover:text-white group-focus:text-white group-hover:translate-x-1 transition-[color,transform] duration-300 ${small ? "w-4 h-4" : "w-5 h-5"}`} />
         ) : (
           <ChevronRight
             className={`text-[#768994] group-hover:text-white group-focus:text-white transition-transform duration-300 ${open ? "rotate-90" : ""} ${small ? "w-4 h-4" : "w-5 h-5"}`}

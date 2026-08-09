@@ -37,7 +37,7 @@ export default function TimerPanel({
         <div className="flex bg-slate-50 border border-[#dce4ec] rounded-lg p-1 mb-5 relative z-10 w-full">
           <button
             onClick={() => setEntryMode("timer")}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-bold rounded-md transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-bold rounded-md transition-[transform,background-color,border-color] ${
               entryMode === "timer" ? "bg-[#12a0e1] text-white shadow-sm" : "text-[#768994] hover:text-[#122027]"
             }`}
           >
@@ -45,7 +45,7 @@ export default function TimerPanel({
           </button>
           <button
             onClick={() => setEntryMode("manual")}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-bold rounded-md transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-bold rounded-md transition-[transform,background-color,border-color] ${
               entryMode === "manual" ? "bg-[#12a0e1] text-white shadow-sm" : "text-[#768994] hover:text-[#122027]"
             }`}
           >
@@ -66,7 +66,7 @@ export default function TimerPanel({
             </div>
             <button
               onClick={handleToggleTimer}
-              className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-black text-white transition-all transform active:scale-95 shadow-md text-sm ${
+              className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-black text-white transition-[background-color,box-shadow,transform] transform active:scale-95 shadow-md text-sm ${
                 isRunning ? "bg-amber-500 hover:bg-amber-600 shadow-amber-500/20" : "bg-[#122027] hover:bg-[#25373c]"
               }`}
             >
@@ -88,7 +88,7 @@ export default function TimerPanel({
                     <input
                       type="number" min="0" max={max}
                       value={value} onChange={(e) => set(e.target.value)} placeholder="0"
-                      className="w-16 bg-white text-center text-2xl font-black text-[#122027] border border-[#dce4ec] focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 rounded-xl py-2 outline-none shadow-sm transition-all"
+                      className="w-16 bg-white text-center text-2xl font-black text-[#122027] border border-[#dce4ec] focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 rounded-xl py-2 outline-none shadow-sm transition-[border-color,box-shadow]"
                     />
                     <span className="text-[10px] text-[#768994] font-black uppercase mt-1 tracking-widest">{label}</span>
                   </div>
@@ -127,7 +127,7 @@ export default function TimerPanel({
           <button
             onClick={handleLogTask}
             disabled={entryMode === "timer" && (isRunning || elapsedTime === 0)}
-            className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-white disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed transition-all text-sm ${
+            className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-white disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed transition-[transform,background-color,border-color] text-sm ${
               showReward ? "bg-[#15a38b] scale-[1.03] shadow-lg shadow-[#1cc1a5]/40" : "bg-[#1cc1a5] hover:bg-[#15a38b] shadow-md shadow-[#1cc1a5]/20 active:scale-95"
             }`}
           >
@@ -139,10 +139,10 @@ export default function TimerPanel({
       {/* Recent Jobs shortcut */}
       <button
         onClick={() => onNavigateToHub?.("jobs")}
-        className="w-full bg-white rounded-3xl border border-[#dce4ec] p-5 flex items-center justify-between gap-4 shadow-sm hover:shadow-md hover:border-[#12a0e1]/40 transition-all group"
+        className="w-full bg-white rounded-3xl border border-[#dce4ec] p-5 flex items-center justify-between gap-4 shadow-sm hover:shadow-md hover:border-[#12a0e1]/40 transition-[box-shadow,border-color] group"
       >
         <div className="flex items-center gap-4">
-          <div className="bg-[#12a0e1]/10 p-3.5 rounded-2xl text-[#12a0e1] border border-[#12a0e1]/20 group-hover:scale-110 group-hover:bg-[#12a0e1] group-hover:text-white transition-all">
+          <div className="bg-[#12a0e1]/10 p-3.5 rounded-2xl text-[#12a0e1] border border-[#12a0e1]/20 group-hover:scale-110 group-hover:bg-[#12a0e1] group-hover:text-white transition-[background-color,color,transform]">
             <Clock className="w-5 h-5" />
           </div>
           <div className="text-left">
@@ -156,10 +156,10 @@ export default function TimerPanel({
       {/* Completed Jobs shortcut */}
       <button
         onClick={() => onNavigateToHub?.("completed")}
-        className="w-full bg-white rounded-3xl border border-[#dce4ec] p-5 flex items-center justify-between gap-4 shadow-sm hover:shadow-md hover:border-[#1cc1a5]/40 transition-all group"
+        className="w-full bg-white rounded-3xl border border-[#dce4ec] p-5 flex items-center justify-between gap-4 shadow-sm hover:shadow-md hover:border-[#1cc1a5]/40 transition-[box-shadow,border-color] group"
       >
         <div className="flex items-center gap-4">
-          <div className="bg-[#1cc1a5]/10 p-3.5 rounded-2xl text-[#1cc1a5] border border-[#1cc1a5]/20 group-hover:scale-110 group-hover:bg-[#1cc1a5] group-hover:text-white transition-all">
+          <div className="bg-[#1cc1a5]/10 p-3.5 rounded-2xl text-[#1cc1a5] border border-[#1cc1a5]/20 group-hover:scale-110 group-hover:bg-[#1cc1a5] group-hover:text-white transition-[background-color,color,transform]">
             <CheckSquare className="w-5 h-5" />
           </div>
           <div className="text-left">
@@ -185,7 +185,7 @@ export default function TimerPanel({
 
       {/* Wrike lifetime stats */}
       {wrikeUser && (
-        <div className="bg-gradient-to-br from-[#4bbdf1] to-[#7cd7c7] rounded-3xl border border-indigo-100 p-5 shadow-lg shadow-indigo-500/20 text-white relative overflow-hidden group">
+        <div className="bg-gradient-to-br from-[#0d8bc4] to-[#0f766e] rounded-3xl border border-[#0f766e]/20 p-5 shadow-lg shadow-[#0f766e]/20 text-white relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10 group-hover:scale-150 transition-transform duration-700 pointer-events-none" />
           <div className="flex items-center justify-between mb-7 relative z-10">
             <div className="flex items-center gap-3">
@@ -212,8 +212,8 @@ export default function TimerPanel({
               { label: "All Time", value: userStats.allTime, highlight: true },
             ].map(({ label, value, highlight }) => (
               <div key={label} className="bg-white/10 rounded-xl p-3 border border-white/10 flex flex-col justify-center">
-                <span className="text-[9px] text-white font-black uppercase tracking-widest mb-0.5">{label}</span>
-                <span className={`text-lg font-black tracking-tight ${highlight ? "text-yellow-300" : ""}`}>
+                <span className="text-[10px] text-white font-black uppercase tracking-widest mb-0.5">{label}</span>
+                <span className={`text-lg font-black tracking-tight ${highlight ? "text-[#1cc1a5]" : ""}`}>
                   {userStats.fetched ? value : "-"}
                 </span>
               </div>

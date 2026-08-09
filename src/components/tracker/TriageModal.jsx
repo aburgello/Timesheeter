@@ -80,7 +80,7 @@ export default function TriageModal({
           </button>
           <button
             onClick={handleSave}
-            className="px-6 py-2.5 text-sm font-black text-white bg-[#12a0e1] hover:bg-[#0f88c0] rounded-xl shadow-md transition-all active:scale-95"
+            className="px-6 py-2.5 text-sm font-black text-white bg-[#12a0e1] hover:bg-[#0f88c0] rounded-xl shadow-md transition-[background-color,transform] active:scale-95"
           >
             {triageQueue.length > 1 ? "Save & Next" : "Save & Close"}
           </button>

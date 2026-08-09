@@ -231,7 +231,7 @@ export default function RecentJobsModal({
                       return (
                         <div
                           key={task.id}
-                          className={`p-4 border-y border-r border-l-4 rounded-2xl transition-all ${borderColor} ${
+                          className={`p-4 border-y border-r border-l-4 rounded-2xl transition-[border-color,background-color,box-shadow,opacity] ${borderColor} ${
                             isExpanded ? "shadow-md bg-white border-y-[#12a0e1]/30 border-r-[#12a0e1]/30"
                             : isMatrix ? "border-y-[#dce4ec] border-r-[#dce4ec] hover:shadow-md bg-slate-200/50 opacity-60 hover:opacity-100 cursor-pointer group"
                             : "border-y-[#dce4ec] border-r-[#dce4ec] hover:shadow-md bg-slate-50 hover:bg-white cursor-pointer group"
@@ -248,7 +248,7 @@ export default function RecentJobsModal({
                                       <CheckCircle className="w-3 h-3" /> Delivered {formattedCompletedDate}
                                     </span>
                                   ) : null}
-                                  <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 shadow-sm" title="Last Updated">
+                                  <span className="flex items-center gap-1 text-[10px] font-bold text-[#12a0e1] bg-[#12a0e1]/10 px-2 py-0.5 rounded border border-[#12a0e1]/20 shadow-sm" title="Last Updated">
                                     <Activity className="w-3 h-3" /> Updated {formattedUpdatedDate || "Unknown"}
                                   </span>
                                   {task.dueDate && task.dueDate !== "No Due Date" && (
@@ -263,7 +263,7 @@ export default function RecentJobsModal({
                               </div>
                             </div>
                             {!isExpanded && (
-                              <div className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 mt-1 sm:mt-0 ${
+                              <div className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-[background-color,border-color,color] flex items-center gap-1.5 shrink-0 mt-1 sm:mt-0 ${
                                 isMatrix ? "bg-transparent border-slate-300 text-slate-400 group-hover:bg-slate-200 group-hover:text-slate-600"
                                 : "bg-white border-[#dce4ec] text-[#768994] group-hover:bg-[#12a0e1] group-hover:text-white group-hover:border-[#12a0e1]"
                               }`}>
@@ -303,7 +303,7 @@ export default function RecentJobsModal({
                                         value={recentTaskDraft[field]}
                                         onChange={(e) => setRecentTaskDraft({ ...recentTaskDraft, [field]: e.target.value })}
                                         placeholder={placeholder}
-                                        className="w-full bg-white border border-[#dce4ec] rounded-xl px-3 py-2.5 text-sm focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 outline-none transition-all"
+                                        className="w-full bg-white border border-[#dce4ec] rounded-xl px-3 py-2.5 text-sm focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 outline-none transition-[border-color,box-shadow]"
                                       />
                                     ))}
                                   </div>
@@ -317,7 +317,7 @@ export default function RecentJobsModal({
                                   <button onClick={(e) => { e.stopPropagation(); setRecentTaskDraft(null); }} className="px-4 py-2 text-xs font-bold text-[#768994] hover:bg-slate-200 rounded-lg transition-colors">
                                     Cancel
                                   </button>
-                                  <button onClick={(e) => { e.stopPropagation(); handleInstaLogRecentJob(); }} className="px-5 py-2 text-xs font-bold bg-[#1cc1a5] hover:bg-[#15a38b] text-white rounded-lg shadow-sm shadow-[#1cc1a5]/20 transition-all flex items-center gap-1.5">
+                                  <button onClick={(e) => { e.stopPropagation(); handleInstaLogRecentJob(); }} className="px-5 py-2 text-xs font-bold bg-[#1cc1a5] hover:bg-[#15a38b] text-white rounded-lg shadow-sm shadow-[#1cc1a5]/20 transition-colors flex items-center gap-1.5">
                                     <CheckCircle className="w-4 h-4" /> Insta-Log
                                   </button>
                                 </div>

@@ -48,10 +48,10 @@ export default function Rail({ activePage, setActivePage }) {
   // shift between collapsed/expanded), with a label that fades in only once
   // the rail expands on hover. overflow-hidden clips the label while collapsed.
   const railRowClass = (active, activeGrad) =>
-    `group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden transition-colors shrink-0 ${
+    `group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden transition-colors shrink-0 focus-visible:outline-none ${
       active
-        ? `bg-gradient-to-br ${activeGrad} text-white shadow-lg`
-        : "text-[#768994] hover:text-[#122027] hover:bg-slate-100"
+        ? `bg-gradient-to-br ${activeGrad} text-white shadow-lg focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white/70`
+        : "text-[#768994] hover:text-[#122027] hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[#12a0e1]/30"
     }`;
   const railLabelClass =
     "text-sm font-bold whitespace-nowrap pr-4 opacity-0 group-hover/rail:opacity-100 transition-opacity duration-200";
@@ -75,7 +75,7 @@ export default function Rail({ activePage, setActivePage }) {
       <button
         onClick={() => setActivePage("home")}
         title="Home"
-        className="group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden border border-dashed border-[#dce4ec] text-[#768994] hover:border-[#12a0e1] hover:text-[#12a0e1] transition-colors shrink-0 mt-4"
+        className="group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden border border-dashed border-[#dce4ec] text-[#768994] hover:border-[#12a0e1] hover:text-[#12a0e1] transition-colors shrink-0 mt-4 focus-visible:ring-4 focus-visible:ring-[#12a0e1]/30 focus-visible:outline-none"
       >
         <span className="w-14 h-14 shrink-0 flex items-center justify-center">
           <Home className="w-6 h-6" strokeWidth={2.25} />
@@ -109,10 +109,10 @@ export default function Rail({ activePage, setActivePage }) {
       <button
         onClick={() => setActivePage("profile")}
         title="Your profile & hub"
-        className={`group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden transition-colors shrink-0 mt-1 ${
+        className={`group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden transition-colors shrink-0 mt-1 focus-visible:outline-none ${
           activePage === "profile"
-            ? `bg-gradient-to-br ${PAGE_GRADIENTS.profile} text-white shadow-lg`
-            : "text-[#768994] hover:text-[#122027] hover:bg-slate-100"
+            ? `bg-gradient-to-br ${PAGE_GRADIENTS.profile} text-white shadow-lg focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white/70`
+            : "text-[#768994] hover:text-[#122027] hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[#12a0e1]/30"
         }`}
       >
         <span

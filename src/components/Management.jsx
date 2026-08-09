@@ -19,9 +19,9 @@ import {
   discoverJobNumberField, planFilmSync, fetchAllFolders, findStudioFolder,
   findMasterTemplateFolder, fetchFolderProjects, collectSubtreeIds, findFilmLocation,
   planPropagate, applyPropagate, copyTemplateDeep,
-  mapSlotFoldersUnder, slotSuffix, renameFolder, buildFilmView,
+  mapSlotFoldersUnder, pickSlotFolder, slotSuffix, renameFolder, buildFilmView,
   setFolderJobNumber, triggerFieldCascade, scanStudioJobNumbers,
-  discoverItemPriceField, fetchFolderItemPrice,
+  discoverItemPriceField, fetchFolderItemPrice, descriptionsAgree,
 } from "../lib/wrikeCampaign";
 import { isServiceAccount, DEPT_GROUPS } from "../lib/people";
 import { layoutRect } from "../utils/zoom";
@@ -632,7 +632,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {/* Sort toggle */}
         <button
           onClick={() => setSort(s => s === "asc" ? "desc" : "asc")}
-          className="flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-[#768994] bg-white border border-[#dce4ec] rounded-xl hover:border-slate-300 hover:text-[#122027] transition-all shrink-0"
+          className="flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-bold text-[#768994] bg-white border border-[#dce4ec] rounded-xl hover:border-slate-300 hover:text-[#122027] transition-[border-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40"
           title={sort === "asc" ? "Sorted A → Z" : "Sorted Z → A"}
         >
           {sort === "asc"
@@ -644,7 +644,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {/* Seed button (only when table is empty) */}
         {seedArr && items.length === 0 && !loading && (
           <button onClick={() => seedData(seedArr)} disabled={saving}
-            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition-all shrink-0 disabled:opacity-50">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0 disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${saving ? "animate-spin" : ""}`} />
             Seed ({seedArr.length})
           </button>
@@ -654,7 +654,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
         {wrikeFilmSync && (
           <button onClick={() => setShowFilmSync(true)}
             title="Pull film projects from a studio folder in Wrike into this list"
-            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-xs font-bold rounded-xl transition-all shrink-0">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-xs font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0">
             <Download className="w-3.5 h-3.5" /> Sync from Wrike
           </button>
         )}
@@ -711,7 +711,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
               return (
                 <button key={qf.label}
                   onClick={() => { setQFilter(isActive ? null : qf.keyword); setSearch(""); setLetter(null); }}
-                  className={`group/chip relative flex flex-col items-start gap-0.5 px-4 py-3 min-w-[72px] rounded-2xl overflow-hidden border transition-all duration-200 ${
+                  className={`group/chip relative flex flex-col items-start gap-0.5 px-4 py-3 min-w-[72px] rounded-2xl overflow-hidden border transition-[border-color,box-shadow,color] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 ${
                     isActive ? "border-transparent shadow-md text-white" : "border-[#dce4ec] text-[#122027] hover:border-transparent hover:text-white hover:shadow-sm"
                   }`}>
                   {/* gradient fill — faint by default, full on hover/active */}
@@ -739,7 +739,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
       {!search && !activeQuickFilter && !groups.length && availableLetters.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-4 pb-4 border-b border-[#dce4ec]">
           <button onClick={() => setLetter(null)}
-            className={`px-2.5 py-1 text-[11px] font-black rounded-lg transition-all ${
+            className={`px-2.5 py-1 text-[11px] font-black rounded-lg transition-[background-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] ${
               !activeLetter ? "bg-[#122027] text-white shadow-sm" : "bg-slate-100 text-[#768994] hover:bg-slate-200 hover:text-[#122027]"
             }`}>All</button>
           {availableLetters.map(l => {
@@ -747,7 +747,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
             const isActive = activeLetter === l;
             return (
               <button key={l} onClick={() => setLetter(isActive ? null : l)}
-                className={`px-2.5 py-1 text-[11px] font-black rounded-lg transition-all ${
+                className={`px-2.5 py-1 text-[11px] font-black rounded-lg transition-[background-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] ${
                   isActive ? `${bg} shadow-sm ring-1 ring-current/30` : "bg-slate-100 text-[#768994] hover:bg-slate-200 hover:text-[#122027]"
                 }`}>{l}</button>
             );
@@ -863,7 +863,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                         const isEditing   = editId === item.id;
                         return (
                           <div key={item.id}
-                            className={`group/item flex items-center gap-2.5 px-3.5 py-3 bg-white border rounded-xl
+                            className={`group/item flex items-center gap-2.5 px-3.5 py-3 bg-white border rounded-2xl
                                         transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                               isEditing
                                 ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15"
@@ -888,11 +888,11 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                                 <span className={`flex-1 min-w-0 text-sm font-semibold text-[#122027] ${isLong ? "leading-snug" : "truncate"}`}>{displayText}</span>
                                 <div className="flex items-center gap-0.5 opacity-0 group-hover/item:opacity-100 transition-opacity shrink-0">
                                   <button onClick={() => { setEditId(item.id); setEditVal(text); }}
-                                    className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-[#122027]">
+                                    className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-[#122027] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40">
                                     <Pencil className="w-3 h-3" />
                                   </button>
                                   <button onClick={() => remove(item.id)}
-                                    className="p-1 hover:bg-rose-50 rounded-lg text-slate-400 hover:text-rose-500">
+                                    className="p-1 hover:bg-rose-50 rounded-lg text-slate-400 hover:text-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40">
                                     <Trash2 className="w-3 h-3" />
                                   </button>
                                 </div>
@@ -968,11 +968,11 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
                     {renderRowExtra?.(item, patchItem)}
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                       <button onClick={() => { setEditId(item.id); setEditVal(text); }}
-                        className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-[#122027]">
+                        className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-[#122027] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40">
                         <Pencil className="w-3 h-3" />
                       </button>
                       <button onClick={() => remove(item.id)}
-                        className="p-1.5 hover:bg-rose-50 rounded-lg text-slate-400 hover:text-rose-500">
+                        className="p-1.5 hover:bg-rose-50 rounded-lg text-slate-400 hover:text-rose-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40">
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
@@ -989,7 +989,7 @@ function SimpleListSection({ table, labelField = "name", label, placeholder, isL
 
 // ── Modal field sub-components — defined at module level so React never
 //    remounts them mid-keystroke (defining inside a component = new type each render).
-const MODAL_INPUT = "w-full border border-[#dce4ec] rounded-2xl px-4 py-2.5 text-sm text-[#122027] outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/15 bg-white placeholder-[#b0bec5] transition-all";
+const MODAL_INPUT = "w-full border border-[#dce4ec] rounded-2xl px-4 py-2.5 text-sm text-[#122027] outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/15 bg-white placeholder-[#b0bec5] transition-[border-color,box-shadow] ease-[cubic-bezier(0.16,1,0.3,1)]";
 
 function FieldLabel({ text, required }) {
   return (
@@ -1232,7 +1232,7 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
               </div>
             </div>
             <div className="max-h-52 overflow-y-auto">
-              {hits.length === 0 && <p className="px-4 py-3 text-sm text-[#b0bec5]">No matches</p>}
+              {hits.length === 0 && <p className="px-4 py-3 text-sm text-[#768994]">No matches</p>}
               {hits.map(o => (
                 <button key={o} type="button"
                   onClick={() => { onChange(o); setQ(""); setOpen(false); }}
@@ -1261,7 +1261,7 @@ function PillField({ label, value, onChange, options, colorMap }) {
           const activeColor = colorMap?.[o] || "bg-[#122027] border-[#122027]";
           return (
             <button key={o} type="button" onClick={() => onChange(o)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-[background-color,border-color,color,box-shadow] ease-[cubic-bezier(0.16,1,0.3,1)] ${
                 active
                   ? `${activeColor} text-white shadow-sm`
                   : "bg-white text-[#768994] border-[#dce4ec] hover:border-slate-300 hover:text-[#122027]"
@@ -1510,7 +1510,7 @@ function JobForm({ job, clients, films, workCategories, descs, onSave, onCancel,
               </div>
               <div className="flex items-end">
                 <button type="button" onClick={() => set("job_done", !form.job_done)}
-                  className={`flex items-center gap-2.5 w-full px-4 py-2.5 rounded-2xl border font-bold text-sm transition-all ${
+                  className={`flex items-center gap-2.5 w-full px-4 py-2.5 rounded-xl border font-bold text-sm transition-[background-color,border-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] ${
                     form.job_done
                       ? "bg-[#1cc1a5]/10 border-[#1cc1a5] text-[#1cc1a5]"
                       : "bg-white border-[#dce4ec] text-[#768994] hover:border-[#1cc1a5]/50"
@@ -1548,12 +1548,12 @@ function JobForm({ job, clients, films, workCategories, descs, onSave, onCancel,
         )}
         {onCancel && (
           <button onClick={onCancel}
-            className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-all">
+            className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-xl transition-[color] ease-[cubic-bezier(0.16,1,0.3,1)]">
             Cancel
           </button>
         )}
         <button onClick={handleSave} disabled={saving || !canSave}
-          className={`flex items-center gap-2 px-6 py-2.5 text-white text-sm font-bold rounded-2xl transition-all disabled:opacity-50 shadow-sm ${
+          className={`flex items-center gap-2 px-6 py-2.5 text-white text-sm font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)] disabled:opacity-50 shadow-sm ${
             isEdit ? "bg-[#12a0e1] hover:bg-[#0d8bc4]" : "bg-[#10b981] hover:bg-[#0d9488]"
           }`}>
           {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
@@ -1658,7 +1658,7 @@ function FilmSyncModal({ studio: initialStudio = "Paramount", existingFilms, onC
           <span className="text-[10px] font-black uppercase tracking-widest text-[#768994] mr-1">Studio</span>
           {STUDIO_OPTIONS.map((s) => (
             <button key={s} onClick={() => setStudio(s)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-[background-color,border-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] ${
                 studio === s
                   ? "bg-[#122027] text-white border-[#122027]"
                   : "bg-white text-[#122027] border-[#dce4ec] hover:border-[#1cc1a5]"
@@ -1703,11 +1703,11 @@ function FilmSyncModal({ studio: initialStudio = "Paramount", existingFilms, onC
       </div>
       <div className="px-6 py-4 border-t border-[#dce4ec] flex items-center justify-end gap-2 shrink-0">
         <button onClick={onClose}
-          className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-all">
+          className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-xl transition-[color] ease-[cubic-bezier(0.16,1,0.3,1)]">
           Cancel
         </button>
         <button onClick={apply} disabled={applying || loading || !plan?.toAdd?.length}
-          className="flex items-center gap-2 px-6 py-2.5 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-sm font-bold rounded-2xl transition-all disabled:opacity-40">
+          className="flex items-center gap-2 px-6 py-2.5 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-sm font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)] disabled:opacity-40">
           {applying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
           {plan?.toAdd?.length ? `Add ${plan.toAdd.length} film${plan.toAdd.length === 1 ? "" : "s"}` : "Nothing to add"}
         </button>
@@ -1811,9 +1811,15 @@ function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
   );
   const canApply = plan && plan.field && filmProject && (isRetag || plan.template) && !applying;
 
-  // Slots already done — their live Wrike folder is already named with the job's
+  // Slots already done — a live Wrike folder is already named with THIS job's
   // code (read straight from plan.byId, so it's accurate even for old pushes).
   // These are pre-unchecked so re-pushing only touches genuinely new slots.
+  //
+  // Collects every folder sharing a suffix, not just one. When two jobs sit on
+  // the same slot, keeping a single title per suffix meant one job's folder
+  // decided both jobs' status: whichever title survived, the other job either
+  // read as done when nothing had been written for it, or read as pending while
+  // its folder existed. A job is done only if a folder carries its own code.
   const doneSlots = useMemo(() => {
     const done = new Set();
     if (!plan?.byId || !filmProject) return done;
@@ -1821,13 +1827,15 @@ function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
     const walk = (id) => {
       const n = plan.byId[id];
       if (!n) return;
-      if (/^(JOBNUMBER|XY\d+)_/i.test(n.title || "")) bySuffix[slotSuffix(n.title)] = n.title;
+      if (/^(JOBNUMBER|XY\d+)_/i.test(n.title || "")) {
+        (bySuffix[slotSuffix(n.title)] ||= []).push(n.title);
+      }
       (n.childIds || []).forEach(walk);
     };
     walk(filmProject.id);
     slots.forEach((s) => {
-      const live = bySuffix[slotSuffix(s.label)];
-      if (live && new RegExp(`^${s.code}_`, "i").test(live)) done.add(s.id);
+      const live = bySuffix[slotSuffix(s.label)] || [];
+      if (live.some((t) => new RegExp(`^${s.code}_`, "i").test(t))) done.add(s.id);
     });
     return done;
   }, [plan, filmProject, slots]);
@@ -1898,19 +1906,31 @@ function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
 
       // Rename each activated slot's folder to its code, set the Job Number field
       // on the folder, then let Wrike cascade that value down to every subitem.
-      // One template folder can only carry one job number. When a slot has been
-      // activated more than once, the first job in this run claims the folder and
-      // the rest are reported as contended rather than silently overwriting it —
-      // their extra folders have to be made in Wrike before they can be tagged.
-      const claimed = new Set();
+      //
+      // A folder is claimed by IDENTITY, not by slot name. A slot can hold
+      // several jobs on purpose, so each needs its own folder; pickSlotFolder
+      // hands out the one already bearing this job's code (making a re-push a
+      // no-op), else a free "JOBNUMBER_…" one, and NEVER one already carrying a
+      // different job's code. A job with no folder available is reported so
+      // somebody can make one — the previous version claimed by slot name and
+      // could hand a job its neighbour's folder, renaming that neighbour's
+      // allocation onto this code.
+      const claimedIds = new Set();
       let renamed = 0, cascaded = 0, propagated = 0, failed = 0, skipped = 0, contended = 0;
       for (let i = 0; i < selectedSlots.length; i++) {
         const s = selectedSlots[i];
         const suffix = slotSuffix(s.label);
-        if (claimed.has(suffix)) { contended += 1; continue; }
-        const folder = slotFolders[suffix];
-        if (!folder) { skipped += 1; continue; }
-        claimed.add(suffix);
+        const available = slotFolders[suffix] || [];
+        const folder = pickSlotFolder(available, s.code, claimedIds);
+        if (!folder) {
+          // Tell "this slot has no folder at all" apart from "every folder it
+          // has is already spoken for" — the first needs a template push, the
+          // second needs one more folder in Wrike.
+          if (available.length) contended += 1;
+          else skipped += 1;
+          continue;
+        }
+        claimedIds.add(folder.id);
         if (inTemplate(folder.id)) throw new Error(TEMPLATE_GUARD); // never write into the template
 
         const newTitle = `${s.code}_${suffix}`;
@@ -2062,7 +2082,7 @@ function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
                         <span className="text-[#122027] truncate">{s.label.replace(/^JOBNUMBER_?/i, "").replace(/_/g, " ")}</span>
                         {done && <span className="text-[9px] font-black uppercase tracking-wider text-[#1cc1a5] bg-[#1cc1a5]/10 px-1.5 py-0.5 rounded-full shrink-0">Tagged</span>}
                       </span>
-                      <span className={`font-mono font-bold shrink-0 ${on ? "text-[#12a0e1]" : "text-[#b0bec5] line-through"}`}>{s.code}</span>
+                      <span className={`font-mono font-bold shrink-0 ${on ? "text-[#12a0e1]" : "text-[#768994] line-through"}`}>{s.code}</span>
                     </label>
                   );
                 })}
@@ -2073,8 +2093,8 @@ function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
               <div className="mt-3">
                 <p className="text-xs font-bold text-[#12a0e1] mb-1.5">{progress.step}</p>
                 <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-[#12a0e1] transition-all"
-                    style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 100}%` }} />
+                  <div className="h-full w-full bg-[#12a0e1] origin-left transition-[transform] ease-[cubic-bezier(0.16,1,0.3,1)]"
+                    style={{ transform: `scaleX(${progress.total ? progress.done / progress.total : 1})` }} />
                 </div>
               </div>
             )}
@@ -2084,13 +2104,13 @@ function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
       </div>
       <div className="px-6 py-4 border-t border-[#dce4ec] flex items-center justify-end gap-2 shrink-0">
         <button onClick={onClose}
-          className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-all">
+          className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-xl transition-[color] ease-[cubic-bezier(0.16,1,0.3,1)]">
           {result ? "Close" : "Cancel"}
         </button>
         {!result && (
           <button onClick={apply} disabled={!canApply}
             title={!canApply && !applying ? "All preconditions above must pass first" : ""}
-            className="flex items-center gap-2 px-6 py-2.5 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-sm font-bold rounded-2xl transition-all disabled:opacity-40">
+            className="flex items-center gap-2 px-6 py-2.5 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-sm font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)] disabled:opacity-40">
             {applying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
             Apply to Wrike
           </button>
@@ -2666,7 +2686,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
             : "text-[#122027]"}`}>
             {node.label}
           </span>
-          {hasChildren && <span className="text-[10px] text-[#b0bec5] font-bold shrink-0">{node.children.length}</span>}
+          {hasChildren && <span className="text-[10px] text-[#768994] font-bold shrink-0">{node.children.length}</span>}
           {clickable && (
             <span className="text-[9px] font-black uppercase tracking-wider text-[#12a0e1] bg-[#12a0e1]/10 px-1.5 py-0.5 rounded ml-1">Click to activate</span>
           )}
@@ -2818,7 +2838,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
           const active = innerTab === t.id;
           return (
             <button key={t.id} onClick={() => setInnerTab(t.id)}
-              className={`flex items-center gap-3 text-left rounded-2xl p-3.5 border-2 transition-all ${
+              className={`flex items-center gap-3 text-left rounded-2xl p-3.5 border-2 transition-[background-color,border-color,box-shadow] ease-[cubic-bezier(0.16,1,0.3,1)] ${
                 active
                   ? "border-[#12a0e1] bg-[#12a0e1]/5 shadow-md"
                   : "border-[#dce4ec] bg-white hover:border-slate-300 hover:shadow-sm"
@@ -2860,7 +2880,7 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
             return (
               <button key={s} disabled={!available}
                 onClick={() => setStudio(s)}
-                className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all ${
+                className={`px-3 py-2 rounded-xl text-xs font-bold border transition-[background-color,border-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] ${
                   studio === s
                     ? "bg-[#122027] text-white border-[#122027]"
                     : available
@@ -3179,11 +3199,11 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
                 <CheckCircle2 className="w-3.5 h-3.5" /> Created {customCreated} in Job Book
               </span>
               <button onClick={() => setActiveTab?.("jobs")}
-                className="px-4 py-2.5 bg-[#122027] hover:bg-[#1a2e38] text-white text-sm font-bold rounded-2xl transition-all">
+                className="px-4 py-2.5 bg-[#122027] hover:bg-[#1a2e38] text-white text-sm font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)]">
                 View in Job Book
               </button>
               <button onClick={() => setCustomCreated(null)}
-                className="px-4 py-2.5 bg-white border border-[#dce4ec] hover:border-[#12a0e1] text-[#122027] text-sm font-bold rounded-2xl transition-all">
+                className="px-4 py-2.5 bg-white border border-[#dce4ec] hover:border-[#12a0e1] text-[#122027] text-sm font-bold rounded-xl transition-[border-color] ease-[cubic-bezier(0.16,1,0.3,1)]">
                 Add Another Job
               </button>
             </div>
@@ -3213,6 +3233,18 @@ const scanIsPseudoFilm = (film) => !film || /^\d{2,4}$/.test(film.trim()) || !/[
 // A book row that is nothing but the bare code — the stub `ensureJob` writes
 // the first time a job is seen in use, before anyone files it properly.
 const scanIsBareCode = (s) => /^\s*XY\d{5,6}\s*$/i.test(s || "");
+
+// The description a book row currently carries: everything after the first
+// comma in its job number.
+//
+// Read off job_number rather than the project_description column on purpose.
+// The rows this exists to catch were written by ensureJob, which only ever
+// sets job_number/film_title/client — so their project_description is still
+// null while the description itself sits inside the job number string.
+const scanDescOf = (s) => {
+  const i = (s || "").indexOf(",");
+  return i === -1 ? "" : s.slice(i + 1).trim();
+};
 
 // How complete a book row is, used to pick which row wins when the same code
 // appears more than once. `jobs.job_number` is unique, so "XY025091" and
@@ -3282,10 +3314,11 @@ function StudioJobScanModal({ onClose, onApplied }) {
 
   useEffect(() => { let alive = true; if (alive) loadScan(); return () => { alive = false; }; }, [loadScan]);
 
-  // Existing book rows that disagree with Wrike. Two kinds:
+  // Existing book rows that disagree with Wrike. Three kinds:
   //   • a pseudo-film ("2026") the re-derived scan now resolves to a real film;
   //   • a row filed under the WRONG film, or carrying a malformed code
-  //     ("XY026089_SKY_VIP" instead of "XY026089").
+  //     ("XY026089_SKY_VIP" instead of "XY026089");
+  //   • a row whose DESCRIPTION describes something else entirely.
   // The second kind is why "0 new" can coexist with jobs you can't find: the
   // code IS in the book, so the scan skips it as a duplicate, but it's filed
   // under someone else's film and no film search will ever surface it. Wrike's
@@ -3300,7 +3333,28 @@ function StudioJobScanModal({ onClose, onApplied }) {
     // Canonical code position is the bare code — a suffix means the folder name
     // leaked into it.
     const codeMalformed = !new RegExp(`(^|\\s:\\s)${c.code}\\s*,`, "i").test(cur.job_number || "");
-    return filmWrong || codeMalformed;
+    // A description that isn't this job's at all. The signature case is a row
+    // built from a TASK name back when the pull paths did that — the book says
+    // "ODY_Print_Teaser1SHT_Birds_CMYK_KR" where the folder says "French Canada
+    // Assets". Such a row has the right film and a well-formed code, so both
+    // tests above pass it and nothing ever offered to repair it.
+    //
+    // descriptionsAgree is loose on purpose (wording, punctuation, and the
+    // region prefix the scan adds are all treated as agreement) so this only
+    // fires when the two are describing different work. An empty description on
+    // either side counts as agreement, so a row nobody has a better answer for
+    // is left alone rather than churned.
+    const descWrong = !descriptionsAgree(scanDescOf(cur.job_number), c.projectDescription);
+    // Another row for this code already IS what the scan would write, and this
+    // one isn't — typically the region twin, where the book holds both
+    // "…, Titles" and "…, INT - Titles" and the canonical one is the sibling.
+    // Routed through corrections rather than deleted here so that fixMisfilmed's
+    // existing twin handling does the work: it drops this row and lets the
+    // canonical sibling stand, which is precisely the wanted outcome.
+    const supersededByTwin =
+      (cur.job_number || "") !== c.jobNumber &&
+      (existingExtras[c.code] || []).some((r) => (r.job_number || "") === c.jobNumber);
+    return filmWrong || codeMalformed || descWrong || supersededByTwin;
   });
 
   const allNew  = candidates.filter((c) => !existingCodes.has(c.code));
@@ -3353,29 +3407,67 @@ function StudioJobScanModal({ onClose, onApplied }) {
     setPhase("done");
   };
 
-  // Bare "XY025091" stubs sitting alongside a properly filed row for the same
-  // code. They carry no information the real row doesn't, and they're what a
-  // correction would otherwise collide with, so the fixer clears them out.
-  const redundantStubs = Object.entries(existingExtras).flatMap(([code, rows]) =>
-    scanIsBareCode(existingByCode[code]?.job_number)
-      ? []
-      : rows.filter((r) => scanIsBareCode(r.job_number))
-  );
+  // The scan's own candidate for a code, so the rules below can defer to what
+  // it would write rather than encoding a house style of their own.
+  const candByCode = useMemo(() => {
+    const m = {};
+    candidates.forEach((c) => { m[c.code] = c; });
+    return m;
+  }, [candidates]);
+
+  // Extra rows for a code that carry nothing the kept row doesn't. Two shapes:
+  //
+  //   • a bare "XY025091" stub sitting beside a properly filed row — what
+  //     ensureJob writes the first time a job is seen in use;
+  //   • a REGION TWIN: the same film and the same description, differing only
+  //     in the region prefix the scan writes ("Shrek 5 : XY023362, Titles"
+  //     beside "Shrek 5 : XY023362, INT - Titles"). jobs.job_number is unique
+  //     on the whole string, so both rows are legal and both show up in every
+  //     job picker, with useJobLookup silently preferring whichever has the
+  //     lower id.
+  //
+  // Only ever removes the extra when the KEPT row is the one the scan itself
+  // would write. When it's the other way round — the kept row is the scruffy
+  // one and an extra is canonical — nothing is deleted here; `supersededByTwin`
+  // routes that through corrections instead, where the existing twin handling
+  // drops the kept row and lets the canonical sibling stand.
+  //
+  // The film must match too. "Universal House Job : XY018540, Digital
+  // Housekeeping" and "XYi Internal Use : XY018540, Digital Housekeeping" have
+  // identical descriptions and are NOT duplicates — they are the same code
+  // filed under two different owners, which is a judgement call for a human and
+  // is already surfaced by filmWrong.
+  const redundantRows = Object.entries(existingExtras).flatMap(([code, rows]) => {
+    const kept = existingByCode[code];
+    if (!kept || scanIsBareCode(kept.job_number)) return [];
+    const cand = candByCode[code];
+    const keptIsCanonical = !!cand && kept.job_number === cand.jobNumber;
+    const keptFilm = scanFilmOf(kept.job_number).toLowerCase();
+    return rows.filter((r) => {
+      if (scanIsBareCode(r.job_number)) return true;
+      if (!keptIsCanonical) return false;
+      if ((r.job_number || "") === kept.job_number) return false;
+      return (
+        scanFilmOf(r.job_number).toLowerCase() === keptFilm &&
+        descriptionsAgree(scanDescOf(r.job_number), scanDescOf(kept.job_number))
+      );
+    });
+  });
 
   // Correct existing book rows whose film was a pseudo-film ("2026") to the
   // real film the re-derived scan found — updates film, client, job number and
   // description in place. Only touches the `corrections` set (safe rows).
   const fixMisfilmed = async () => {
-    if (!corrections.length && !redundantStubs.length) return;
-    const total = corrections.length + redundantStubs.length;
+    if (!corrections.length && !redundantRows.length) return;
+    const total = corrections.length + redundantRows.length;
     const ok = await confirmAction({
       title: `Fix ${total} book ${total === 1 ? "entry" : "entries"}?`,
       message:
         (corrections.length
           ? `${corrections.length} ${corrections.length === 1 ? "entry disagrees" : "entries disagree"} with Wrike's folder tree — wrong film, a year/placeholder film, or the folder name left inside the job number. This rewrites their film, client, description and job number to match Wrike. `
           : "") +
-        (redundantStubs.length
-          ? `${redundantStubs.length} bare-code ${redundantStubs.length === 1 ? "entry is a duplicate" : "entries are duplicates"} of a job already filed properly and will be deleted. `
+        (redundantRows.length
+          ? `${redundantRows.length} duplicate ${redundantRows.length === 1 ? "entry says" : "entries say"} nothing the properly filed row for the same job doesn't — a bare code, or the same description without its region prefix — and will be deleted. `
           : "") +
         "Use Review first to see every before → after.",
       confirmLabel: `Fix ${total}`,
@@ -3412,8 +3504,8 @@ function StudioJobScanModal({ onClose, onApplied }) {
       else fixed += 1;
     }
 
-    if (redundantStubs.length) {
-      const ids = redundantStubs.map((r) => r.id);
+    if (redundantRows.length) {
+      const ids = redundantRows.map((r) => r.id);
       for (let i = 0; i < ids.length; i += 200) {
         const { error: delErr } = await supabase
           .from("jobs").delete().in("id", ids.slice(i, i + 200));
@@ -3478,19 +3570,19 @@ function StudioJobScanModal({ onClose, onApplied }) {
               {error && <span className="text-rose-500">⚠ {error}</span>}
             </div>
 
-            {(corrections.length > 0 || redundantStubs.length > 0) && (
+            {(corrections.length > 0 || redundantRows.length > 0) && (
               <div className="border-b border-amber-100 bg-amber-50/60">
                 <div className="px-6 py-2.5 flex items-center gap-3">
                   <span className="text-[11px] font-bold text-amber-700">
                     {corrections.length > 0 && (
                       <>
-                        {corrections.length} existing {corrections.length === 1 ? "entry disagrees" : "entries disagree"} with Wrike — filed under the wrong film, or with the folder name stuck in the job number. These are in the book already, which is why they don’t show as new.
+                        {corrections.length} existing {corrections.length === 1 ? "entry disagrees" : "entries disagree"} with Wrike — filed under the wrong film, describing different work, or with the folder name stuck in the job number. These are in the book already, which is why they don’t show as new.
                       </>
                     )}
-                    {redundantStubs.length > 0 && (
+                    {redundantRows.length > 0 && (
                       <>
                         {corrections.length > 0 ? " " : ""}
-                        {redundantStubs.length} bare-code {redundantStubs.length === 1 ? "entry duplicates a job" : "entries duplicate jobs"} already filed properly — fixing removes {redundantStubs.length === 1 ? "it" : "them"}.
+                        {redundantRows.length} duplicate {redundantRows.length === 1 ? "entry says" : "entries say"} nothing the properly filed row doesn’t — a bare code, or the same description minus its region prefix — so fixing removes {redundantRows.length === 1 ? "it" : "them"}.
                       </>
                     )}
                   </span>
@@ -3500,7 +3592,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
                   </button>
                   <button onClick={fixMisfilmed} disabled={phase === "saving"}
                     className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-[11px] font-bold rounded-lg transition-colors">
-                    Fix {corrections.length + redundantStubs.length}
+                    Fix {corrections.length + redundantRows.length}
                   </button>
                 </div>
                 {showCorrections && (
@@ -3521,7 +3613,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
                         ))}
                         {/* Duplicate stubs aren't rewritten, they're removed —
                             show them here too so Review really is every change. */}
-                        {redundantStubs.map((r) => (
+                        {redundantRows.map((r) => (
                           <tr key={`stub-${r.id}`} className="align-top">
                             <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">
                               {scanCodeOf(r.job_number)}
@@ -3601,7 +3693,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
                 <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between">
                   <p className="text-[11px] text-[#768994] font-medium">Taken from the folder title, prefixed with the region its studio folder sits under — existing rows are never touched.</p>
                   <button onClick={apply} disabled={selectedCount === 0 || phase === "saving"}
-                    className="flex items-center gap-1.5 px-5 py-2 bg-[#1cc1a5] hover:bg-[#17a892] disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-bold rounded-xl transition-all">
+                    className="flex items-center gap-1.5 px-5 py-2 bg-[#1cc1a5] hover:bg-[#17a892] disabled:bg-slate-200 disabled:text-slate-400 text-white text-sm font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)]">
                     {phase === "saving" ? <><RefreshCw className="w-4 h-4 animate-spin" /> Saving…</> : <><Plus className="w-4 h-4" /> Add {selectedCount} to Job Book</>}
                   </button>
                 </div>
@@ -3856,11 +3948,11 @@ export function JobBookSection({ setActiveTab }) {
           />
         </div>
         <button onClick={() => setShowScan(true)}
-          className="flex items-center gap-1.5 px-4 py-2 bg-white border border-[#dce4ec] hover:border-[#1cc1a5] text-[#122027] text-sm font-bold rounded-xl transition-all shrink-0">
+          className="flex items-center gap-1.5 px-4 py-2 bg-white border border-[#dce4ec] hover:border-[#1cc1a5] text-[#122027] text-sm font-bold rounded-xl transition-[border-color] ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0">
           <RefreshCw className="w-4 h-4 text-[#1cc1a5]" /> Scan Wrike
         </button>
         <button onClick={() => setActiveTab?.("jobsSetup")}
-          className="flex items-center gap-1.5 px-4 py-2 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-sm font-bold rounded-xl transition-all shrink-0">
+          className="flex items-center gap-1.5 px-4 py-2 bg-[#1cc1a5] hover:bg-[#17a892] text-white text-sm font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0">
           <Plus className="w-4 h-4" /> Add Jobs
         </button>
       </div>
@@ -3930,11 +4022,11 @@ export function JobBookSection({ setActiveTab }) {
             </>
           )}
           <button onClick={applyBulk} disabled={bulkBusy}
-            className="ml-auto flex items-center gap-1.5 px-4 py-1.5 bg-[#1cc1a5] hover:bg-[#17a892] disabled:bg-slate-200 disabled:text-slate-400 text-white text-[12px] font-bold rounded-lg transition-all">
+            className="ml-auto flex items-center gap-1.5 px-4 py-1.5 bg-[#1cc1a5] hover:bg-[#17a892] disabled:bg-slate-200 disabled:text-slate-400 text-white text-[12px] font-bold rounded-lg transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)]">
             {bulkBusy ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Applying…</> : `Apply to ${selectedIds.size}`}
           </button>
           <button onClick={bulkDelete} disabled={bulkBusy} title="Delete selected rows"
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 hover:bg-rose-50 hover:border-rose-300 disabled:opacity-40 text-rose-600 text-[12px] font-bold rounded-lg transition-all">
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 hover:bg-rose-50 hover:border-rose-300 disabled:opacity-40 text-rose-600 text-[12px] font-bold rounded-lg transition-[background-color,border-color] ease-[cubic-bezier(0.16,1,0.3,1)]">
             <Trash2 className="w-3.5 h-3.5" /> Delete
           </button>
         </div>
@@ -3951,9 +4043,9 @@ export function JobBookSection({ setActiveTab }) {
               {JOBBOOK_COLS.map(c => <col key={c.key} style={{ width: jbWidths[c.key] }} />)}
             </colgroup>
             <thead>
-              <tr className="bg-slate-50 border-b border-[#dce4ec]">
+              <tr className="bg-[#0d1b22] border-b border-white/10">
                 {JOBBOOK_COLS.map(c => (
-                  <th key={c.key} className="relative px-3 py-2.5 text-left text-[9px] font-black uppercase tracking-widest text-[#768994] whitespace-nowrap overflow-hidden">
+                  <th key={c.key} className="relative px-3 py-2.5 text-left text-[9px] font-black uppercase tracking-widest text-white border-r border-white/5 last:border-r-0 whitespace-nowrap overflow-hidden">
                     {c.key === "job_number" ? (
                       <span className="flex items-center gap-2">
                         <input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFiltered}
@@ -4367,12 +4459,12 @@ function ImportModal({ onClose, onImported }) {
 
       <div className="px-6 py-4 border-t border-[#dce4ec] flex items-center justify-end gap-2 shrink-0">
         <button onClick={onClose}
-          className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-all">
+          className="px-5 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-xl transition-[color] ease-[cubic-bezier(0.16,1,0.3,1)]">
           {done ? "Close" : "Cancel"}
         </button>
         {!done && (
           <button onClick={apply} disabled={busy || !plan || plan.toInsert === 0}
-            className="flex items-center gap-2 px-6 py-2.5 bg-[#1cc1a5] hover:bg-[#17a98f] text-white text-sm font-bold rounded-2xl transition-all disabled:opacity-40">
+            className="flex items-center gap-2 px-6 py-2.5 bg-[#1cc1a5] hover:bg-[#17a98f] text-white text-sm font-bold rounded-xl transition-[background-color] ease-[cubic-bezier(0.16,1,0.3,1)] disabled:opacity-40">
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
             Import {plan?.toInsert || 0} row{plan?.toInsert === 1 ? "" : "s"}
           </button>
@@ -4768,12 +4860,12 @@ export function JobsFeedSection() {
           />
         </div>
         <div className="flex items-center gap-3 ml-auto">
-          <span className="text-xs font-bold text-[#b0bec5]">
+          <span className="text-xs font-bold text-[#768994]">
             {loading ? "Loading…" : `${filtered.length} entr${filtered.length === 1 ? "y" : "ies"}`}
           </span>
           <button
             onClick={() => setShowImport(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-[#1cc1a5] text-[#122027] text-xs font-bold rounded-xl transition-all"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-[#1cc1a5] text-[#122027] text-xs font-bold rounded-xl transition-[border-color] ease-[cubic-bezier(0.16,1,0.3,1)]"
           >
             <UploadCloud className="w-3.5 h-3.5" />
             Import CSV
@@ -4781,7 +4873,7 @@ export function JobsFeedSection() {
           <button
             onClick={exportToExcel}
             disabled={loading || filtered.length === 0}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-all disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-[border-color] ease-[cubic-bezier(0.16,1,0.3,1)] disabled:opacity-50"
           >
             <Download className="w-3.5 h-3.5" />
             Export to Excel
@@ -4817,9 +4909,9 @@ export function JobsFeedSection() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={COLS.length} className="px-4 py-8 text-center text-[#b0bec5]">Loading…</td></tr>
+              <tr><td colSpan={COLS.length} className="px-4 py-8 text-center text-[#768994]">Loading…</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={COLS.length} className="px-4 py-8 text-center text-[#b0bec5]">No entries for this period</td></tr>
+              <tr><td colSpan={COLS.length} className="px-4 py-8 text-center text-[#768994]">No entries for this period</td></tr>
             ) : filtered.map((e, i) => (
               <tr key={e.id} className={`border-b border-[#f0f4f8] align-top ${i % 2 === 0 ? "bg-white" : "bg-[#f8fafc]"} hover:bg-[#edf5fb] transition-colors`}>
                 {COLS.map(c => {
@@ -4862,7 +4954,7 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
       {/* Card gap tightens while a group is open, for the same reason its
           siblings condense: every pixel above the open group pushes its
           children further down the page. */}
-      <div className={`transition-[gap] duration-300 ease-out flex flex-col ${expandedGroup ? "gap-2.5" : "gap-4"}`}>
+      <div className={`flex flex-col ${expandedGroup ? "gap-2.5" : "gap-4"}`}>
         {NAV_GROUPS.map((group) => {
           const isOpen = expandedGroup === group.id;
           // A group with exactly one destination has nothing to unfold —
@@ -4886,15 +4978,9 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
                 condensed={isCondensed}
                 first
               />
-              <AnimatePresence initial={false}>
-                {isOpen && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
-                    className="overflow-hidden bg-slate-50 border-t border-[#dce4ec]"
-                  >
+              <div className={`grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>
+                <div className="overflow-hidden min-h-0">
+                  <div className="bg-slate-50 border-t border-[#dce4ec]">
                     {/* Same HubRow, just compact — identical gradient sweep
                         and hover behavior as the parent row, not a
                         hand-rolled approximation of it. */}
@@ -4913,9 +4999,9 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
                         }
                       />
                     ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  </div>
+                </div>
+              </div>
             </div>
           );
         })}
@@ -5059,7 +5145,7 @@ function ItemCategoryOverrides() {
           <div className="flex items-center gap-2">
             <button type="button"
               onClick={() => { setShowAllCategories(s => !s); setSearch(""); }}
-              className={`shrink-0 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+              className={`shrink-0 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-[background-color,border-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] ${
                 showAllCategories && !search.trim()
                   ? "bg-[#12a0e1]/10 border-[#12a0e1] text-[#12a0e1]"
                   : "bg-white border-[#dce4ec] text-[#768994] hover:border-slate-300"
@@ -5108,7 +5194,7 @@ function ItemCategoryOverrides() {
                     muted rather than pretending it still applies. */}
                 <button type="button"
                   onClick={() => patchCategory(c.id, { unbilled: !c.unbilled })}
-                  className={`shrink-0 px-3 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                  className={`shrink-0 px-3 py-2.5 rounded-xl border text-xs font-bold transition-[background-color,border-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] ${
                     c.unbilled
                       ? "bg-[#f4b740]/10 border-[#f4b740] text-[#8a6d1a]"
                       : "bg-white border-[#dce4ec] text-[#768994] hover:border-slate-300"
@@ -5420,7 +5506,7 @@ function PeopleSection() {
         <div className="flex items-center gap-3">
           {syncMsg && <span className="text-[11px] font-medium text-[#768994] bg-slate-50 border border-[#dce4ec] rounded-lg px-2.5 py-1.5 max-w-md">{syncMsg}</span>}
           <button onClick={syncFromWrike} disabled={syncing}
-            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-all disabled:opacity-50">
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-[#dce4ec] hover:border-slate-300 text-[#122027] text-xs font-bold rounded-xl transition-[border-color] ease-[cubic-bezier(0.16,1,0.3,1)] disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? "Syncing…" : "Sync from Wrike"}
           </button>
@@ -5478,7 +5564,7 @@ function PeopleSection() {
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: "auto", opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+                      transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
                       onAnimationComplete={() => setSettled(prev => ({ ...prev, [group.label]: true }))}
                       style={{ overflow: settled[group.label] ? "visible" : "hidden" }}
                       className="bg-slate-50 border-t border-[#dce4ec] rounded-b-2xl"
@@ -5526,8 +5612,8 @@ function ComingSoon({ icon: Icon, title, body, note }) {
 // full page change.
 const HUB_SLIDE_VARIANTS = {
   initial: (dir) => ({ x: dir > 0 ? 28 : -28, opacity: 0 }),
-  animate: { x: 0, opacity: 1, transition: { duration: 0.22, ease: [0.25, 0.1, 0.25, 1] } },
-  exit: (dir) => ({ x: dir > 0 ? -28 : 28, opacity: 0, transition: { duration: 0.16, ease: [0.25, 0.1, 0.25, 1] } }),
+  animate: { x: 0, opacity: 1, transition: { duration: 0.22, ease: [0.16, 1, 0.3, 1] } },
+  exit: (dir) => ({ x: dir > 0 ? -28 : 28, opacity: 0, transition: { duration: 0.16, ease: [0.16, 1, 0.3, 1] } }),
 };
 
 // A film's bulk campaign, opened straight from the Films list instead of going
@@ -5778,7 +5864,7 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
             <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
               <button
                 onClick={backToHub}
-                className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-all shrink-0"
+                className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-[border-color,color] ease-[cubic-bezier(0.16,1,0.3,1)] shrink-0"
               >
                 <ChevronLeft className="w-4 h-4" /> Administration
               </button>

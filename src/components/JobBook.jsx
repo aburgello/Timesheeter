@@ -86,7 +86,7 @@ export default function JobBook() {
                     already carries the fill permanently. */}
                 {!isActive && (
                   <div
-                    className={`absolute inset-0 bg-gradient-to-br ${PAGE_GRADIENTS.jobbook} origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-out`}
+                    className={`absolute inset-0 bg-gradient-to-br ${PAGE_GRADIENTS.jobbook} origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]`}
                   />
                 )}
 

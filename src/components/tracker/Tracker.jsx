@@ -201,17 +201,17 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
                 <button
                   key={day}
                   onClick={() => setSelectedDay(day)}
-                  className={`relative flex flex-col items-center justify-center py-4 px-2 rounded-2xl transition-all border ${
+                  className={`relative flex flex-col items-center justify-center py-4 px-2 rounded-2xl transition-[transform,background-color,border-color] border focus-visible:ring-4 focus-visible:ring-[#12a0e1]/25 focus-visible:ring-inset focus-visible:outline-none ${
                     isActive
                       ? "bg-white border-[#12a0e1]/30 text-[#12a0e1] shadow-md scale-[1.02]"
-                      : "bg-transparent border-transparent text-[#768994] hover:bg-white/50 hover:text-[#122027]"
+                      : "bg-transparent border-transparent text-[#122027] hover:bg-white/50 hover:text-[#122027]"
                   }`}
                 >
-                  <span className="text-sm font-black uppercase tracking-wider">{day}</span>
+                  <span className={`text-sm uppercase tracking-wider ${isActive ? "font-black" : "font-semibold"}`}>{day}</span>
                   <span className={`text-[11px] mt-1.5 font-mono px-3 py-0.5 rounded-full font-bold ${
                     daySeconds > 0
                       ? isActive ? "bg-[#12a0e1]/10 text-[#12a0e1]" : "bg-slate-200 text-[#122027]"
-                      : "bg-slate-100/50 text-[#768994]"
+                      : "bg-slate-100 text-[#122027]"
                   }`}>
                     {daySeconds > 0 ? formatDurationText(daySeconds) : "Snoozing"}
                   </span>
@@ -280,7 +280,7 @@ export default function Tracker({ wrikeData, onNavigateToHub }) {
                       value={notes} onChange={(e) => setNotes(e.target.value)}
                       placeholder="More info / Notes (Optional)..." disabled={isRunning && entryMode === "timer"}
                       rows="2"
-                      className="w-full bg-white border border-[#dce4ec] focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 rounded-xl px-4 py-3 text-sm transition-all outline-none resize-none placeholder:text-[#768994] shadow-sm"
+                      className="w-full bg-white border border-[#dce4ec] focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 rounded-xl px-4 py-3 text-sm transition-[transform,background-color,border-color] outline-none resize-none placeholder:text-[#768994] shadow-sm"
                     />
                   </div>
                 </div>

@@ -11,7 +11,7 @@ export const COLUMNS = [
   "Notes",
   "3D",
   "Time Spent",
-  "Additional Time",
+  "Add. Time",
 ];
 
 export const DAYS = [
@@ -35,7 +35,7 @@ export const TIME_OPTIONS = [
 // --- HELPER: Dark Mode Dynamic Status Tags --
 export const getDarkTagStyle = (tag) => {
   const baseStyle =
-    "text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border whitespace-nowrap inline-flex items-center justify-center shadow-sm";
+    "text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border whitespace-nowrap inline-flex items-center justify-center shadow-sm";
 
   if (!tag)
     return `${baseStyle} bg-slate-800/50 text-slate-400 border-slate-700/50`;

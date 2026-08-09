@@ -70,7 +70,7 @@ export default function ExportModal({
             </p>
             <button
               onClick={handleCopyJSONToClipboard}
-              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-white rounded-xl font-bold transition-all shadow-lg w-full ${
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-white rounded-xl font-bold transition-[background-color,box-shadow,transform] shadow-lg w-full ${
                 jsonCopied
                   ? "bg-[#1cc1a5] shadow-[#1cc1a5]/30"
                   : "bg-[#12a0e1] hover:bg-[#12a0e1]/90 shadow-[#12a0e1]/30 active:scale-[0.98]"
@@ -91,7 +91,7 @@ export default function ExportModal({
             <button
               onClick={() => handleExportCSV(tasks)}
               disabled={!tasks || tasks.length === 0}
-              className="flex items-center justify-center gap-2 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition-all shadow-lg shadow-emerald-600/20 active:scale-[0.98] w-full disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center justify-center gap-2 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition-[background-color,transform] shadow-lg shadow-emerald-600/20 active:scale-[0.98] w-full disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <FileSpreadsheet className="w-4 h-4" />
               Download CSV
@@ -104,12 +104,12 @@ export default function ExportModal({
               value={pastedJson}
               onChange={(e) => setPastedJson(e.target.value)}
               placeholder='Paste a previous {"tasks": [...]} export here to merge it...'
-              className="w-full h-32 bg-slate-50 border border-[#dce4ec] rounded-xl p-3 text-xs font-mono text-[#323b43] focus:ring-2 focus:ring-[#12a0e1]/20 focus:border-[#12a0e1] outline-none resize-none transition-all"
+              className="w-full h-32 bg-slate-50 border border-[#dce4ec] rounded-xl p-3 text-xs font-mono text-[#323b43] focus:ring-2 focus:ring-[#12a0e1]/20 focus:border-[#12a0e1] outline-none resize-none transition-[border-color,box-shadow]"
             />
             <button
               onClick={handlePasteImport}
               disabled={!pastedJson.trim()}
-              className="w-full flex items-center justify-center gap-2 py-2.5 bg-[#122027] hover:bg-[#25373c] text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-all"
+              className="w-full flex items-center justify-center gap-2 py-2.5 bg-[#122027] hover:bg-[#25373c] text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-colors"
             >
               <Upload className="w-4 h-4" /> Merge Pasted JSON
             </button>

@@ -25,6 +25,31 @@ import { joinTerritories, hasTerritory } from "./territories";
  * doesn't already carry. Every suffix word already present there means the
  * suffix is descriptive, and the canonical string is used unchanged.
  */
+/**
+ * Any job-number shape reduced to the thing that identifies the job: its code.
+ *
+ *   "XY025716"                                → "XY025716"
+ *   "XY025716_LUG_D6"                         → "XY025716"
+ *   "The Odyssey : XY025716, Finishing"       → "XY025716"
+ *
+ * Falls back to the trimmed string when there is no code at all (free-text
+ * internal jobs), so it is still a usable key for those.
+ *
+ * The code is the job's IDENTITY; the rest of the string is a label, and one
+ * job legitimately carries several labels — with or without the region prefix
+ * the folder scan writes, bare from a caller that hasn't consulted the Job
+ * Book, canonical from one that has. Anything that groups, counts or looks up
+ * a job has to key on this, because keying on the label splits one job's hours
+ * into several rows that each look like separate work.
+ *
+ * jobLookup keys its map this way for exactly the same reason.
+ */
+export const jobKey = (jobNumber) => {
+  if (!jobNumber) return "";
+  const m = String(jobNumber).match(/XY\d{5,6}/i);
+  return m ? m[0].toUpperCase() : String(jobNumber).trim();
+};
+
 export const resolveJobNumber = (fullCode, jobOptions = []) => {
   const rawXy = (fullCode.match(/XY\d{5,6}/i) || [""])[0].toUpperCase();
   if (!rawXy) return fullCode;
@@ -221,15 +246,26 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "",
       // path — since the scanner backfills the book from Wrike, a real code
       // should essentially always resolve here instead of being guessed.
       guessedJob = known.job_number;
-    } else if (!guessedJob.includes(" : ") && filmTitle && filmTitle !== "XYi Unbilled") {
-      // Brand-new job with no Job Book record yet — synthesize the canonical
-      // "Film : CODE, Description" string ourselves instead of leaving a
-      // bare/suffixed code that external systems (e.g. the timesheet
-      // bookmarklet) won't recognize.
-      guessedJob = `${filmTitle} : ${guessedJob}, ${linkedTask.title || ""}`
-        .trim()
-        .replace(/,\s*$/, "");
     }
+    // An unknown code is deliberately left BARE rather than dressed up as a
+    // canonical "Film : CODE, Description" string.
+    //
+    // This used to synthesize one from the task title. A task title describes a
+    // piece of work, not a job, so the shared Job Book — this writes to the same
+    // `jobs` table Legacy and Management read — collected rows like
+    // "The Odyssey : XY026047, ODY_Print_Teaser1SHT_Birds_CMYK_KR" for a job
+    // actually called "French Canada Assets". Because that string is perfectly
+    // well-formed, the Studio Scan's film and malformed-code checks both pass
+    // and it is never offered as a correction; and since jobs.job_number is
+    // unique on the whole string, it happily coexists with the real row and
+    // wins the lookup on lowest id. Permanent, silent, wrong.
+    //
+    // Legacy's copy of this reads the job's real description off the Wrike
+    // FOLDER name and can therefore still build the canonical form safely. This
+    // path has no folder dictionary to consult, so it registers the bare code —
+    // which the Studio Scan's malformed-code test does flag, and fills in from
+    // the folder tree. The timesheet bookmarklet matches on the XY code when no
+    // option matches verbatim, so a bare code still logs correctly.
   }
 
   return {

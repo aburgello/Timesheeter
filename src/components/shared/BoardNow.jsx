@@ -250,7 +250,7 @@ export function ActiveDot({ task, now, canActivate = false }) {
         }}
         title={active ? undefined : "Mark as what you're working on"}
         aria-label={active ? "Working-now status" : "Mark as working now"}
-        className={`block w-2.5 h-2.5 rounded-full transition-all ${
+        className={`block w-2.5 h-2.5 rounded-full transition-[background-color,border-color,box-shadow,opacity] ${
           active
             ? "bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.25)]"
             : "border border-[#cbd5e1] opacity-0 group-hover/chip:opacity-100 hover:border-emerald-500 hover:bg-emerald-50"

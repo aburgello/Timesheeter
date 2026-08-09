@@ -29,6 +29,7 @@ import {
 import { supabase } from "../lib/supabaseClient";
 import { parseWrikeData } from "../lib/wrikeEnrich";
 import { guessFieldsFromTask } from "../utils/wrikeHelpers";
+import { useJobLookup } from "../hooks/useJobLookup";
 import SearchableSelect from "./shared/SearchableSelect";
 import MultiCountrySelect from "./shared/MultiCountrySelect";
 import { parsePdfDeliverySpecs } from "../utils/pdfTableParser";
@@ -456,7 +457,7 @@ const handleCopy = () => {
           <div className="flex items-center gap-3">
             <button
               onClick={handleCopy}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors"
             >
               {copied ? (
                 <Check className="w-4 h-4 text-emerald-500" />
@@ -467,7 +468,7 @@ const handleCopy = () => {
             </button>
             <button
               onClick={handleDownload}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold transition-all shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold transition-colors shadow-sm"
             >
               <Download className="w-4 h-4" />
               Download CSV file
@@ -586,7 +587,7 @@ export function AttachmentThumb({
       <button
         onClick={handleOpen}
         title={attachment.name}
-        className={`${dim} rounded-xl border ${bg} flex flex-col items-center justify-center gap-1 hover:shadow-md hover:scale-105 transition-all overflow-hidden`}
+        className={`${dim} rounded-xl border ${bg} flex flex-col items-center justify-center gap-1 hover:shadow-md hover:scale-105 transition-[transform,box-shadow] overflow-hidden`}
       >
         {loading ? (
           <div className="w-4 h-4 border-2 border-slate-300 border-t-[#12a0e1] rounded-full animate-spin" />
@@ -741,7 +742,7 @@ export function FilePreviewLightbox({
               if (hasPrev) navigateTo(allAttachments[currentIdx - 1]);
             }}
             disabled={!hasPrev || navLoading}
-            className="shrink-0 p-2.5 rounded-full bg-white/10 hover:bg-white/25 disabled:opacity-20 disabled:cursor-not-allowed text-white border border-white/20 transition-all"
+            className="shrink-0 p-2.5 rounded-full bg-white/10 hover:bg-white/25 disabled:opacity-20 disabled:cursor-not-allowed text-white border border-white/20 transition-colors"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
@@ -793,7 +794,7 @@ export function FilePreviewLightbox({
               if (hasNext) navigateTo(allAttachments[currentIdx + 1]);
             }}
             disabled={!hasNext || navLoading}
-            className="shrink-0 p-2.5 rounded-full bg-white/10 hover:bg-white/25 disabled:opacity-20 disabled:cursor-not-allowed text-white border border-white/20 transition-all"
+            className="shrink-0 p-2.5 rounded-full bg-white/10 hover:bg-white/25 disabled:opacity-20 disabled:cursor-not-allowed text-white border border-white/20 transition-colors"
           >
             <ChevronRight className="w-5 h-5" />
           </button>
@@ -822,10 +823,12 @@ function fmtClock(totalSecs) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, triggerToast }) {
+function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, triggerToast, getJob, ensureJob }) {
+  // getJob comes from the modal's shared useJobLookup — see the note there for
+  // what its absence used to cost.
   const prefill = React.useMemo(
-    () => guessFieldsFromTask(fullTask, jobOptions || []),
-    [fullTask, jobOptions]
+    () => guessFieldsFromTask(fullTask, jobOptions || [], "", getJob),
+    [fullTask, jobOptions, getJob]
   );
 
   const [jobNumber, setJobNumber] = useState(
@@ -876,9 +879,37 @@ function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, trigger
 
   const canLog = !!category && finalSecs > 0;
 
-  const handleLog = () => {
+  const handleLog = async () => {
     if (!canLog) return;
+    // Read the duration before the inputs are cleared below, so the reset can
+    // happen straight away while the Wrike call is still in flight.
+    const secs = finalSecs;
     setRunning(false);
+    setElapsed(0);
+    setManualH("");
+    setManualM("");
+
+    // Wrike FIRST, then the row — the opposite of the old order, and the
+    // reason is the timelog id. The row has to carry the id of the timelog
+    // this creates, or the pull paths (which dedupe on that id alone) treat
+    // the same hour as new and add it a second time. There is no later patch
+    // path here: onLogTime is a plain insert, so the id has to be in hand
+    // before the row is written.
+    //
+    // The date is this panel's own `today`, formatted locally, so the row and
+    // the Wrike timelog can never land on different days.
+    const trackedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const { ok, id } = await logTimeToWrike(task.id, secs, trackedDate);
+
+    // Register the job the first time it's logged against here, the way the
+    // Tracker and Legacy already do — otherwise a code only ever seen through
+    // this panel never reaches the Job Book at all.
+    ensureJob?.(jobNumber, { filmTitle: prefill.filmTitle, client: prefill.client });
+
+    // A Wrike failure still logs locally — Supabase is this app's source of
+    // truth, and the toast says so. Such a row carries no timelog id because
+    // no timelog exists to point at, which is correct: there is nothing for a
+    // later pull to duplicate.
     onLogTime?.({
       id: Date.now(),
       jobNumber,
@@ -886,22 +917,21 @@ function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, trigger
       category,
       notes,
       dayOfWeek,
-      rawSeconds: finalSecs,
+      rawSeconds: secs,
       additionalSeconds: 0,
       date: today.toLocaleDateString("en-GB"),
       taskId: task.id,
+      wrikeTimelogId: id,
     });
-    onLogged?.(finalSecs);
-    logTimeToWrike(task.id, finalSecs).then((ok) => {
-      triggerToast?.(ok ? "Synced to Wrike task." : "Logged locally, but Wrike sync failed.", ok ? "success" : "info");
-    });
-    setElapsed(0);
-    setManualH("");
-    setManualM("");
+    onLogged?.(secs);
+    triggerToast?.(
+      ok ? "Synced to Wrike task." : "Logged locally, but Wrike sync failed.",
+      ok ? "success" : "info"
+    );
   };
 
   const inputCls =
-    "w-full text-xs font-medium bg-white border border-[#dce4ec] rounded-lg px-2.5 py-2 text-[#122027] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#12a0e1]/30 focus:border-[#12a0e1] transition-all";
+    "w-full text-xs font-medium bg-white border border-[#dce4ec] rounded-lg px-2.5 py-2 text-[#122027] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#12a0e1]/30 focus:border-[#12a0e1] transition-[border-color,box-shadow]";
   const labelCls =
     "text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block";
 
@@ -926,14 +956,14 @@ function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, trigger
             {!running ? (
               <button
                 onClick={() => setRunning(true)}
-                className="flex items-center gap-1.5 text-xs font-bold text-white bg-emerald-500 hover:bg-emerald-600 rounded-lg px-3 py-2 transition-all"
+                className="flex items-center gap-1.5 text-xs font-bold text-white bg-emerald-500 hover:bg-emerald-600 rounded-lg px-3 py-2 transition-colors"
               >
                 <Play className="w-3.5 h-3.5" /> Start
               </button>
             ) : (
               <button
                 onClick={() => setRunning(false)}
-                className="flex items-center gap-1.5 text-xs font-bold text-white bg-rose-500 hover:bg-rose-600 rounded-lg px-3 py-2 transition-all"
+                className="flex items-center gap-1.5 text-xs font-bold text-white bg-rose-500 hover:bg-rose-600 rounded-lg px-3 py-2 transition-colors"
               >
                 <Square className="w-3.5 h-3.5" /> Stop
               </button>
@@ -942,7 +972,7 @@ function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, trigger
               <button
                 onClick={() => setElapsed(0)}
                 title="Reset"
-                className="p-2 text-slate-400 hover:text-rose-500 hover:bg-white rounded-lg transition-all"
+                className="p-2 text-slate-400 hover:text-rose-500 hover:bg-white rounded-lg transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
               </button>
@@ -1033,7 +1063,7 @@ function TimeLogPanel({ task, fullTask, jobOptions, onLogTime, onLogged, trigger
         <button
           onClick={handleLog}
           disabled={!canLog}
-          className="w-full flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-white bg-[#12a0e1] hover:bg-[#0d8abf] disabled:bg-slate-300 disabled:cursor-not-allowed rounded-xl px-4 py-2.5 transition-all"
+          className="w-full flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-white bg-[#12a0e1] hover:bg-[#0d8abf] disabled:bg-slate-300 disabled:cursor-not-allowed rounded-xl px-4 py-2.5 transition-colors"
         >
           <Check className="w-4 h-4" />
           Log {finalSecs > 0 ? fmtClock(finalSecs) : "time"} to today
@@ -1221,9 +1251,20 @@ export default function TaskDetailModal({
   // 👇 1. Move fullTask and prefill ABOVE the early return 👇
   const fullTask = wrikeData?.find((t) => t.id === task?.id) || task;
 
+  // The Job Book. Both this modal and its time-logging panel used to call the
+  // guesser with two arguments, leaving `getJob` undefined — which skips the
+  // entire Job Book override inside it: no curated film, no curated client, and
+  // a code the book already knew stayed bare. An hour logged here landed
+  // against "XY014384" while the book held
+  // "XYi Design House Job : XY014384, Showreel".
+  //
+  // Held here rather than inside TimeLogPanel so the modal and the panel share
+  // one instance, and one jobs read, instead of two.
+  const jobLookup = useJobLookup();
+
   const prefill = React.useMemo(
-    () => guessFieldsFromTask(fullTask, jobOptions || []),
-    [fullTask, jobOptions]
+    () => guessFieldsFromTask(fullTask, jobOptions || [], "", jobLookup.getJob),
+    [fullTask, jobOptions, jobLookup.getJob]
   );
 
   // 👇 2. Now it is safe to return early if there is no task 👇
@@ -1440,6 +1481,8 @@ export default function TaskDetailModal({
                   jobOptions={jobOptions}
                   onLogTime={onLogTime}
                   triggerToast={triggerToast}
+                  getJob={jobLookup.getJob}
+                  ensureJob={jobLookup.ensureJob}
                   onLogged={(secs) => {
                     triggerToast?.(`Logged ${fmtClock(secs)} to your timesheet.`, "success");
                   }}
@@ -1496,7 +1539,7 @@ export default function TaskDetailModal({
                           href={link}
                           target="_blank"
                           rel="noreferrer"
-                          className="flex items-center gap-2 text-[11px] font-bold text-[#12a0e1] hover:text-[#0d8abf] bg-[#12a0e1]/5 hover:bg-[#12a0e1]/10 rounded-xl px-3 py-2 transition-all truncate"
+                          className="flex items-center gap-2 text-[11px] font-bold text-[#12a0e1] hover:text-[#0d8abf] bg-[#12a0e1]/5 hover:bg-[#12a0e1]/10 rounded-xl px-3 py-2 transition-colors truncate"
                         >
                           <ExternalLink className="w-3 h-3 shrink-0" />
                           <span className="truncate">{label}</span>
@@ -1541,7 +1584,7 @@ export default function TaskDetailModal({
               href={permalink}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-white bg-[#12a0e1] hover:bg-[#0d8abf] rounded-xl px-4 py-2 transition-all"
+              className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-white bg-[#12a0e1] hover:bg-[#0d8abf] rounded-xl px-4 py-2 transition-colors"
             >
               <ExternalLink className="w-3 h-3" /> Open in Wrike
             </a>
@@ -1587,7 +1630,7 @@ export default function TaskDetailModal({
 function FolderRow({ fp }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="group flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200/60 rounded-xl px-3 py-2.5 transition-all">
+    <div className="group flex items-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200/60 rounded-xl px-3 py-2.5 transition-colors">
       <FolderOpen className="w-3.5 h-3.5 text-amber-500 shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-[9px] font-black uppercase tracking-wider text-slate-500 truncate">

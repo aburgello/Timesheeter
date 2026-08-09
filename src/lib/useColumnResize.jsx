@@ -27,6 +27,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // them out of the squeeze leaves more room for the columns that do hold
 // content, and their width stops depending on the window.
 //
+// `fixed: true` also means pinned outright: no drag grip is rendered, and any
+// width stored in localStorage is ignored, so a checkbox column can never be
+// dragged back up to a size that clips the control.
+//
 // What's persisted is always what the user dragged, never the squeezed result,
 // so widening the window restores the widths they chose.
 export function useColumnResize(
@@ -42,7 +46,11 @@ export function useColumnResize(
       const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
       if (saved && typeof saved === "object") {
         const merged = {};
-        for (const c of columns) merged[c.key] = typeof saved[c.key] === "number" ? saved[c.key] : c.px;
+        for (const c of columns) {
+          // Fixed columns are pinned to their declared width — no drag grip,
+          // so a stale wide value from an earlier session must never win.
+          merged[c.key] = c.fixed ? c.px : (typeof saved[c.key] === "number" ? saved[c.key] : c.px);
+        }
         return merged;
       }
     } catch { /* ignore corrupt storage */ }
@@ -180,23 +188,29 @@ export function useColumnResize(
 
   // Render helper: a thin grip on the right edge of a <th>. The <th> must be
   // position: relative for this to anchor correctly.
-  const resizeHandle = useCallback((key) => (
-    <span
-      onPointerDown={startResize(key)}
-      onDoubleClick={(e) => { e.stopPropagation(); resetOne(key); }}
-      onClick={(e) => e.stopPropagation()}
-      title="Drag to resize · double-click to reset"
-      className="group absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-stretch justify-end"
-      style={{ touchAction: "none" }}
-    >
-      {/* currentColor, not a hardcoded black/white pair. The consolidated
-          timesheet passes dark:true against a LIGHT header, so the grip was
-          drawn white-on-white and invisible in light mode — and the flag never
-          consulted the actual theme, so it couldn't have been right in both.
-          Inheriting the header's own colour works either way. */}
-      <span className="w-px bg-current opacity-20 transition-colors group-hover:bg-[#12a0e1] group-hover:opacity-100" />
-    </span>
-  ), [startResize, resetOne]);
+  const resizeHandle = useCallback((key) => {
+    // Fixed columns are pinned at their declared width — no drag grip. They're
+    // for tiny checkbox/dropdown fields where resizing buys nothing, so a grip
+    // would only invite dragging them back to a size that clips the control.
+    if (columns.some((c) => c.key === key && c.fixed)) return null;
+    return (
+      <span
+        onPointerDown={startResize(key)}
+        onDoubleClick={(e) => { e.stopPropagation(); resetOne(key); }}
+        onClick={(e) => e.stopPropagation()}
+        title="Drag to resize · double-click to reset"
+        className="group absolute top-0 right-0 z-10 flex h-full w-2 cursor-col-resize items-stretch justify-end"
+        style={{ touchAction: "none" }}
+      >
+        {/* currentColor, not a hardcoded black/white pair. The consolidated
+            timesheet passes dark:true against a LIGHT header, so the grip was
+            drawn white-on-white and invisible in light mode — and the flag never
+            consulted the actual theme, so it couldn't have been right in both.
+            Inheriting the header's own colour works either way. */}
+        <span className="w-px bg-current opacity-20 transition-colors group-hover:bg-[#12a0e1] group-hover:opacity-100" />
+      </span>
+    );
+  }, [columns, startResize, resetOne]);
 
   // `widths` is the fitted set — what every caller wants to render. `setWidths`
   // is what the user chose, for anyone that needs the raw value.

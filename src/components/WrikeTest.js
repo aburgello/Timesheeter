@@ -102,9 +102,9 @@ export default function WrikeTest({
   return (
     <div className="min-h-screen bg-slate-100 text-[#122027] font-sans pb-12">
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-8 space-y-6">
-        <header className="bg-white shadow-sm border border-[#dce4ec] rounded-[2rem] p-6 sm:px-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+        <header className="bg-white shadow-sm border border-[#dce4ec] rounded-3xl p-6 sm:px-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
           <div className="flex items-center gap-4">
-            <div className="bg-gradient-to-br from-indigo-500 to-purple-500 p-3.5 rounded-2xl text-white shadow-lg shadow-indigo-500/20">
+            <div className="bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] p-3.5 rounded-2xl text-white shadow-lg shadow-[#12a0e1]/20">
               <Server className="w-8 h-8" />
             </div>
             <div>
@@ -121,7 +121,7 @@ export default function WrikeTest({
             <button
               onClick={syncNow}
               disabled={loading}
-              className="flex items-center justify-center gap-2 bg-[#122027] hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold transition-all shadow-sm active:scale-95 disabled:opacity-50"
+              className="flex items-center justify-center gap-2 bg-[#122027] hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold transition-[background-color,transform] shadow-sm active:scale-95 disabled:opacity-50"
             >
               <RefreshCw
                 className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
@@ -132,7 +132,7 @@ export default function WrikeTest({
             <button
               onClick={handleDownload}
               disabled={!wrikeData}
-              className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 px-6 py-3 rounded-xl font-bold transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 px-6 py-3 rounded-xl font-bold transition-[background-color,transform] shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Download className="w-4 h-4" />
               Download JSON
@@ -148,10 +148,10 @@ export default function WrikeTest({
         )}
 
         {processedData ? (
-          <div className="bg-white rounded-3xl border border-[#dce4ec] shadow-xl shadow-slate-200/40 overflow-hidden">
+          <div className="bg-white rounded-3xl border border-[#dce4ec] shadow-sm overflow-hidden">
             <div className="p-5 border-b border-[#dce4ec] bg-slate-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <h2 className="text-base font-black text-[#122027] flex items-center gap-2">
-                <FileJson className="w-4 h-4 text-indigo-500" /> Task Array (
+                <FileJson className="w-4 h-4 text-[#12a0e1]" /> Task Array (
                 {processedData.length} items{processedData.length > TABLE_LIMIT ? ` — showing first ${TABLE_LIMIT}` : ""})
               </h2>
 
@@ -163,7 +163,7 @@ export default function WrikeTest({
                     placeholder="Search tasks..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-9 pr-3 py-2 bg-white border border-[#dce4ec] rounded-xl text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all w-full sm:w-64"
+                    className="pl-9 pr-3 py-2 bg-white border border-[#dce4ec] rounded-xl text-sm outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 transition-[border-color,box-shadow] w-full sm:w-64"
                   />
                 </div>
 
@@ -172,7 +172,7 @@ export default function WrikeTest({
                   <select
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value)}
-                    className="pl-9 pr-8 py-2 bg-white border border-[#dce4ec] rounded-xl text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer appearance-none"
+                    className="pl-9 pr-8 py-2 bg-white border border-[#dce4ec] rounded-xl text-sm outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 transition-[border-color,box-shadow] cursor-pointer appearance-none"
                   >
                     <option value="All">All Base Statuses</option>
                     <option value="Active">Active</option>
@@ -252,7 +252,7 @@ export default function WrikeTest({
                           </span>
                         </td>
                         <td
-                          className="px-6 py-4 font-bold text-indigo-600 truncate max-w-[200px]"
+                          className="px-6 py-4 font-bold text-[#12a0e1] truncate max-w-[200px]"
                           title={task.projectName}
                         >
                           {task.projectName}
@@ -270,7 +270,7 @@ export default function WrikeTest({
                             href={task.permalink}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="hover:text-indigo-500 hover:underline decoration-2 underline-offset-2 transition-colors cursor-pointer"
+                            className="hover:text-[#0d8bc4] hover:underline decoration-2 underline-offset-2 transition-[color] cursor-pointer"
                           >
                             {task.title}
                           </a>

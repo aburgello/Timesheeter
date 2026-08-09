@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase, selectAll } from "../lib/supabaseClient";
+import { jobKey } from "../utils/wrikeHelpers";
 
 /**
  * Shared job_number -> Job Book record lookup.
@@ -25,11 +26,10 @@ import { supabase, selectAll } from "../lib/supabaseClient";
 
 // Normalise any job-number shape down to its XY code for matching; fall back to
 // the trimmed string when there's no code (e.g. a free-text internal job).
-const jobKey = (jobNumber) => {
-  if (!jobNumber) return "";
-  const m = jobNumber.match(/XY\d{5,6}/i);
-  return m ? m[0].toUpperCase() : jobNumber.trim();
-};
+//
+// Lives in wrikeHelpers now rather than here: the export consolidation in both
+// Legacy and the Tracker has to group on exactly the same key, and a second
+// copy of this rule would be free to drift from the one the lookup uses.
 
 // When two rows collapse onto the same code (e.g. a curated full-string row and
 // a leftover bare-code auto-registration), keep the richer one: a filled

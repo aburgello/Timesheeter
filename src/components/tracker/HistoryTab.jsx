@@ -85,7 +85,7 @@ export default function HistoryTab({
           {groups.map(([key, group]) => (
         <div
           key={key}
-          className={`bg-white border border-[#dce4ec] rounded-2xl shadow-sm transition-all relative ${
+          className={`bg-white border border-[#dce4ec] rounded-2xl shadow-sm transition-shadow relative ${
             group.jobNumber === "⚠️ Unassigned" || group.territory === "⚠️ Unassigned" || group.category === "⚠️ Unassigned"
               ? "ring-2 ring-rose-400" : ""
           } ${editingGroupId === key ? "z-40 ring-2 ring-[#12a0e1] shadow-lg shadow-[#12a0e1]/10" : "z-20"}`}
@@ -122,7 +122,7 @@ export default function HistoryTab({
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={() => setEditingGroupId(null)} className="px-4 py-2 text-xs font-bold text-[#768994] hover:bg-slate-200 rounded-lg transition-colors">Cancel</button>
-                <button onClick={() => handleSaveGroupEdit(group.tasks)} className="px-4 py-2 text-xs font-bold bg-[#1cc1a5] hover:bg-[#15a38b] text-white rounded-lg shadow-sm shadow-[#1cc1a5]/20 transition-all flex items-center gap-1.5">
+                <button onClick={() => handleSaveGroupEdit(group.tasks)} className="px-4 py-2 text-xs font-bold bg-[#1cc1a5] hover:bg-[#15a38b] text-white rounded-lg shadow-sm shadow-[#1cc1a5]/20 transition-colors flex items-center gap-1.5">
                   <Save className="w-3.5 h-3.5" /> Save Batch
                 </button>
               </div>
@@ -131,11 +131,11 @@ export default function HistoryTab({
 
           {/* Group metadata row */}
           <div className="bg-[#f8fafc] px-5 py-2.5 border-b border-[#dce4ec] flex flex-wrap items-center gap-2 text-[10px] font-black text-[#12a0e1] uppercase tracking-widest">
-            <span className={`flex items-center gap-1.5 bg-[#12a0e1]/10 px-2.5 py-1 rounded ${group.territory === "⚠️ Unassigned" ? "text-rose-500 bg-rose-50" : ""}`}>
+            <span className={`flex items-center gap-1.5 bg-[#12a0e1]/10 px-2.5 py-1 rounded-lg ${group.territory === "⚠️ Unassigned" ? "text-rose-500 bg-rose-50" : ""}`}>
               {territoryFlags(group.territory, 6) ? <span className="text-[12px] leading-none">{territoryFlags(group.territory, 6)}</span> : <Globe className="w-3.5 h-3.5" />}
               <span className="truncate max-w-[260px]" title={group.territory}>{group.territory}</span>
             </span>
-            <span className={`flex items-center gap-1 bg-[#12a0e1]/10 px-2 py-1 rounded truncate max-w-[300px] ${group.category === "⚠️ Unassigned" ? "text-rose-500 bg-rose-50" : ""}`}>
+            <span className={`flex items-center gap-1 bg-[#12a0e1]/10 px-2 py-1 rounded-lg truncate max-w-[300px] ${group.category === "⚠️ Unassigned" ? "text-rose-500 bg-rose-50" : ""}`}>
               <Tag className="w-3 h-3" /> {group.category}
             </span>
           </div>
@@ -144,15 +144,15 @@ export default function HistoryTab({
           <div className="divide-y divide-[#dce4ec] flex flex-col">
             {group.tasks.map((task, index) => (
               <div key={task.id} className={`flex flex-col relative ${index === group.tasks.length - 1 ? "rounded-b-2xl" : ""}`}>
-                <div className={`p-4 hover:bg-slate-50 transition-colors flex flex-col xl:flex-row justify-between gap-4 items-start xl:items-center group/row ${editingTaskId === task.id ? "bg-indigo-50/30" : ""}`}>
+                <div className={`p-4 hover:bg-slate-50 transition-colors flex flex-col xl:flex-row justify-between gap-4 items-start xl:items-center group/row ${editingTaskId === task.id ? "bg-[#12a0e1]/10" : ""}`}>
                   <div className="flex-1 min-w-0">
                     {editingNoteId === task.id ? (
                       <div className="flex gap-2 items-start w-full">
                         <textarea value={editNoteText} onChange={(e) => setEditNoteText(e.target.value)} rows="4"
-                          className="w-full bg-white text-[#323b43] border border-[#dce4ec] rounded-xl p-3 text-sm leading-relaxed resize-y min-h-[100px] outline-none focus:ring-2 focus:ring-[#12a0e1]/20 focus:border-[#12a0e1] shadow-inner transition-all"
+                          className="w-full bg-white text-[#323b43] border border-[#dce4ec] rounded-xl p-3 text-sm leading-relaxed resize-y min-h-[100px] outline-none focus:ring-2 focus:ring-[#12a0e1]/20 focus:border-[#12a0e1] shadow-inner transition-[border-color,box-shadow]"
                         />
                         <div className="flex flex-col gap-2 shrink-0">
-                          <button onClick={() => saveEditedNote(task.id)} className="p-2.5 bg-[#1cc1a5] text-white rounded-lg hover:bg-[#15a38b] shadow-sm shadow-[#1cc1a5]/20 transition-all active:scale-95" title="Save Note"><Check className="w-4 h-4" /></button>
+                          <button onClick={() => saveEditedNote(task.id)} className="p-2.5 bg-[#1cc1a5] text-white rounded-lg hover:bg-[#15a38b] shadow-sm shadow-[#1cc1a5]/20 transition-[background-color,transform] active:scale-95" title="Save Note"><Check className="w-4 h-4" /></button>
                           <button onClick={() => setEditingNoteId(null)} className="p-2.5 bg-slate-100 text-[#768994] rounded-lg hover:bg-slate-200 transition-colors" title="Cancel"><X className="w-4 h-4" /></button>
                         </div>
                       </div>
@@ -168,7 +168,7 @@ export default function HistoryTab({
                   <div className="flex items-center gap-2 shrink-0">
                     {/* Time display */}
                     <div className="flex flex-col items-end justify-center mr-1">
-                      <div className="text-xs font-mono bg-white border border-slate-200 px-2 py-1 rounded text-slate-500">
+                      <div className="text-xs font-mono bg-slate-50 border border-[#dce4ec] px-2 py-1 rounded text-[#768994]">
                         Base: {formatTimerDisplay(task.rawSeconds)}
                       </div>
                       {task.additionalSeconds > 0 && (
@@ -200,14 +200,14 @@ export default function HistoryTab({
                         <button onClick={closeAddTime} className="p-0.5 text-[#768994] hover:text-rose-400 transition-colors"><X className="w-3.5 h-3.5" /></button>
                       </div>
                     ) : (
-                      <button onClick={() => openAddTime(task.id)} className="flex items-center gap-1 px-2 py-1 text-[10px] font-bold text-[#768994] hover:text-[#1cc1a5] hover:bg-[#1cc1a5]/10 rounded-lg transition-colors opacity-0 group-hover/row:opacity-100" title="Add Additional Time">
+                      <button onClick={() => openAddTime(task.id)} className="flex items-center gap-1 px-2 py-1 text-[10px] font-bold text-[#768994] hover:text-[#1cc1a5] hover:bg-[#1cc1a5]/10 rounded-lg transition-colors opacity-40 group-hover/row:opacity-100 focus-visible:opacity-100" title="Add Additional Time">
                         <Plus className="w-3 h-3" /> Add time
                       </button>
                     )}
 
-                    <button onClick={() => startEditingTime(task)} className="p-2 text-[#768994] hover:text-emerald-600 hover:bg-emerald-100 transition-colors rounded-xl mx-0.5 opacity-0 group-hover/row:opacity-100" title="Edit Logged Time"><Clock className="w-4 h-4" /></button>
-                    <button onClick={() => startTaskEdit(task)} className="p-2 text-[#768994] hover:text-indigo-600 hover:bg-indigo-100 transition-colors rounded-xl mx-0.5 opacity-0 group-hover/row:opacity-100" title="Reassign / Move Task"><FolderInput className="w-4 h-4" /></button>
-                    <button onClick={() => setItemToDelete({ type: "single", ids: [task.id] })} className="p-2 text-[#768994] hover:text-rose-600 hover:bg-rose-100 transition-colors rounded-xl mx-0.5 opacity-0 group-hover/row:opacity-100" title="Delete Subtask"><Trash2 className="w-4 h-4" /></button>
+                    <button onClick={() => startEditingTime(task)} className="p-2 text-[#768994] hover:text-emerald-600 hover:bg-emerald-100 transition-colors rounded-xl mx-0.5 opacity-40 group-hover/row:opacity-100 focus-visible:opacity-100" title="Edit Logged Time"><Clock className="w-4 h-4" /></button>
+                    <button onClick={() => startTaskEdit(task)} className="p-2 text-[#768994] hover:text-indigo-600 hover:bg-indigo-100 transition-colors rounded-xl mx-0.5 opacity-40 group-hover/row:opacity-100 focus-visible:opacity-100" title="Reassign / Move Task"><FolderInput className="w-4 h-4" /></button>
+                    <button onClick={() => setItemToDelete({ type: "single", ids: [task.id] })} className="p-2 text-[#768994] hover:text-rose-600 hover:bg-rose-100 transition-colors rounded-xl mx-0.5 opacity-40 group-hover/row:opacity-100 focus-visible:opacity-100" title="Delete Subtask"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 </div>
 
@@ -229,7 +229,7 @@ export default function HistoryTab({
                                 <input type="number" min="0" max={i > 0 ? 59 : undefined}
                                   value={editTimeForm[key]}
                                   onChange={(e) => setEditTimeForm({ ...editTimeForm, [key]: e.target.value })}
-                                  className="w-full bg-white border border-[#dce4ec] rounded-lg px-2 py-1.5 text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all text-center font-mono"
+                                  className="w-full bg-white border border-[#dce4ec] rounded-lg px-2 py-1.5 text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none transition-[border-color,box-shadow] text-center font-mono"
                                   placeholder={ph}
                                 />
                               </React.Fragment>
@@ -240,7 +240,7 @@ export default function HistoryTab({
                     </div>
                     <div className="flex justify-end gap-2 pt-3 mt-2 border-t border-emerald-500/10">
                       <button onClick={() => setEditingTimeId(null)} className="px-4 py-2 text-xs font-bold text-[#768994] hover:bg-white rounded-lg transition-colors">Cancel</button>
-                      <button onClick={() => saveEditedTime(task.id)} className="px-4 py-2 text-xs font-bold bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg shadow-sm shadow-emerald-500/20 transition-all flex items-center gap-1.5">
+                      <button onClick={() => saveEditedTime(task.id)} className="px-4 py-2 text-xs font-bold bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg shadow-sm shadow-emerald-500/20 transition-colors flex items-center gap-1.5">
                         <Save className="w-3.5 h-3.5" /> Save Time
                       </button>
                     </div>

@@ -48,7 +48,7 @@ export default function ConfirmHost() {
             initial={{ opacity: 0, scale: 0.95, y: 8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 4 }}
-            transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             role="alertdialog"
             aria-modal="true"
             aria-label={req.title}
@@ -72,14 +72,14 @@ export default function ConfirmHost() {
               <button
                 ref={cancelRef}
                 onClick={() => settle(false)}
-                className="px-4 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40"
+                className="px-4 py-2.5 text-sm font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] rounded-2xl transition-[color,box-shadow] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40"
               >
                 {req.cancelLabel}
               </button>
               <button
                 ref={confirmRef}
                 onClick={() => settle(true)}
-                className={`px-5 py-2.5 text-sm font-bold text-white rounded-2xl transition-all shadow-sm focus:outline-none focus-visible:ring-2 ${
+                className={`px-5 py-2.5 text-sm font-bold text-white rounded-2xl transition-[background-color,box-shadow] shadow-sm focus:outline-none focus-visible:ring-2 ${
                   req.danger
                     ? "bg-rose-500 hover:bg-rose-600 focus-visible:ring-rose-300"
                     : "bg-[#12a0e1] hover:bg-[#0d8bc4] focus-visible:ring-[#12a0e1]/40"

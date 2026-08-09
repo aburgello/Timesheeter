@@ -273,10 +273,10 @@ function Row({
       </div>
 
       <div ref={addMetaRef} className="relative z-10 flex items-center gap-4 shrink-0">
-        <span className="hidden md:block text-sm font-bold text-white opacity-0 translate-x-3 group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0 transition-all duration-300 delay-75 pointer-events-none">
+        <span className="hidden md:block text-sm font-bold text-white opacity-0 translate-x-3 group-hover:opacity-100 group-hover:translate-x-0 group-focus:opacity-100 group-focus:translate-x-0 transition-[opacity,transform] duration-300 delay-75 pointer-events-none">
           {desc}
         </span>
-        <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6 text-[#768994] group-hover:text-white group-focus:text-white group-hover:translate-x-1 transition-all duration-300" />
+        <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6 text-[#768994] group-hover:text-white group-focus:text-white group-hover:translate-x-1 transition-[color,transform] duration-300" />
       </div>
     </button>
   );

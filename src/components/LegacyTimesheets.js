@@ -46,7 +46,7 @@ import {
 } from "../constants.js";
 import { resolveJobNumber } from "../utils/wrikeHelpers";
 import { resolveCountries } from "../utils/countryCodes";
-import { getFolderCountries, buildChildToParent } from "../lib/wrikeEnrich";
+import { getFolderCountries, buildChildToParent, jobFolderDescription } from "../lib/wrikeEnrich";
 import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
 import { countryFieldIds, warmCountryFields } from "../lib/countryField";
 import { secondsToHM } from "../utils/timeHelpers";
@@ -115,20 +115,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // unchanged until the user drags.
   const CONSOL_PX = {
     "Job Number": 240, "Client": 140, "Film Title": 150, "Project Description": 220,
-    "Country": 140, "Category": 180, "Client Amends": 80, "Notes": 140,
-    "3D": 56, "Time Spent": 104, "Additional Time": 104,
+    "Country": 140, "Category": 180, "Client Amends": 72, "Notes": 140,
+    "3D": 48, "Time Spent": 92, "Add. Time": 88,
   };
   // These four hold a checkbox or a short time dropdown, never prose. They're
-  // already the size they need to be, so squeezing them only clips the control
-  // ("none" became "n…") without buying the text columns much room.
-  const CONSOL_FIXED = new Set(["Client Amends", "3D", "Time Spent", "Additional Time"]);
+  // pinned at the width they need — no drag grip, and any wider width saved in
+  // storage is ignored — so squeezing only clips the control ("none" became
+  // "n…") without buying the text columns much room.
+  const CONSOL_FIXED = new Set(["Client Amends", "3D", "Time Spent", "Add. Time"]);
   const CONSOL_COLS = COLUMNS.map((c, i) => ({
     key: `c${i}`,
     label: c,
     px: CONSOL_PX[c] || 140,
     fixed: CONSOL_FIXED.has(c),
   }));
-  // Job Number and Additional Time keep their width and stay pinned to the
+  // Job Number and Add. Time keep their width and stay pinned to the
   // edges; everything between them is squeezed to whatever the window leaves,
   // so a narrow laptop scales the table down instead of pushing the last
   // columns off the right where nobody finds them.
@@ -719,15 +720,34 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       else guessedCategory = "Digital - Production/Localisation";
     }
 
-    let cleanDescription = linkedTask.title || "";
+    // What Wrike's own folder name says this job is. Empty when the task sits
+    // under no folder carrying this code — a job folder that was never renamed,
+    // or a tree we couldn't load — in which case everything below degrades to
+    // what it did before.
+    const folderDescription = jobFolderDescription(
+      linkedTask,
+      guessedJob,
+      folderTreeRef.current.folderDictionary,
+      folderTreeRef.current.childToParent
+    );
+
+    // Description, most authoritative first:
+    //   1. the canonical job string's own comma part, when we matched one
+    //   2. the job FOLDER's name in Wrike — what the job is
+    //   3. the task's name with the code stripped — what this piece of work is
+    // 3 is a genuinely worse answer than 2 and only survives as a fallback; it
+    // must never reach the Job Book (see the callers' synthesis).
+    let cleanDescription = "";
     if (guessedJob && guessedJob.includes(",")) {
       cleanDescription = guessedJob
         .substring(guessedJob.indexOf(",") + 1)
         .trim();
+    } else if (folderDescription) {
+      cleanDescription = folderDescription;
     } else if (rawPrefix) {
       const escapedPrefix = rawPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const prefixRegex = new RegExp(`^.*?${escapedPrefix}[,\\s:\\-]*`, "i");
-      cleanDescription = cleanDescription.replace(prefixRegex, "").trim();
+      cleanDescription = (linkedTask.title || "").replace(prefixRegex, "").trim();
     }
 
     if (!cleanDescription) cleanDescription = linkedTask.title || "";
@@ -737,6 +757,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       territory: guessedTerritory,
       category: guessedCategory,
       notes: cleanDescription,
+      // Kept separate from `notes` on purpose: callers may only build a Job
+      // Book entry from a description Wrike's folder tree vouched for.
+      folderDescription,
     };
   };
 
@@ -1001,17 +1024,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           // match, not a fallback.
           fields.jobNumber = known2.job_number;
         } else if (
+          fields.folderDescription &&
           fields.jobNumber &&
           !fields.jobNumber.includes(" : ") &&
           filmTitle &&
           filmTitle !== "XYi Unbilled"
         ) {
-          // Brand-new job with no Job Book record yet — synthesize the canonical
-          // string ourselves instead of leaving a bare/suffixed code that
-          // external systems (e.g. the timesheet bookmarklet) won't recognize.
-          fields.jobNumber = `${filmTitle} : ${fields.jobNumber}, ${fields.notes || ""}`
-            .trim()
-            .replace(/,\s*$/, "");
+          // Same rule as the pull path: the canonical string may only be built
+          // from Wrike's own folder name, never from the task title. See the
+          // long note in handlePullTimes for what the task-title version cost.
+          const bare = (fields.jobNumber.match(/XY\d{5,6}/i) || [])[0];
+          if (bare) {
+            fields.jobNumber = `${filmTitle} : ${bare}, ${fields.folderDescription}`;
+          }
         }
         jobLookup?.ensureJob?.(fields.jobNumber, { filmTitle, client });
 
@@ -1126,7 +1151,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
     return (
       <td
-        className={`px-1 py-1.5 border-r border-[#263143] text-center group/cell transition-all ${
+        className={`px-1 py-1.5 border-r border-[#263143] text-center group/cell transition-[background-color,opacity] ${
           isToday
             ? "bg-[#12a0e1]/8"
             : isActive
@@ -1468,18 +1493,40 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             // canonical guess). Backfilled book = primary match, not a fallback.
             guessed.jobNumber = known1.job_number;
           } else if (
+            guessed.folderDescription &&
             guessed.jobNumber &&
             !guessed.jobNumber.includes(" : ") &&
             filmTitle &&
             filmTitle !== "XYi Unbilled"
           ) {
-            // Brand-new job with no Job Book record yet — synthesize the canonical
-            // string ourselves instead of leaving a bare/suffixed code that
-            // external systems (e.g. the timesheet bookmarklet) won't recognize.
-            guessed.jobNumber = `${filmTitle} : ${guessed.jobNumber}, ${guessed.notes || ""}`
-              .trim()
-              .replace(/,\s*$/, "");
+            // Brand-new job with no Job Book record yet. Build the canonical
+            // string ONLY out of what Wrike's folder tree says, which is the
+            // same source scanStudioJobNumbers reconciles the book against — so
+            // this row and any later scan cannot disagree.
+            //
+            // This used to synthesize from the TASK title, which describes a
+            // piece of work rather than a job. It wrote rows like
+            // "The Odyssey : XY026047, ODY_Print_Teaser1SHT_Birds_CMYK_KR" into
+            // the book permanently: well-formed enough that the scan's film and
+            // malformed-code checks both pass, so nothing ever flagged it, and
+            // every later pull adopted it in preference to a fresh guess.
+            //
+            // The BARE code, not guessed.jobNumber: resolveJobNumber returns
+            // its input untouched when the code isn't in the list, so an
+            // unmatched code arrives here still carrying its suffix and used to
+            // land in the string twice over.
+            const bare = (guessed.jobNumber.match(/XY\d{5,6}/i) || [])[0];
+            if (bare) {
+              guessed.jobNumber = `${filmTitle} : ${bare}, ${guessed.folderDescription}`;
+            }
           }
+          // No folder description means no canonical string — the bare code is
+          // registered as a stub instead. Deliberately conspicuous: a bare row
+          // trips the Studio Scan's own malformed-code test and gets filled in
+          // from the folder tree, which an invented-but-tidy string never would.
+          // The timesheet bookmarklet resolves a bare code on its own (it
+          // matches on the XY code when no option matches verbatim), so nothing
+          // downstream needs the pretty form.
           jobLookup?.ensureJob?.(guessed.jobNumber, { filmTitle, client });
 
           newRows.push({
@@ -1612,6 +1659,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         const consolidated = {};
         taskList.forEach((t) => {
           // territoryKey so "Belgium, France" and "France, Belgium" merge.
+          //
+          // The WHOLE job label, not just its code. Grouping on the code alone
+          // was tried and backed out: it merges rows that describe genuinely
+          // different pieces of work under one job ("CW LSQ Stairs" and "CW
+          // Rotunda" on XY025957), and the studio wants those on the timesheet
+          // as separate lines. Labels that differ only in spelling are fixed at
+          // the source that writes them, not papered over here.
           const key = `${t.dayOfWeek}|${t.jobNumber}|${territoryKey(t.territory)}|${t.category}`;
           if (!consolidated[key]) {
             consolidated[key] = {
@@ -1926,7 +1980,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         ).length > 1
     );
 
-  const textAreaClass = `w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 outline-none text-[12px] text-slate-800 font-medium p-2 transition-all rounded-md resize-none overflow-hidden leading-tight placeholder:text-slate-500 ${
+  const textAreaClass = `w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 outline-none text-[12px] text-[#122027] font-medium p-2 transition-[border-color,box-shadow] rounded-xl resize-none overflow-hidden leading-tight placeholder:text-slate-500 ${
     !rowsAreEditable ? "opacity-60 cursor-not-allowed" : ""
   }`;
 
@@ -1935,7 +1989,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       {/* Toast */}
       {toast.show && (
         <div
-          className={`fixed top-5 right-5 z-[99999] flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl text-sm font-bold transition-all animate-in fade-in slide-in-from-top-2 duration-300 ${
+          className={`fixed top-5 right-5 z-[99999] flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl text-sm font-bold transition-[opacity,transform] animate-in fade-in slide-in-from-top-2 duration-300 ${
             toast.type === "error"
               ? "bg-rose-500 text-white"
               : "bg-[#1cc1a5] text-white"
@@ -2065,7 +2119,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               <div className="flex gap-1.5 p-1 bg-[#090d14] rounded-xl border border-[#1e293b]">
                 <button
                   onClick={() => setModalTab("timesheet")}
-                  className={`px-4 py-1.5 text-xs font-black tracking-wide uppercase transition-all rounded-lg ${
+                  className={`px-4 py-1.5 text-xs font-black tracking-wide uppercase transition-[background-color,color,box-shadow] rounded-lg ${
                     modalTab === "timesheet"
                       ? "bg-[#12a0e1] text-white shadow-md"
                       : "text-slate-500 hover:text-slate-300"
@@ -2075,7 +2129,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 </button>
                 <button
                   onClick={() => setShowReminderModal(true)}
-                  className="px-4 py-1.5 text-xs font-black tracking-wide uppercase transition-all rounded-lg flex items-center gap-2 text-slate-500 hover:text-slate-300"
+                  className="px-4 py-1.5 text-xs font-black tracking-wide uppercase transition-[color] rounded-lg flex items-center gap-2 text-slate-500 hover:text-slate-300"
                 >
                   Reminders
                   {unloggedTasks.length > 0 && (
@@ -2088,7 +2142,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             </div>
             <button
               onClick={() => setIsWrikeModalOpen(false)}
-              className="p-2.5 bg-[#1a2333] hover:bg-[#253247] border border-[#2d3d52] text-slate-400 hover:text-white rounded-xl transition-all shadow-md active:scale-95"
+              className="p-2.5 bg-[#1a2333] hover:bg-[#253247] border border-[#2d3d52] text-slate-400 hover:text-white rounded-xl transition-[background-color,color,box-shadow,transform] shadow-md active:scale-95"
             >
               <X className="w-4 h-4" />
             </button>
@@ -2222,7 +2276,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           <React.Fragment key={groupName}>
                             {/* Group Header Row */}
                             <tr
-                              className="bg-[#141b27] hover:bg-[#1a2436] transition-all cursor-pointer border-y border-[#222f3e]"
+                              className="bg-[#141b27] hover:bg-[#1a2436] transition-[background-color] cursor-pointer border-y border-[#222f3e]"
                               onClick={() => toggleGroup(groupName)}
                             >
                               <td
@@ -2265,7 +2319,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                 return (
                                   <tr
                                     key={task.id}
-                                    className={`transition-all group border-b border-[#1e293b]/40 ${
+                                    className={`transition-[background-color] group border-b border-[#1e293b]/40 ${
                                       isAddedToActiveDay
                                         ? "bg-[#10b981]/15 hover:bg-[#10b981]/25 border-l-2 border-l-[#10b981] shadow-[inset_0_0_15px_rgba(52,211,153,0.05)] text-emerald-100"
                                         : "hover:bg-[#121824]"
@@ -2441,29 +2495,32 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         )}
 
       {/* --- STANDARD UI --- */}
-      <div className="max-w-[1800px] mx-auto bg-white shadow-2xl rounded-2xl relative flex flex-col border border-slate-200">
+      <div className="max-w-[1800px] mx-auto bg-white shadow-sm rounded-2xl relative flex flex-col border border-[#dce4ec]">
         {/* --- MODERN TABS --- */}
-        <div className="flex px-4 pt-4 bg-slate-50 border-b border-slate-200 gap-2 rounded-t-2xl">
+        <div className="flex px-4 pt-4 bg-slate-50 gap-2 rounded-t-2xl">
           {DAYS.map((day) => {
             const isWeekend = day === "Saturday" || day === "Sunday";
             const isActive = activeDay === day;
 
+            // Original light folder tabs; the strip's border-b is the thin
+            // line the light bleeds into, sitting just above the dark table
+            // header.
             let tabColors = "";
             if (isActive) {
               tabColors = isWeekend
-                ? "bg-white text-rose-500 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] border-t border-x border-slate-200"
-                : "bg-white text-[#12a0e1] shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] border-t border-x border-slate-200";
+                ? "bg-white text-rose-500 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] border-t border-x border-[#dce4ec]"
+                : "bg-white text-[#12a0e1] shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] border-t border-x border-[#dce4ec]";
             } else {
               tabColors = isWeekend
                 ? "bg-rose-50 text-rose-400 hover:bg-rose-100 hover:text-rose-600 border-t border-x border-transparent"
-                : "bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 border-t border-x border-transparent";
+                : "bg-slate-100 text-[#768994] hover:bg-slate-200 hover:text-[#122027] border-t border-x border-transparent";
             }
 
             return (
               <button
                 key={day}
                 onClick={() => setActiveDay(day)}
-                className={`flex-1 py-3 text-[13px] font-bold text-center rounded-t-xl transition-all ${tabColors} ${
+                className={`flex-1 py-3 text-[13px] font-bold text-center rounded-t-xl transition-[background-color,color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 ${tabColors} ${
                   isActive ? "relative z-10 top-[1px]" : ""
                 }`}
               >
@@ -2480,7 +2537,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                               : "bg-[#12a0e1]/10 text-[#12a0e1]"
                             : isWeekend
                             ? "bg-rose-200/50 text-rose-500"
-                            : "bg-slate-200 text-slate-500"
+                            : "bg-slate-200 text-[#768994]"
                         }`}
                       >
                         {rows.filter((r) => r.dayOfWeek === day).length}
@@ -2494,7 +2551,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           ? isWeekend
                             ? "text-rose-500"
                             : "text-[#12a0e1]"
-                          : "text-slate-400"
+                          : "text-[#768994]"
                       }`}
                     >
                       {formatDayTotal(getDayTotal(day))}h
@@ -2506,39 +2563,16 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           })}
         </div>
 
-        {/* View controls — segmented pill buttons */}
-        <div className="bg-white border-b border-slate-100 px-4 py-2 flex items-center justify-between gap-3">
-          <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">View</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setConsolidatedView((v) => !v)}
-              title="Merge rows with the same job number — territories & categories become subrows, raw time summed before rounding"
-              className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all active:scale-95 ${
-                consolidatedView
-                  ? "bg-[#12a0e1]/10 text-[#12a0e1] border-[#12a0e1]/30"
-                  : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              Consolidated
-              <span className={`ml-0.5 text-[10px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-600"}`}>
-                {consolidatedView ? "ON" : "OFF"}
-              </span>
-            </button>
-            <button
-              onClick={toggleFreeze}
-              title={isDayFrozen ? "Unlock day to allow edits" : "Lock this day to prevent edits"}
-              className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all active:scale-95 ${
-                isDayFrozen
-                  ? "bg-amber-100 text-amber-700 border-amber-300"
-                  : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
-              }`}
-            >
-              <Lock className="w-3.5 h-3.5" />
-              {isDayFrozen ? `${activeDay} locked` : `Lock ${activeDay}`}
-            </button>
-          </div>
-        </div>
+        {/* Fade band from the light tabs down into the dark table header —
+            white at the top, the header's shade at the bottom. */}
+        {/* 14px white run, then a thin animated teal gradient line — the page
+            header's cyan→teal, flowing — before the dark table header. */}
+        <div aria-hidden="true" className="h-[10px] bg-white border-t border-[#dce4ec]" />
+        <div
+          aria-hidden="true"
+          className="h-px bg-gradient-to-r from-[#12a0e1] via-[#1cc1a5] to-[#12a0e1] animate-gradient-flow"
+          style={{ backgroundSize: "200% 100%" }}
+        />
 
         {/* --- TABLE AREA --- */}
         <div ref={consolScrollRef} className="flex-1 bg-white relative overflow-x-auto w-full min-h-[600px]">
@@ -2547,37 +2581,53 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               {CONSOL_COLS.map((c) => <col key={c.key} style={{ width: consolWidths[c.key] }} />)}
             </colgroup>
             <thead className="sticky top-0 z-20">
-              <tr className="bg-slate-50 text-[#768994] shadow-sm border-b-2 border-slate-200">
+              <tr className="bg-[#0d1b22] text-white shadow-sm border-b border-white/10">
                 {/* Headers wrap rather than truncate — a squeezed column showed
-                    "ADDITIONA" with no way to tell what it was. align-bottom
-                    keeps the labels on one baseline whether they run to one
-                    line or two. */}
+                    "ADDITIONA" with no way to tell what it was. Vertically
+                    centred so single-line and stacked labels (Add. Time, Time
+                    Spent) sit on the same middle line. */}
                 {CONSOL_COLS.map((c, idx) => (
                   <th
                     key={c.key}
-                    className={`relative px-3 py-2 text-[10px] font-black uppercase tracking-widest leading-[1.2] align-bottom ${
-                      idx === CONSOL_COLS.length - 1 ? "" : "border-r border-slate-200/70"
+                    className={`relative px-3 py-2 text-center text-[10px] font-black uppercase tracking-widest leading-[1.2] align-middle ${
+                      idx === CONSOL_COLS.length - 1 ? "" : "border-r border-white/5"
                     }`}
                   >
-                    {c.label}
+                    {/* "Add. Time" stacks so the full stop ends its own line,
+                        matching the two-line Time Spent / Client Amends labels. */}
+                    {c.label === "Add. Time" ? (
+                      <span className="block leading-tight">
+                        <span className="block">Add.</span>
+                        <span className="block">Time</span>
+                      </span>
+                    ) : (
+                      c.label
+                    )}
                     {consolHandle(c.key)}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-[#f0f4f8]">
               {showConsolidationWarning && (
                 <tr>
                   <td
                     colSpan={COLUMNS.length + 1}
                     className="px-4 py-2 bg-amber-50 border-b border-amber-200"
                   >
-                    <p className="text-[11px] font-bold text-amber-700 flex items-center gap-2">
-                      ⚠️ Some rows share the same job/territory/category. Time
-                      totals may appear inflated due to per-row rounding —
-                      switch to <strong>Consolidated</strong> view for accurate
-                      totals.
-                    </p>
+                    <div className="text-[11px] font-bold text-amber-700 flex items-center gap-2 flex-wrap">
+                      <span>
+                        ⚠️ Some rows share the same job/territory/category — time
+                        totals may appear inflated due to per-row rounding.
+                      </span>
+                      <button
+                        onClick={() => setConsolidatedView(true)}
+                        className="ml-auto shrink-0 flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors active:scale-95"
+                      >
+                        <Layers className="w-3 h-3" />
+                        Consolidate
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )}
@@ -2587,17 +2637,17 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   const g = item.group;
                   const collapsed = collapsedGroups[g.jobNumber];
                   return (
-                    <tr key={g.id} className="bg-slate-100/70 border-y border-slate-200">
+                    <tr key={g.id} className="bg-slate-50 border-y border-[#dce4ec]">
                       {/* overflow-visible (inline, to beat the table's [&_td]:overflow-hidden)
                           so the multi-country add popover isn't clipped by the cell. */}
-                      <td className="p-2 border-r border-slate-200/60 align-middle" style={{ overflow: "visible" }}>
+                      <td className="p-2 border-r border-[#dce4ec] align-middle" style={{ overflow: "visible" }}>
                         <div className="flex items-center gap-1.5 pl-1">
                           <button
                             onClick={() => toggleJobGroup(g.jobNumber)}
-                            className="w-5 h-5 grid place-items-center rounded-md text-slate-400 hover:text-[#12a0e1] hover:bg-white transition-colors shrink-0"
+                            className="w-5 h-5 grid place-items-center rounded-md text-[#768994] hover:text-[#12a0e1] hover:bg-white transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40"
                             title={collapsed ? "Expand" : "Collapse"}
                           >
-                            <span className="text-[10px]">{collapsed ? "▶" : "▼"}</span>
+                            <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-300 ${collapsed ? "" : "rotate-90"}`} />
                           </button>
                           {g.jobNumber ? (
                             <span className="font-black text-[12px] text-[#122027] truncate">
@@ -2621,7 +2671,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                               />
                             </div>
                           )}
-                          <span className="text-[10px] font-black text-[#768994] bg-white border border-slate-200 rounded-full px-1.5 py-0.5 shrink-0">
+                          <span className="text-[10px] font-black text-[#768994] bg-white border border-[#dce4ec] rounded-full px-1.5 py-0.5 shrink-0">
                             {g._subRows.length}
                           </span>
                           {rowsAreEditable && (
@@ -2645,7 +2695,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                   />
                                   <div
                                     style={{ position: "fixed", left: addEntryPos?.left, top: addEntryPos?.top, width: addEntryPos?.width, zIndex: 99999 }}
-                                    className="bg-white border border-slate-200 rounded-xl shadow-2xl p-2.5 text-left animate-in fade-in slide-in-from-top-1 duration-150"
+                                    className="bg-white border border-[#dce4ec] rounded-xl shadow-2xl p-2.5 text-left animate-in fade-in slide-in-from-top-1 duration-150"
                                   >
                                     <button
                                       onClick={() => {
@@ -2656,15 +2706,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                     >
                                       <Plus className="w-3.5 h-3.5" /> One blank entry
                                     </button>
-                                    <div className="my-1.5 border-t border-slate-100" />
-                                    <p className="px-1.5 py-1 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                    <div className="my-1.5 border-t border-[#f0f4f8]" />
+                                    <p className="px-1.5 py-1 text-[10px] font-black uppercase tracking-widest text-[#768994]">
                                       One entry, several countries
                                     </p>
                                     <input
                                       value={countryQuery}
                                       onChange={(e) => setCountryQuery(e.target.value)}
                                       placeholder="Filter countries…"
-                                      className="w-full mb-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-slate-200 outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/10"
+                                      className="w-full mb-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-[#dce4ec] outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/10"
                                     />
                                     <div className="max-h-44 overflow-y-auto custom-scrollbar pr-0.5">
                                       {TERRITORIES.filter(
@@ -2693,7 +2743,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                                             <span className="shrink-0">{TERRITORY_FLAGS[t]}</span>
                                             <span className="truncate">{t}</span>
                                             {territoryCode(t) && (
-                                              <span className={`ml-auto shrink-0 font-mono text-[9.5px] tracking-wide ${on ? "opacity-70" : "text-slate-400"}`}>
+                                              <span className={`ml-auto shrink-0 font-mono text-[10px] tracking-wide ${on ? "opacity-70" : "text-slate-400"}`}>
                                                 {territoryCode(t)}
                                               </span>
                                             )}
@@ -2719,10 +2769,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           )}
                         </div>
                       </td>
-                      <td className="p-2 border-r border-slate-200/60 align-middle text-[12px] font-semibold text-slate-600 truncate px-3">{g.client}</td>
-                      <td className="p-2 border-r border-slate-200/60 align-middle text-[12px] font-black text-slate-800 truncate px-3">{g.filmTitle}</td>
-                      <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-600 truncate px-3">{g.projectDescription}</td>
-                      <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-500 px-3">
+                      <td className="p-2 border-r border-[#dce4ec] align-middle text-[12px] font-semibold text-[#768994] truncate px-3">{g.client}</td>
+                      <td className="p-2 border-r border-[#dce4ec] align-middle text-[12px] font-black text-[#122027] truncate px-3">{g.filmTitle}</td>
+                      <td className="p-2 border-r border-[#dce4ec] align-middle text-[11px] text-[#768994] truncate px-3">{g.projectDescription}</td>
+                      <td className="p-2 border-r border-[#dce4ec] align-middle text-[11px] text-[#768994] px-3">
                         {g.territories.length ? (
                           <span className="flex flex-wrap items-center gap-x-1 gap-y-0.5" title={g.territories.join(", ")}>
                             <span className="text-[13px] leading-none">{territoryFlags(g.territories, 12)}</span>
@@ -2730,13 +2780,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           </span>
                         ) : "—"}
                       </td>
-                      <td className="p-2 border-r border-slate-200/60 align-middle text-[11px] text-slate-500 px-3">
+                      <td className="p-2 border-r border-[#dce4ec] align-middle text-[11px] text-[#768994] px-3">
                         {g.categories.length ? `${g.categories.length} ${g.categories.length === 1 ? "category" : "categories"}` : "—"}
                       </td>
-                      <td className="p-2 border-r border-slate-200/60" />
-                      <td className="p-2 border-r border-slate-200/60" />
-                      <td className="p-2 border-r border-slate-200/60" />
-                      <td className="p-2 border-r border-slate-200/60 align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.timeSpent}</td>
+                      <td className="p-2 border-r border-[#dce4ec]" />
+                      <td className="p-2 border-r border-[#dce4ec]" />
+                      <td className="p-2 border-r border-[#dce4ec]" />
+                      <td className="p-2 border-r border-[#dce4ec] align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.timeSpent}</td>
                       <td className="p-2 align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.additionalTime}</td>
                     </tr>
                   );
@@ -2752,7 +2802,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     !rowsAreEditable ? "frozen-row" : ""
                   } ${isSub ? "bg-white" : ""}`}
                 >
-                  <td className={`p-2 border-r border-slate-100 align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
+                  <td className={`p-2 border-r border-[#f0f4f8] align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
                     {/* Save confirmation. Absolute against the row (the <tr> is
                         position:relative), so it sweeps the full width from
                         inside the first cell — a <tr> can only hold cells, so it
@@ -2772,7 +2822,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         className={`mt-1.5 transition-opacity ${
                           !rowsAreEditable
                             ? "opacity-0 cursor-not-allowed"
-                            : "opacity-0 group-hover:opacity-70 hover:!opacity-100"
+                            : "opacity-0 group-hover:opacity-70 hover:!opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 focus-visible:outline-none"
                         }`}
                       >
                         <XCircle
@@ -2787,21 +2837,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         {isSub ? (
                           // The job is set once at the group top, never per subrow —
                           // the subrow just carries its own country/category identity.
-                          <div className="flex items-center gap-1.5 pl-3 border-l-2 border-[#12a0e1]/25 py-1 min-w-0" title={row.territory}>
-                            <span className="text-slate-500 text-[11px] shrink-0">↳</span>
+                          <div className="flex items-center gap-1.5 pl-3 py-1 min-w-0" title={row.territory}>
+                            <span className="text-[#768994] text-[11px] shrink-0">↳</span>
                             {/* Capped: this sits on one line next to the category,
                                 so a 20-country row can't be allowed to run away. */}
                             <span className="text-[13px] leading-none shrink-0">{territoryFlags(row.territory, 6) || "🌐"}</span>
-                            <span className="text-[11px] font-bold text-slate-600 truncate">
+                            <span className="text-[11px] font-bold text-[#768994] truncate">
                               {splitTerritories(row.territory).length > 6
                                 ? `${splitTerritories(row.territory).length} countries`
                                 : row.territory || "No country"}
-                              {row.category ? <span className="font-medium text-slate-600"> · {row.category.replace(/^(Digital|Print|XYi)\s*-\s*/, "")}</span> : null}
+                              {row.category ? <span className="font-medium text-[#768994]"> · {row.category.replace(/^(Digital|Print|XYi)\s*-\s*/, "")}</span> : null}
                             </span>
                           </div>
                         ) : (
-                          <div className={`flex items-center gap-1.5 w-full min-w-0 ${isSub ? "pl-2 border-l-2 border-[#12a0e1]/25" : ""}`}>
-                            {isSub && <span className="text-slate-500 text-[11px] shrink-0" title="Set a job for this entry">↳</span>}
+                          <div className={`flex items-center gap-1.5 w-full min-w-0 ${isSub ? "pl-2" : ""}`}>
+                            {isSub && <span className="text-[#768994] text-[11px] shrink-0" title="Set a job for this entry">↳</span>}
                             <div className="flex-1 min-w-0">
                               <TableSearchableSelect
                                 options={jobOptions}
@@ -2829,27 +2879,27 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     </div>
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[140px]">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[140px]">
                     <div
                       className={`text-[12px] leading-tight font-semibold px-2 ${
-                        !rowsAreEditable ? "text-slate-500" : "text-slate-700"
+                        !rowsAreEditable ? "text-[#768994]" : "text-[#122027]"
                       }`}
                     >
                       {row.client}
                     </div>
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[150px]">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[150px]">
                     <div
                       className={`text-[12px] leading-tight font-black px-2 ${
-                        !rowsAreEditable ? "text-slate-600" : "text-slate-900"
+                        !rowsAreEditable ? "text-[#768994]" : "text-[#122027]"
                       }`}
                     >
                       {row.filmTitle}
                     </div>
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[220px]">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[220px]">
                     <AutoGrowTextarea
                       rows={2}
                       value={row.projectDescription}
@@ -2866,7 +2916,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[140px]">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[140px]">
                     <MultiCountrySelect
                       value={row.territory}
                       onChange={(val) =>
@@ -2881,7 +2931,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[180px]">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[180px]">
                     <TableSearchableSelect
                       options={CATEGORIES}
                       value={row.category}
@@ -2898,7 +2948,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[70px] text-center">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[70px] text-center">
                     <input
                       type="checkbox"
                       checked={row.clientAmends}
@@ -2918,7 +2968,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[140px]">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[140px]">
                     <AutoGrowTextarea
                       value={row.notes || ""}
                       onChange={(e) =>
@@ -2927,15 +2977,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       placeholder="Notes…"
                       rows={2}
                       disabled={!rowsAreEditable}
-                      className={`w-full text-[11px] bg-transparent border border-transparent rounded-lg px-2 py-1 resize-none overflow-hidden transition-colors leading-relaxed placeholder:text-slate-500 ${
+                      className={`w-full text-[11px] bg-transparent border border-transparent rounded-xl px-2 py-1 resize-none overflow-hidden transition-colors leading-relaxed placeholder:text-slate-500 ${
                         !rowsAreEditable
                           ? "text-slate-400 cursor-not-allowed"
-                          : "text-slate-700 hover:border-slate-200 focus:border-[#12a0e1] focus:bg-[#12a0e1]/5 outline-none"
+                          : "text-[#122027] hover:border-[#dce4ec] focus:border-[#12a0e1] focus:bg-[#12a0e1]/5 outline-none"
                       }`}
                     />
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[50px] text-center">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[50px] text-center">
                     <input
                       type="checkbox"
                       checked={row.is3D}
@@ -2951,7 +3001,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td className="p-2 border-r border-slate-100 align-middle w-[90px] text-center">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[90px] text-center">
                     <TableSearchableSelect
                       options={TIME_OPTIONS}
                       value={row.timeSpent}
@@ -2987,14 +3037,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               {/* Ghost Add Row */}
               {rowsAreEditable && (
                 <tr
-                  className="group/addrow border-t border-dashed border-slate-200 cursor-pointer"
+                  className="group/addrow border-t border-dashed border-[#dce4ec] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40"
                   onClick={handleAddRow}
                 >
                   <td
                     colSpan={COLUMNS.length + 1}
                     className="px-4 py-3 text-center"
                   >
-                    <span className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-slate-600 group-hover/addrow:text-[#12a0e1] transition-colors">
+                    <span className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-[#768994] group-hover/addrow:text-[#12a0e1] transition-colors">
                       <Plus className="w-3.5 h-3.5" />
                       Add row
                     </span>
@@ -3017,7 +3067,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
         {/* Day totals — visible in the table, not only on the tab */}
         {currentDayRows.length > 0 && (
-          <div className="px-4 py-2.5 border-t border-slate-200 bg-white flex items-center justify-end gap-6 text-[11px] font-bold text-[#768994]">
+          <div className="px-4 py-2.5 border-t border-[#dce4ec] bg-white flex items-center justify-end gap-6 text-[11px] font-bold text-[#768994]">
             <span className="uppercase tracking-widest text-[10px] font-black text-slate-400">{activeDay} total</span>
             <span className="tabular-nums">
               {currentDayRows.length} {currentDayRows.length === 1 ? "entry" : "entries"}
@@ -3028,11 +3078,42 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           </div>
         )}
 
+        {/* Bottom-centre "tongue" — Consolidated + Lock floating above the
+            action bar, so the table's view controls cost no vertical space. */}
+        <div className="relative z-10 -mb-4 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-1 bg-white border border-[#dce4ec] rounded-full shadow-md px-1.5 py-1">
+            <button
+              onClick={() => setConsolidatedView((v) => !v)}
+              title="Merge rows with the same job number — territories & categories become subrows, raw time summed before rounding"
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
+                consolidatedView ? "text-[#12a0e1]" : "text-[#768994] hover:text-[#122027]"
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Consolidated
+              <span className={`ml-0.5 text-[10px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-600"}`}>
+                {consolidatedView ? "ON" : "OFF"}
+              </span>
+            </button>
+            <span className="w-px h-4 bg-[#dce4ec] shrink-0" />
+            <button
+              onClick={toggleFreeze}
+              title={isDayFrozen ? "Unlock day to allow edits" : "Lock this day to prevent edits"}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
+                isDayFrozen ? "text-amber-600" : "text-[#768994] hover:text-[#122027]"
+              }`}
+            >
+              <Lock className="w-3.5 h-3.5" />
+              {isDayFrozen ? `${activeDay} locked` : `Lock ${activeDay}`}
+            </button>
+          </div>
+        </div>
+
         {/* Bottom Action Bar */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
+        <div className="p-4 border-t border-[#dce4ec] bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
           <button
             onClick={handleOpenWrikeModal}
-            className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-[#1b202a] hover:bg-[#252a33] text-emerald-400 border border-[#2d3342] rounded-xl shadow-lg transition-all active:scale-95"
+            className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
           >
             <LayoutList className="w-4 h-4" />
             Wrike Timesheets
@@ -3042,10 +3123,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               onClick={() => handlePullTimes()}
               disabled={isPulling || isDayFrozen}
               title="Pulls your Wrike time for today and yesterday"
-              className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold border rounded-xl shadow-lg transition-all ${
+              className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold border rounded-xl shadow-sm transition-[background-color,color,border-color,transform] ${
                 isDayFrozen
-                  ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-70"
-                  : "bg-white hover:bg-slate-50 text-slate-700 border-slate-200 active:scale-95"
+                  ? "bg-slate-100 text-[#768994] border-[#dce4ec] cursor-not-allowed opacity-70"
+                  : "bg-white hover:bg-slate-50 text-[#122027] border-[#dce4ec] active:scale-95"
               }`}
             >
               <RefreshCw
@@ -3062,7 +3143,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   onClick={() => setShowDebugPull(!showDebugPull)}
                   disabled={isPulling}
                   title="Admin: pull timelogs for a specific date"
-                  className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold rounded-xl border transition-all active:scale-95 ${
+                  className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold rounded-xl border transition-[background-color,color,border-color,transform] active:scale-95 ${
                     showDebugPull
                       ? "bg-amber-100 text-amber-800 border-amber-300"
                       : "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200"
@@ -3097,10 +3178,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
             <button
               onClick={handleCopyJSON}
-              className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl shadow-lg transition-all active:scale-95 ${
+              className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl shadow-sm transition-[background-color,box-shadow,transform] active:scale-95 ${
                 jsonCopied
                   ? "bg-[#1cc1a5] text-white shadow-[#1cc1a5]/30"
-                  : "bg-indigo-500 hover:bg-indigo-600 text-white shadow-indigo-500/30"
+                  : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-[#12a0e1]/30"
               }`}
             >
               {jsonCopied ? (

@@ -6,7 +6,6 @@ import {
   territoryKey,
   toTimesheetTerritories,
 } from "../utils/territories";
-import { logTimeToWrike } from "../lib/wrikeApi";
 
 /**
  * All task manipulation handlers: log, delete, edit group/task/time/note,
@@ -388,6 +387,10 @@ export function useTaskActions(state) {
     taskList.forEach((t) => {
       // territoryKey so multi-country rows merge regardless of the order the
       // countries were picked in.
+      //
+      // The WHOLE job label, matching the Legacy export. Grouping on the code
+      // alone was tried and backed out — it merges separate pieces of work
+      // under one job, which the studio wants kept apart on the timesheet.
       const key = `${t.dayOfWeek}|${t.jobNumber}|${territoryKey(t.territory)}|${t.category}`;
       if (!consolidated[key]) {
         consolidated[key] = { ...t, rawSeconds: 0, additionalSeconds: 0, notesArray: [], subtaskCount: 0 };
@@ -498,10 +501,17 @@ export function useTaskActions(state) {
       date: new Date().toLocaleDateString("en-GB"),
       timeLogged: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
+    // Deliberately does NOT write the time back to Wrike, unlike the task
+    // detail panel's own logger. This path is currently unreachable —
+    // RecentJobsModal isn't mounted anywhere — and a dormant Wrike write is
+    // the worst kind: whoever revives this modal inherits a button that
+    // silently creates timelogs, and this one passed a USER-CHOSEN day
+    // (selectedDay) while the write stamped today, so the two systems would
+    // disagree about when the work happened. If this modal comes back and
+    // should push to Wrike, add it deliberately — logTimeToWrike now returns
+    // the timelog id, which has to be stored on the row as wrikeTimelogId or
+    // the next pull re-adds the same hour.
     addTask(newTask);
-    logTimeToWrike(recentTaskDraft.taskId, finalSeconds).then((ok) => {
-      triggerToast(ok ? "Synced to Wrike task." : "Logged locally, but Wrike sync failed.", ok ? "success" : "info");
-    });
     triggerToast(`Insta-Logged successfully to ${selectedDay}!`, "success");
     setShowReward(true);
     setTimeout(() => setShowReward(false), 1200);

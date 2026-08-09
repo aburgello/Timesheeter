@@ -261,6 +261,72 @@ export function getFolderCountries(task, folderDictionary, childToParent = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// The description a job carries in its own Wrike folder name
+// ---------------------------------------------------------------------------
+// A job's description lives in the folder title the push writes —
+// "XY026047_French_Canada_Assets" — but the Job Number custom field only ever
+// receives the BARE code (see PushToWrikeModal). So a task tagged "XY026047"
+// says which job it belongs to and nothing whatever about what that job is.
+//
+// Readers used to fill that gap by inventing a description from the task's own
+// name. A task name describes a piece of work, not a job, so the Job Book
+// ended up holding rows like "The Odyssey : XY026047, ODY_Print_Teaser1SHT_
+// Birds_CMYK_KR" for a job actually called "French Canada Assets" — and
+// because that string is well-formed, the Studio Scan's reconciliation can't
+// see anything wrong with it, so it was never repaired.
+//
+// Reading the folder instead means a description derived here and one derived
+// later by scanStudioJobNumbers come from the same place, so they cannot
+// disagree.
+//
+// Matched on the code already resolved for this task, NOT on "the nearest
+// folder that looks like a job": a task can sit under several parents at once,
+// and a neighbouring job's folder would silently describe these hours as
+// belonging to different work.
+const FOLDER_JOB_MAX_DEPTH = 4;
+
+export function jobFolderDescription(task, code, folderDictionary, childToParent = {}) {
+  if (!task || !code || !folderDictionary) return "";
+  const bare = (String(code).match(/XY\d{5,6}/i) || [])[0];
+  if (!bare) return "";
+  const wanted = new RegExp(`^${bare}_`, "i");
+
+  // A subtask has no folder membership of its own — parentIds is the parent's
+  // business — so it climbs from the parent's folders, resolved at fetch time
+  // into superTaskParentIds. Same fallback the country resolver uses.
+  let level = task.parentIds?.length
+    ? [...task.parentIds]
+    : [...(task.superTaskParentIds || [])];
+  const visited = new Set(level);
+
+  for (let depth = 0; depth < FOLDER_JOB_MAX_DEPTH && level.length; depth++) {
+    // Whole level before climbing, so the nearest match wins when a task sits
+    // in several folders at once.
+    for (const id of level) {
+      const title = folderDictionary[id]?.title || "";
+      if (wanted.test(title)) {
+        return title
+          .slice(bare.length)
+          .replace(/^[_\s,–—-]+/, "")
+          .replace(/_+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+    }
+    const next = [];
+    for (const id of level) {
+      const parentId = childToParent[id];
+      if (parentId && !visited.has(parentId)) {
+        visited.add(parentId);
+        next.push(parentId);
+      }
+    }
+    level = next;
+  }
+  return "";
+}
+
+// ---------------------------------------------------------------------------
 // Print launch-tracking relevance (Print Canvas / Launch Tracker)
 // ---------------------------------------------------------------------------
 // Print coordinates each launch wave through a hub task ("*_Launch_Print_Requests"

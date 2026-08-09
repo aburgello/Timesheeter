@@ -47,4 +47,4 @@ export default function PageHeader({ pageId, icon: Icon, title, subtitle, childr
 // Shared className for action buttons rendered inside a PageHeader — white
 // translucent pill, legible on any of the section gradients.
 export const pageHeaderActionClass =
-  "flex items-center gap-2 px-4 py-2 bg-white/15 hover:bg-white/25 text-white border border-white/20 backdrop-blur-sm rounded-xl transition-all shadow-sm font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed";
+  "flex items-center gap-2 px-4 py-2 bg-white/15 hover:bg-white/25 text-white border border-white/20 backdrop-blur-sm rounded-xl transition-colors shadow-sm font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed";

@@ -203,13 +203,15 @@ function CollapsibleCard({ icon: Icon, title, subtitle, isOpen, onToggle, childr
       <AnimatePresence initial={false}>
         {isOpen && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
-            className="overflow-hidden bg-slate-50 border-t border-[#dce4ec]"
+            initial={{ gridTemplateRows: "0fr", opacity: 0 }}
+            animate={{ gridTemplateRows: "1fr", opacity: 1 }}
+            exit={{ gridTemplateRows: "0fr", opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="grid bg-slate-50 border-t border-[#dce4ec] transition-[grid-template-rows,opacity]"
           >
-            <div className="p-6 sm:p-8 min-h-[460px]">{children}</div>
+            <div className="min-h-0 overflow-hidden">
+              <div className="p-6 sm:p-8 min-h-[460px]">{children}</div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1165,7 +1167,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => { setActiveBoard("team"); setSelectedPageId(null); }}
-            className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-all ${
+            className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-[color,background-color,border-color,box-shadow] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none ${
               activeBoard === "team" ? "text-white shadow-md" : "bg-white/80 border border-[#ece4d8] text-[#8a8073] hover:text-[#5a5147] hover:border-[#c2410d]/30"
             }`}
             style={activeBoard === "team" ? { background: `linear-gradient(135deg, #c2410d, #9a3412)` } : undefined}
@@ -1182,7 +1184,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
           {currentUserId && (
             <button
               onClick={() => { setActiveBoard("mine"); setSelectedPageId(null); }}
-              className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-all ${
+              className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-[color,background-color,border-color,box-shadow] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none ${
                 activeBoard === "mine" ? "text-white shadow-md" : "bg-white/80 border border-[#ece4d8] text-[#8a8073] hover:text-[#5a5147]"
               }`}
               style={activeBoard === "mine" ? { background: `linear-gradient(135deg, ${myColor}, ${myColor}cc)` } : { borderColor: `${myColor}30` }}
@@ -1204,7 +1206,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
               <button
                 key={id}
                 onClick={() => { setActiveBoard(id); setSelectedPageId(null); }}
-                className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-all ${
+                className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-[color,background-color,border-color,box-shadow] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none ${
                   isActive ? "text-white shadow-md" : "bg-white/80 border border-[#ece4d8] text-[#8a8073] hover:text-[#5a5147]"
                 }`}
                 style={isActive ? { background: `linear-gradient(135deg, ${color}, ${color}cc)` } : { borderColor: `${color}30` }}
@@ -1236,7 +1238,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
             <div className="p-2.5 border-b border-slate-100 flex items-center gap-1.5">
               <button
                 onClick={() => handleNewNote("text")}
-                className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-white text-[13px] font-bold shadow-sm transition-all hover:brightness-105 active:scale-[.98]"
+                className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-white text-[13px] font-bold shadow-sm transition-[transform,box-shadow] hover:-translate-y-px hover:shadow-[0_10px_26px_-12px_rgba(18,32,39,0.22)] active:scale-[.98] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                 style={{ background: `linear-gradient(135deg, ${boardAccent}, ${boardAccent}cc)` }}
               >
                 <Plus className="w-4 h-4" /> New note
@@ -1244,7 +1246,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
               <button
                 onClick={() => handleNewNote("sketch")}
                 title="New sketch"
-                className="shrink-0 flex items-center justify-center w-10 h-10 rounded-xl border shadow-sm transition-all hover:brightness-105 active:scale-[.98]"
+                className="shrink-0 flex items-center justify-center w-10 h-10 rounded-xl border shadow-sm transition-[transform,box-shadow] hover:-translate-y-px hover:shadow-[0_10px_26px_-12px_rgba(18,32,39,0.22)] active:scale-[.98] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                 style={{ borderColor: `${boardAccent}55`, color: boardAccent }}
               >
                 <PenTool className="w-4 h-4" />
@@ -1252,7 +1254,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
             </div>
 
             <div className="flex items-center gap-2 px-3 pt-2.5 pb-1">
-              <span className="text-[10px] font-black uppercase tracking-[0.13em] text-[#a79f93] flex-1 truncate">
+              <span className="text-[10px] font-black uppercase tracking-[0.13em] text-[#8a8073] flex-1 truncate">
                 {activeBoard === "mine" ? myName : boardLabelFor(department)}
               </span>
               {activeBoard === "mine" && (
@@ -1304,7 +1306,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
 
             <div className="flex-1 overflow-y-auto px-2 pb-3">
               {activeBoardFolders.length === 0 ? (
-                <p className="text-xs font-semibold text-[#a79f93] px-2 py-4">
+                <p className="text-xs font-semibold text-[#8a8073] px-2 py-4">
                   No topics yet — add one with the + above.
                 </p>
               ) : (
@@ -1316,13 +1318,13 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                       {/* Topic header */}
                       <div className="group/folder flex items-center gap-1.5 px-2 pt-2.5 pb-1">
                         <span className="text-[10px] font-black uppercase tracking-[0.12em] text-[#8a8073] truncate">{folder.name}</span>
-                        <span className="text-[10px] font-bold text-[#c4bcae] tabular-nums">{folderPages.length}</span>
+                        <span className="text-[10px] font-bold text-[#6b6155] tabular-nums">{folderPages.length}</span>
                         <div className="flex-1" />
                         {onTogglePin && (
                           <button
                             onClick={(e) => { e.stopPropagation(); onTogglePin(folder); }}
                             title={isPinned ? "Unpin topic" : "Pin topic to shelf"}
-                            className={`p-0.5 rounded transition-all ${isPinned ? "text-amber-500" : "text-[#d5cdbf] opacity-0 group-hover/folder:opacity-100 hover:text-amber-500"}`}
+                            className={`p-0.5 rounded transition-[color,opacity] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none ${isPinned ? "text-amber-500" : "text-[#8a8073] opacity-0 group-hover/folder:opacity-100 hover:text-amber-500"}`}
                           >
                             <Pin className={`w-3 h-3 ${isPinned ? "fill-current" : ""}`} />
                           </button>
@@ -1330,14 +1332,14 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                         <button
                           onClick={() => addPage(folder.id)}
                           title="New note in this topic"
-                          className="p-0.5 rounded text-[#c4bcae] opacity-0 group-hover/folder:opacity-100 hover:text-[#c2410d] transition-all"
+                          className="p-0.5 rounded text-[#6b6155] opacity-0 group-hover/folder:opacity-100 hover:text-[#c2410d] transition-[color,opacity]"
                         >
                           <Plus className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); deleteFolder(folder.id); }}
                           title="Delete topic"
-                          className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 transition-all"
+                          className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 transition-[background-color,opacity]"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -1348,14 +1350,14 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                         <div className="flex items-center gap-2 mx-1 px-1 py-1">
                           <button
                             onClick={() => addPage(folder.id, "text")}
-                            className="flex items-center gap-1.5 px-1 py-0.5 text-[11px] font-semibold text-[#b0a89a] hover:text-[#c2410d] transition-colors"
+                            className="flex items-center gap-1.5 px-1 py-0.5 text-[11px] font-semibold text-[#8a8073] hover:text-[#c2410d] transition-colors"
                           >
                             <Plus className="w-3 h-3" /> Add the first note
                           </button>
                           <button
                             onClick={() => addPage(folder.id, "sketch")}
                             title="Add a sketch"
-                            className="flex items-center gap-1 px-1 py-0.5 text-[11px] font-semibold text-[#b0a89a] hover:text-[#c2410d] transition-colors"
+                            className="flex items-center gap-1 px-1 py-0.5 text-[11px] font-semibold text-[#8a8073] hover:text-[#c2410d] transition-colors"
                           >
                             <PenTool className="w-3 h-3" />
                           </button>
@@ -1380,7 +1382,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                             >
                               <span
                                 className="w-6 h-6 rounded-md grid place-items-center shrink-0 mt-0.5"
-                                style={{ backgroundColor: active ? `${boardAccent}18` : "#00000008", color: active ? boardAccent : "#b0a89a" }}
+                                style={{ backgroundColor: active ? `${boardAccent}18` : "#00000008", color: active ? boardAccent : "#8a8073" }}
                               >
                                 {isSketch ? <PenTool className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
                               </span>
@@ -1388,13 +1390,13 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                                 <span className={`block text-[13px] font-semibold truncate leading-tight ${active ? "" : "text-[#3a352e]"}`} style={active ? { color: boardAccent } : undefined}>
                                   {page.title || "Untitled"}
                                 </span>
-                                <span className="block text-[11px] text-[#a79f93] truncate mt-0.5">
+                                <span className="block text-[11px] text-[#8a8073] truncate mt-0.5">
                                   {snippet || (isSketch ? "Empty sketch" : "Empty note")}
                                 </span>
                               </span>
                               <button
                                 onClick={(e) => { e.stopPropagation(); deletePage(page.id); }}
-                                className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 transition-all mt-0.5"
+                                className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 transition-[background-color,opacity] mt-0.5"
                               >
                                 <Trash2 className="w-3 h-3" />
                               </button>
@@ -1450,7 +1452,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                 <div className={`w-full mx-auto px-6 sm:px-12 pt-7 shrink-0 transition-[max-width] duration-200 ${proseWide ? "max-w-[62rem]" : "max-w-[46rem]"}`}>
                   <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.12em] mb-3" style={{ color: boardAccent }}>
                     <span>{activeBoard === "mine" ? myName : boardLabelFor(department)}</span>
-                    {selectedPageFolder && <><span className="opacity-40">/</span><span className="text-[#a79f93] truncate">{selectedPageFolder.name}</span></>}
+                    {selectedPageFolder && <><span className="opacity-40">/</span><span className="text-[#8a8073] truncate">{selectedPageFolder.name}</span></>}
                   </div>
                   <input
                     value={selectedPage.title}
@@ -1459,7 +1461,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                     style={{ fontSize: "clamp(26px, 3.4vw, 34px)" }}
                     placeholder="Untitled note"
                   />
-                  <div className="flex items-center gap-2.5 mt-3 mb-1 text-[12px] text-[#a79f93]">
+                  <div className="flex items-center gap-2.5 mt-3 mb-1 text-[12px] text-[#8a8073]">
                     <span className="w-6 h-6 rounded-full grid place-items-center text-[9px] font-black text-white shrink-0" style={{ backgroundColor: boardAccent }}>
                       {(activeBoard === "mine" ? (myName || "M") : boardLabelFor(department)).charAt(0)}
                     </span>
@@ -1527,14 +1529,14 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => handleNewNote("text")}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-[13px] font-bold shadow-sm transition-all hover:brightness-105 active:scale-95"
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-[13px] font-bold shadow-sm transition-[transform,box-shadow] hover:-translate-y-px hover:shadow-[0_10px_26px_-12px_rgba(18,32,39,0.22)] active:scale-95 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                     style={{ background: `linear-gradient(135deg, ${boardAccent}, ${boardAccent}cc)` }}
                   >
                     <Plus className="w-4 h-4" /> New note
                   </button>
                   <button
                     onClick={() => handleNewNote("sketch")}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl border text-[13px] font-bold transition-all hover:brightness-105 active:scale-95"
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl border text-[13px] font-bold transition-[transform,box-shadow] hover:-translate-y-px hover:shadow-[0_10px_26px_-12px_rgba(18,32,39,0.22)] active:scale-95 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                     style={{ borderColor: `${boardAccent}55`, color: boardAccent }}
                   >
                     <PenTool className="w-4 h-4" /> New sketch
@@ -1845,7 +1847,7 @@ function LaunchHubCard({ hub, subs }) {
 
   return (
     <div
-      className={`group rounded-2xl border bg-white overflow-hidden transition-all duration-200 ${
+      className={`group rounded-2xl border bg-white overflow-hidden transition-[border-color,box-shadow,background-color] duration-200 ${
         allDone ? "border-[#1baf7a]/30 bg-gradient-to-br from-[#1baf7a]/[0.04] to-white"
         : onHoldCount === countable.length && countable.length > 0 ? "border-amber-200"
         : "border-[#dce4ec] hover:border-[#12a0e1]/40 hover:shadow-sm"
@@ -1866,7 +1868,7 @@ function LaunchHubCard({ hub, subs }) {
                 cx="18" cy="18" r="15" fill="none" stroke={allDone ? "#1baf7a" : "#c2410d"} strokeWidth="3.5"
                 strokeDasharray={`${(done / countable.length) * 94.25} 94.25`}
                 strokeLinecap="round"
-                className="transition-all duration-500"
+                className="transition-[stroke,stroke-dasharray] duration-500"
               />
             )}
           </svg>
@@ -1944,7 +1946,7 @@ function LaunchHubCard({ hub, subs }) {
           {countable.length > 0 && (
             <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all duration-500 ${allDone ? "bg-[#1baf7a]" : "bg-gradient-to-r from-amber-500 to-orange-600"}`}
+                className={`h-full rounded-full transition-[width,background-color] duration-500 ${allDone ? "bg-[#1baf7a]" : "bg-gradient-to-r from-amber-500 to-orange-600"}`}
                 style={{ width: `${pct}%` }}
               />
             </div>
@@ -3166,22 +3168,6 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   return (
     <div className="min-h-screen bg-slate-100 text-[#122027] font-sans selection:bg-[#c2410d]/30 selection:text-[#122027] pb-12">
       <style>{`
-        /* --- SMOOTH ACCORDION ANIMATIONS --- */
-        @keyframes accordionOpen {
-          0% { opacity: 0; max-height: 0; margin-top: -2rem; margin-bottom: 0; transform: scaleY(0.95); transform-origin: top; }
-          100% { opacity: 1; max-height: 1200px; margin-top: 1rem; margin-bottom: 3rem; transform: scaleY(1); transform-origin: top; }
-        }
-        @keyframes accordionClose {
-          0% { opacity: 1; max-height: 1200px; margin-top: 1rem; margin-bottom: 3rem; transform: scaleY(1); transform-origin: top; }
-          100% { opacity: 0; max-height: 0; margin-top: -2rem; margin-bottom: 0; transform: scaleY(0.95); transform-origin: top; }
-        }
-        .animate-accordion-open {
-          animation: accordionOpen 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-        .animate-accordion-close {
-          animation: accordionClose 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-
         /* --- STANDARD STYLES --- */
         .wrike-matrix-render table { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 13px; }
         .wrike-matrix-render th { background-color: #122027; color: #ffffff; font-weight: 800; padding: 10px 14px; text-align: left; border: 1px solid #dce4ec; text-transform: uppercase; font-size: 11px; tracking: 0.05em; }
@@ -3354,7 +3340,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       const isHardcoded = !!hardcoded[code];
                       const name = hardcoded[code] || discovered[code];
                       return (
-                        <tr key={code} className={i % 2 === 0 ? "bg-white" : "bg-slate-50/60"}>
+                        <tr key={code} className="border-b border-[#dce4ec]">
                           <td className="px-5 py-3">
                             <span className="font-mono text-xs font-black text-[#122027] bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
                               {code}
@@ -3487,11 +3473,11 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
               >
                 <button
                   onClick={() => handleToggleCamp(camp.id)}
-                  className="group relative w-full rounded-2xl overflow-hidden outline-none transition-[transform,box-shadow,filter] duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] text-left aspect-[2/3] shadow-md hover:shadow-2xl hover:-translate-y-1"
+                  className="group relative w-full rounded-2xl overflow-hidden outline-none transition-[transform,box-shadow,filter] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] text-left aspect-[2/3] shadow-md hover:shadow-2xl hover:-translate-y-1"
                   style={{
                     background: hasCover ? "#122027" : generateGradient(camp.title),
                     filter: isActive ? "none" : "grayscale(60%) brightness(0.75)",
-                    transition: "filter 0.5s cubic-bezier(0.34,1.56,0.64,1), transform 0.5s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.5s cubic-bezier(0.34,1.56,0.64,1)",
+                    transition: "filter 0.5s cubic-bezier(0.16,1,0.3,1), transform 0.5s cubic-bezier(0.16,1,0.3,1), box-shadow 0.5s cubic-bezier(0.16,1,0.3,1)",
                   }}
                   onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.filter = "none"; }}
                   onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.filter = "grayscale(60%) brightness(0.75)"; }}
@@ -3724,7 +3710,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                         <div key={f.id} className="group relative">
                           <button
                             onClick={() => setCurrentFolderId(f.id)}
-                            className="w-full flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3.5 shadow-sm hover:border-[#c2410d]/50 hover:shadow transition-all text-left"
+                            className="w-full flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3.5 shadow-sm hover:border-[#c2410d]/50 hover:shadow transition-[border-color,box-shadow] text-left focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                           >
                             <div className="shrink-0 w-10 h-10 rounded-xl bg-amber-100 text-amber-500 flex items-center justify-center">
                               <Folder className="w-5 h-5 fill-current" />
@@ -3740,7 +3726,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                               <button onClick={() => setDeletingFolderId(null)} className="p-1.5 bg-slate-100 hover:bg-slate-200 text-[#122027] rounded-lg shadow"><X className="w-3.5 h-3.5" /></button>
                             </div>
                           ) : (
-                            <button onClick={() => setDeletingFolderId(f.id)} title="Delete folder" className="absolute top-2 right-2 p-1.5 text-[#768994] hover:text-rose-500 hover:bg-rose-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"><Trash2 className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => setDeletingFolderId(f.id)} title="Delete folder" className="absolute top-2 right-2 p-1.5 text-[#768994] hover:text-rose-500 hover:bg-rose-50 rounded-lg opacity-0 group-hover:opacity-100 transition-[color,background-color,opacity] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"><Trash2 className="w-3.5 h-3.5" /></button>
                           )}
                         </div>
                       ))}
@@ -3754,8 +3740,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     <p className="text-sm font-black">This folder is empty</p>
                     <p className="text-xs">Use “New folder” to organise sites, or “Add files” to upload specs</p>
                     <div className="flex items-center gap-2 mt-2">
-                      <button onClick={() => { setNewFolderName(""); setIsAddFolderOpen(true); }} className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-[#dce4ec] hover:border-[#c2410d] hover:text-[#c2410d] text-xs font-black uppercase tracking-widest transition-colors"><FolderPlus className="w-4 h-4" /> New folder</button>
-                      <button onClick={() => countryFileInputRef.current?.click()} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#c2410d] hover:bg-[#9a3412] text-white text-xs font-black uppercase tracking-widest transition-colors"><Upload className="w-4 h-4" /> Add files</button>
+                      <button onClick={() => { setNewFolderName(""); setIsAddFolderOpen(true); }} className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-[#dce4ec] hover:border-[#c2410d] hover:text-[#c2410d] text-xs font-black uppercase tracking-widest transition-colors focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"><FolderPlus className="w-4 h-4" /> New folder</button>
+                      <button onClick={() => countryFileInputRef.current?.click()} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#c2410d] hover:bg-[#9a3412] text-white text-xs font-black uppercase tracking-widest transition-colors focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"><Upload className="w-4 h-4" /> Add files</button>
                     </div>
                   </div>
                 )}
@@ -3797,7 +3783,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {docs.map((asset) => (
-                        <div key={asset.id} className="group relative flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3 shadow-sm hover:border-[#c2410d]/40 hover:shadow transition-all">
+                        <div key={asset.id} className="group relative flex items-center gap-3 bg-white border border-[#dce4ec] rounded-2xl p-3 shadow-sm hover:border-[#c2410d]/40 hover:shadow transition-[border-color,box-shadow]">
                           <button type="button" onClick={() => openPreview(asset, previewable)} className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer">
                             <div className="shrink-0 w-10 h-10 rounded-xl bg-[#c2410d]/10 text-[#c2410d] flex items-center justify-center">
                               <FileText className="w-5 h-5" />
@@ -3813,7 +3799,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                               <button onClick={() => setDeletingAssetId(null)} className="p-1.5 bg-slate-100 hover:bg-slate-200 text-[#122027] rounded-lg"><X className="w-3.5 h-3.5" /></button>
                             </div>
                           ) : (
-                            <button onClick={() => setDeletingAssetId(asset.id)} className="shrink-0 p-2 text-[#768994] hover:text-rose-500 hover:bg-rose-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"><Trash2 className="w-4 h-4" /></button>
+                            <button onClick={() => setDeletingAssetId(asset.id)} className="shrink-0 p-2 text-[#768994] hover:text-rose-500 hover:bg-rose-50 rounded-lg opacity-0 group-hover:opacity-100 transition-[color,background-color,opacity] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"><Trash2 className="w-4 h-4" /></button>
                           )}
                         </div>
                       ))}
@@ -3859,14 +3845,14 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                         key={id}
                         onClick={() => { setCanvasView(active ? null : id); setSelectedCountry(null); }}
                         aria-expanded={active}
-                        className={`group text-left rounded-3xl border p-5 transition-all active:scale-[0.99] ${
+                        className={`group text-left rounded-3xl border p-5 transition-[border-color,box-shadow,transform] active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none ${
                           active
                             ? "border-[#c2410d] bg-white shadow-md ring-2 ring-[#c2410d]/15"
                             : "border-[#dce4ec] bg-white shadow-sm hover:shadow-md hover:border-[#c2410d]/40"
                         }`}
                       >
                         <div className="flex items-start gap-4">
-                          <div className={`shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
+                          <div className={`shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center transition-[transform,opacity,box-shadow] ${
                             active
                               ? `bg-gradient-to-br ${CANVAS_GRADIENT} shadow-md scale-105`
                               : `bg-gradient-to-br ${CANVAS_GRADIENT} shadow-sm opacity-90 group-hover:opacity-100`
@@ -3883,7 +3869,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                           {/* Points right when closed, down when open — the
                               chevron says where the content is. */}
                           <ChevronRight
-                            className={`w-4 h-4 shrink-0 mt-1 transition-all duration-300 ${
+                            className={`w-4 h-4 shrink-0 mt-1 transition-[transform,color] duration-300 ${
                               active ? "rotate-90 text-[#c2410d]" : "text-[#c2d0da] group-hover:text-[#c2410d] group-hover:translate-x-0.5"
                             }`}
                           />
@@ -3913,7 +3899,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                         <button
                           key={`pin-${camp.id}`}
                           onClick={() => handleToggleCamp(camp.id)}
-                          className="group/pin relative text-left rounded-2xl border border-[#dce4ec] bg-white p-3.5 hover:border-[#c2410d]/40 hover:shadow-md transition-all"
+                          className="group/pin relative text-left rounded-2xl border border-[#dce4ec] bg-white p-3.5 hover:border-[#c2410d]/40 hover:shadow-md transition-[border-color,box-shadow] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                         >
                           <span
                             onClick={(e) => { e.stopPropagation(); togglePin(camp.id); }}
@@ -3960,7 +3946,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                         <button
                           key={`pin-folder-${folder.id}`}
                           onClick={() => setFocusFolder({ id: folder.id, n: Date.now() })}
-                          className="group/pin relative text-left rounded-2xl border border-[#dce4ec] bg-white p-3.5 hover:border-indigo-400/50 hover:shadow-md transition-all"
+                          className="group/pin relative text-left rounded-2xl border border-[#dce4ec] bg-white p-3.5 hover:border-[#c2410d]/50 hover:shadow-md transition-[border-color,box-shadow] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                         >
                           <span
                             onClick={(e) => { e.stopPropagation(); toggleNotePin(folder); }}
@@ -3970,7 +3956,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                             <Pin className="w-3.5 h-3.5 fill-current" />
                           </span>
                           <div className="flex items-center gap-3">
-                            <span className="relative w-10 h-10 rounded-xl shrink-0 shadow-sm flex items-center justify-center bg-gradient-to-br from-indigo-500 to-slate-700">
+                            <span className="relative w-10 h-10 rounded-xl shrink-0 shadow-sm flex items-center justify-center bg-gradient-to-br from-[#c2410d] to-[#9a3412]">
                               <FileText className="w-4 h-4 text-white/80" />
                             </span>
                             <div className="min-w-0 pr-5">
@@ -4103,7 +4089,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: "auto", opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+                      transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                       className="overflow-hidden"
                     >
                       {/* No repeat header here — the selected card above already
@@ -4187,12 +4173,12 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     const count = countryCount(country.id);
                     return (
                       <div key={country.id} className="relative group/c">
-                        <button onClick={() => openCountry(country.id)} className="w-full group relative rounded-xl overflow-hidden min-h-[104px] outline-none shadow-sm hover:shadow-lg hover:-translate-y-0.5 bg-gradient-to-br from-[#1b3a4b] to-[#12506e] flex flex-col items-center justify-center gap-2 px-2 py-3 transition-[transform,box-shadow] duration-300">
+                        <button onClick={() => openCountry(country.id)} className="w-full group relative rounded-xl overflow-hidden min-h-[104px] outline-none shadow-sm hover:shadow-lg hover:-translate-y-0.5 bg-gradient-to-br from-[#1b3a4b] to-[#12506e] flex flex-col items-center justify-center gap-2 px-2 py-3 transition-[transform,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none">
                           <span className="transition-transform duration-500 group-hover:scale-110"><CountryFlag flag={country.flag} imgClass="w-11 h-[30px]" textClass="text-3xl" /></span>
                           <p className="text-[11px] font-bold text-white text-center leading-tight line-clamp-2 px-0.5">{country.name}</p>
                           {count > 0 && <span className="absolute top-1.5 right-1.5 text-[9px] font-black bg-white/15 backdrop-blur-md text-white w-5 h-5 flex items-center justify-center rounded-full border border-white/25">{count}</span>}
                         </button>
-                        <button onClick={(e) => { e.stopPropagation(); togglePinCountry(country); }} title={country.pinned ? "Unpin" : "Pin"} className={`absolute top-1.5 left-1.5 p-1 rounded-lg transition-all ${country.pinned ? "text-amber-300 opacity-100" : "text-white/70 opacity-0 group-hover/c:opacity-100 hover:text-amber-300"}`}>
+                        <button onClick={(e) => { e.stopPropagation(); togglePinCountry(country); }} title={country.pinned ? "Unpin" : "Pin"} className={`absolute top-1.5 left-1.5 p-1 rounded-lg transition-[color,opacity] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none ${country.pinned ? "text-amber-300 opacity-100" : "text-white/70 opacity-0 group-hover/c:opacity-100 hover:text-amber-300"}`}>
                           <Star className={`w-4 h-4 ${country.pinned ? "fill-current" : ""}`} />
                         </button>
                       </div>
@@ -4202,7 +4188,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   const Row = (country) => {
                     const count = countryCount(country.id);
                     return (
-                      <div key={country.id} className="flex items-center gap-3 bg-white border border-[#dce4ec] rounded-xl pl-2.5 pr-2 py-2 shadow-sm hover:border-[#c2410d]/40 hover:shadow transition-all">
+                      <div key={country.id} className="flex items-center gap-3 bg-white border border-[#dce4ec] rounded-xl pl-2.5 pr-2 py-2 shadow-sm hover:border-[#c2410d]/40 hover:shadow transition-[border-color,box-shadow]">
                         <button onClick={(e) => { e.stopPropagation(); togglePinCountry(country); }} title={country.pinned ? "Unpin" : "Pin"} className={`shrink-0 p-1 rounded-lg transition-colors ${country.pinned ? "text-amber-400" : "text-slate-300 hover:text-amber-400"}`}>
                           <Star className={`w-4 h-4 ${country.pinned ? "fill-current" : ""}`} />
                         </button>
@@ -4415,7 +4401,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 {/* --- SEAMLESS SPLIT-PANE BODY --- */}
                 <div className="p-6 sm:p-8 flex flex-col lg:flex-row gap-6 flex-1 overflow-hidden">
                   {/* LEFT PANE: Notes & Context */}
-                  <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0 transition-all duration-500">
+                  <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
                     <div className="flex justify-between items-center mb-5 pb-4 border-b border-slate-100 shrink-0">
                       <h4 className="text-sm font-black text-[#122027] flex items-center gap-2">
                         <FileText className="w-5 h-5 text-[#c2410d]" /> Notes &
@@ -4527,7 +4513,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                     onClick={() =>
                                       handleSaveEdit(activeCamp.id, note.id)
                                     }
-                                    className="p-2 bg-[#1cc1a5] text-white rounded-xl hover:bg-[#15a38b] shadow-sm transition-all"
+                                    className="p-2 bg-[#1cc1a5] text-white rounded-xl hover:bg-[#15a38b] shadow-sm transition-[background-color] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                                   >
                                     <Check className="w-4 h-4" />
                                   </button>
@@ -4538,7 +4524,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                         noteId: null,
                                       })
                                     }
-                                    className="p-2 bg-slate-200 text-[#768994] rounded-xl hover:bg-slate-300 transition-all"
+                                    className="p-2 bg-slate-200 text-[#768994] rounded-xl hover:bg-slate-300 transition-[background-color] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                                   >
                                     <X className="w-4 h-4" />
                                   </button>
@@ -4550,8 +4536,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                               <div className="flex-1 min-w-0">
                                 {note.isAutoGenerated && (
                                   <div className="flex items-center gap-1.5 mb-2">
-                                    <Link2 className="w-3.5 h-3.5 text-indigo-500" />
-                                    <span className="text-[10px] font-black text-indigo-500 uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                                    <Link2 className="w-3.5 h-3.5 text-[#c2410d]" />
+                                    <span className="text-[10px] font-black text-[#c2410d] uppercase tracking-widest bg-[#c2410d]/5 px-2 py-0.5 rounded border border-[#c2410d]/20">
                                       Wrike Import
                                     </span>
                                   </div>
@@ -4588,8 +4574,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
 
                       {/* Inline Add Note Input */}
                       {addingNoteCampId === activeCamp.id && (
-                        <div className="flex flex-col gap-3 bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 animate-in fade-in slide-in-from-top-2">
-                          <div className="flex gap-1.5 border-b border-indigo-100 pb-2">
+                        <div className="flex flex-col gap-3 bg-[#c2410d]/5 p-4 rounded-2xl border border-[#c2410d]/20 animate-in fade-in slide-in-from-top-2">
+                          <div className="flex gap-1.5 border-b border-[#c2410d]/20 pb-2">
                             <button
                               onClick={() =>
                                 handleFormat(
@@ -4599,7 +4585,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                   "add-note-textarea"
                                 )
                               }
-                              className="p-1.5 hover:bg-indigo-100 rounded text-indigo-600 transition-colors"
+                              className="p-1.5 hover:bg-[#c2410d]/10 rounded text-[#c2410d] transition-colors focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                               title="Bold"
                             >
                               <Bold className="w-4 h-4" />
@@ -4613,7 +4599,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                   "add-note-textarea"
                                 )
                               }
-                              className="p-1.5 hover:bg-indigo-100 rounded text-indigo-600 transition-colors"
+                              className="p-1.5 hover:bg-[#c2410d]/10 rounded text-[#c2410d] transition-colors focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                               title="Italic"
                             >
                               <Italic className="w-4 h-4" />
@@ -4627,7 +4613,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                   "add-note-textarea"
                                 )
                               }
-                              className="p-1.5 hover:bg-indigo-100 rounded text-indigo-600 transition-colors"
+                              className="p-1.5 hover:bg-[#c2410d]/10 rounded text-[#c2410d] transition-colors focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                               title="Add Link"
                             >
                               <Link2 className="w-4 h-4" />
@@ -4640,7 +4626,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                               placeholder="Type your new note here... Highlight text and click the buttons above to format."
                               value={newNoteText}
                               onChange={(e) => setNewNoteText(e.target.value)}
-                              className="w-full text-sm text-[#122027] bg-transparent border-none resize-y min-h-[150px] outline-none focus:ring-0 p-0 placeholder:text-indigo-300 leading-relaxed custom-scrollbar"
+                              className="w-full text-sm text-[#122027] bg-transparent border-none resize-y min-h-[150px] outline-none focus:ring-0 p-0 placeholder:text-[#c2410d]/40 leading-relaxed custom-scrollbar"
                               rows="8"
                             />
                             <div className="flex flex-col gap-2 shrink-0">
@@ -4665,17 +4651,17 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
 
                   {/* RIGHT PANE: Folders (Pure CSS Flex-Basis Slide) */}
                   <div
-                    className={`transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-hidden flex flex-col ${
+                    className={`transition-[opacity,transform] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-hidden flex flex-col ${
                       showFoldersPanel
-                        ? "w-full lg:w-[420px] xl:w-[520px] max-h-[500px] lg:max-h-full opacity-100 mt-6 lg:mt-0 lg:ml-6"
-                        : "w-full lg:w-0 max-h-0 lg:max-h-full opacity-0 mt-0 lg:ml-0"
+                        ? "w-full lg:w-[420px] xl:w-[520px] max-h-[500px] lg:max-h-full opacity-100 translate-x-0 mt-6 lg:mt-0 lg:ml-6"
+                        : "w-full lg:w-0 max-h-0 lg:max-h-full opacity-0 lg:translate-x-6 mt-0 lg:ml-0"
                     }`}
                   >
                     {/* Inner rigid container prevents content squishing while the wrapper shrinks */}
                     <div className="w-full lg:w-[420px] xl:w-[520px] shrink-0 bg-slate-50 border border-[#dce4ec] rounded-2xl flex flex-col h-full shadow-inner min-h-[300px]">
                       <div className="p-4 border-b border-[#dce4ec] flex justify-between items-center bg-white shrink-0 rounded-t-2xl">
                         <div className="flex items-center gap-2.5">
-                          <div className="p-1.5 bg-indigo-100 text-indigo-600 rounded-lg">
+                          <div className="p-1.5 bg-[#c2410d]/10 text-[#c2410d] rounded-lg">
                             <Folder className="w-4 h-4" />
                           </div>
                           <h3 className="font-black text-[#122027]">
@@ -4703,14 +4689,14 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                             <React.Fragment key={link.id}>
                               {editingLink.campId === activeCamp.id &&
                               editingLink.linkId === link.id ? (
-                                <div className="group relative bg-white border border-indigo-300 rounded-xl p-3 flex flex-col gap-2 shadow-sm animate-in fade-in zoom-in-95 duration-200">
+                                <div className="group relative bg-white border border-[#c2410d]/30 rounded-xl p-3 flex flex-col gap-2 shadow-sm animate-in fade-in zoom-in-95 duration-200">
                                   <input
                                     type="text"
                                     value={editLinkTitle}
                                     onChange={(e) =>
                                       setEditLinkTitle(e.target.value)
                                     }
-                                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-lg px-2.5 py-1.5 text-xs font-bold text-[#122027] outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-lg px-2.5 py-1.5 text-xs font-bold text-[#122027] outline-none focus:border-[#c2410d] focus:ring-1 focus:ring-[#c2410d] transition-[border-color,box-shadow]"
                                     placeholder="Link Title"
                                   />
                                   <textarea
@@ -4718,7 +4704,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                     onChange={(e) =>
                                       setEditLinkUrl(e.target.value)
                                     }
-                                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-lg px-2.5 py-1.5 text-[10px] font-mono text-[#768994] outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all resize-y min-h-[60px] custom-scrollbar"
+                                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-lg px-2.5 py-1.5 text-[10px] font-mono text-[#768994] outline-none focus:border-[#c2410d] focus:ring-1 focus:ring-[#c2410d] transition-[border-color,box-shadow] resize-y min-h-[60px] custom-scrollbar"
                                     placeholder="URL / Path"
                                   />
                                   <div className="flex justify-end gap-2 mt-1">
@@ -4744,7 +4730,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                   </div>
                                 </div>
                               ) : (
-                                <div className="group relative bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-3 hover:border-indigo-300 hover:shadow-sm transition-all">
+                                <div className="group relative bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-3 hover:border-[#c2410d]/30 hover:shadow-sm transition-[border-color,box-shadow]">
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2 mb-1.5">
                                       {link.isAutoGenerated && (
@@ -4766,10 +4752,10 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                       onClick={() =>
                                         handleCopyLink(link.url, link.id)
                                       }
-                                      className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex-1 ${
+                                      className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-[background-color,color,box-shadow] flex-1 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none ${
                                         copiedLinkId === link.id
                                           ? "bg-emerald-500 text-white shadow-sm shadow-emerald-500/20"
-                                          : "bg-slate-100 text-[#323b43] hover:bg-indigo-50 hover:text-indigo-600"
+                                          : "bg-slate-100 text-[#323b43] hover:bg-[#c2410d]/5 hover:text-[#c2410d]"
                                       }`}
                                     >
                                       {copiedLinkId === link.id ? (
@@ -4790,7 +4776,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                       onClick={() =>
                                         startEditingLink(activeCamp.id, link)
                                       }
-                                      className="p-2 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                      className="p-2 text-slate-400 hover:text-[#c2410d] hover:bg-[#c2410d]/5 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                                       title="Edit Link"
                                     >
                                       <Edit2 className="w-4 h-4" />
@@ -4820,7 +4806,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                             value={newLinkTitle}
                             onChange={(e) => setNewLinkTitle(e.target.value)}
                             placeholder="Link or folder title..."
-                            className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                            className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-3 py-2 text-sm outline-none focus:border-[#c2410d] focus:ring-2 focus:ring-[#c2410d]/20 transition-[border-color,box-shadow]"
                           />
                           <div className="flex gap-2">
                             <input
@@ -4832,14 +4818,14 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                                   handleAddLink(activeCamp.id);
                               }}
                               placeholder="Paste URL..."
-                              className="flex-1 min-w-0 bg-slate-50 border border-[#dce4ec] rounded-xl px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono"
+                              className="flex-1 min-w-0 bg-slate-50 border border-[#dce4ec] rounded-xl px-3 py-2 text-sm outline-none focus:border-[#c2410d] focus:ring-2 focus:ring-[#c2410d]/20 transition-[border-color,box-shadow] font-mono"
                             />
                             <button
                               onClick={() => handleAddLink(activeCamp.id)}
                               disabled={
                                 !newLinkTitle.trim() || !newLinkUrl.trim()
                               }
-                              className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white p-2 rounded-xl transition-colors shadow-sm shrink-0 flex items-center justify-center"
+                              className="bg-[#c2410d] hover:bg-[#9a3412] disabled:bg-slate-300 text-white p-2 rounded-xl transition-colors shadow-sm shrink-0 flex items-center justify-center focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                             >
                               <Plus className="w-5 h-5" />
                             </button>
@@ -4858,7 +4844,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                         !activeCamp.matrices || activeCamp.matrices.length === 0
                       }
                       onClick={() => setSelectedMatrix(activeCamp.matrices[0])}
-                      className="flex-1 flex items-center justify-center gap-2 bg-[#c2410d] hover:bg-[#9a3412] text-white py-4 rounded-2xl text-sm font-black uppercase tracking-widest transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
+                      className="flex-1 flex items-center justify-center gap-2 bg-[#c2410d] hover:bg-[#9a3412] text-white py-4 rounded-2xl text-sm font-black uppercase tracking-widest transition-[background-color,box-shadow,transform] shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                     >
                       <FileText className="w-5 h-5" /> View Asset Matrix
                     </button>
@@ -4866,7 +4852,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       href={activeCamp.wrikeLink}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex-1 flex items-center justify-center gap-2 bg-[#122027] hover:bg-[#1a2d37] text-white py-4 rounded-2xl text-sm font-black uppercase tracking-widest transition-all shadow-md active:scale-95"
+                      className="flex-1 flex items-center justify-center gap-2 bg-[#122027] hover:bg-[#1a2d37] text-white py-4 rounded-2xl text-sm font-black uppercase tracking-widest transition-[background-color,box-shadow,transform] shadow-md active:scale-95 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                     >
                       <ExternalLink className="w-5 h-5" /> Open in Wrike
                     </a>
@@ -4877,13 +4863,13 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                           <span className="text-xs font-bold text-rose-600 whitespace-nowrap">Sure?</span>
                           <button
                             onClick={() => handleDeleteCampaign(activeCamp.id)}
-                            className="px-4 py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-sm font-black uppercase tracking-widest transition-all active:scale-95"
+                            className="px-4 py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-sm font-black uppercase tracking-widest transition-[background-color,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                           >
                             Yes, delete
                           </button>
                           <button
                             onClick={() => setDeletingCampId(null)}
-                            className="px-4 py-4 bg-slate-200 hover:bg-slate-300 text-[#122027] rounded-2xl text-sm font-black uppercase tracking-widest transition-all active:scale-95"
+                            className="px-4 py-4 bg-slate-200 hover:bg-slate-300 text-[#122027] rounded-2xl text-sm font-black uppercase tracking-widest transition-[background-color,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                           >
                             Cancel
                           </button>
@@ -4891,7 +4877,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                       ) : (
                         <button
                           onClick={() => setDeletingCampId(activeCamp.id)}
-                          className="flex items-center justify-center gap-2 px-5 py-4 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-2xl text-sm font-black uppercase tracking-widest transition-all active:scale-95 border border-rose-200"
+                          className="flex items-center justify-center gap-2 px-5 py-4 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-2xl text-sm font-black uppercase tracking-widest transition-[background-color,color,border-color,transform] active:scale-95 border border-rose-200 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                         >
                           <Trash2 className="w-4 h-4" /> Delete
                         </button>
@@ -4933,7 +4919,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                     autoFocus
                     value={newCampaignTitle}
                     onChange={(e) => setNewCampaignTitle(e.target.value)}
-                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 text-sm font-medium text-[#122027] focus:outline-none focus:border-[#c2410d] focus:ring-2 focus:ring-[#c2410d]/20 transition-all placeholder:text-slate-400"
+                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 text-sm font-medium text-[#122027] focus:outline-none focus:border-[#c2410d] focus:ring-2 focus:ring-[#c2410d]/20 transition-[border-color,box-shadow] placeholder:text-slate-400"
                     placeholder="e.g., Scary Movie 6..."
                   />
                 </div>
@@ -4944,7 +4930,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   <input
                     value={newCampaignLink}
                     onChange={(e) => setNewCampaignLink(e.target.value)}
-                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 text-sm font-medium text-[#122027] focus:outline-none focus:border-[#c2410d] focus:ring-2 focus:ring-[#c2410d]/20 transition-all placeholder:text-slate-400"
+                    className="w-full bg-slate-50 border border-[#dce4ec] rounded-xl px-4 py-3 text-sm font-medium text-[#122027] focus:outline-none focus:border-[#c2410d] focus:ring-2 focus:ring-[#c2410d]/20 transition-[border-color,box-shadow] placeholder:text-slate-400"
                     placeholder="Paste Wrike URL here..."
                   />
                 </div>
@@ -4958,7 +4944,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 </button>
                 <button
                   onClick={handleSaveNewCampaign}
-                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md hover:shadow-[#c2410d]/20 transition-all active:scale-95"
+                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md hover:shadow-[#c2410d]/20 transition-[background-color,box-shadow,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                 >
                   Save Campaign
                 </button>
@@ -5015,7 +5001,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 <button
                   onClick={handleAddCountry}
                   disabled={!newCountryName.trim()}
-                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md transition-all active:scale-95"
+                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md transition-[background-color,box-shadow,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                 >
                   Add Country
                 </button>
@@ -5066,7 +5052,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 <button
                   onClick={handleAddFolder}
                   disabled={!newFolderName.trim()}
-                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md transition-all active:scale-95"
+                  className="px-6 py-2.5 bg-[#c2410d] hover:bg-[#9a3412] disabled:opacity-50 text-white text-xs font-black uppercase tracking-widest rounded-xl shadow-md transition-[background-color,box-shadow,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none"
                 >
                   Create Folder
                 </button>

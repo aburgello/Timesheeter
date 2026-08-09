@@ -113,7 +113,7 @@ const PAGE_VARIANTS = {
   animate: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.25, ease: [0.25, 0.1, 0.25, 1] },
+    transition: { duration: 0.25, ease: [0.16, 1, 0.3, 1] },
   },
   exit: (viaWash) =>
     viaWash
@@ -121,7 +121,7 @@ const PAGE_VARIANTS = {
       : {
           opacity: 0,
           y: -12,
-          transition: { duration: 0.25, ease: [0.25, 0.1, 0.25, 1] },
+          transition: { duration: 0.25, ease: [0.16, 1, 0.3, 1] },
         },
 };
 
@@ -663,7 +663,7 @@ export default function App() {
                     localStorage.setItem("xyi_onboarded", "1");
                     startWrikeOAuth();
                   }}
-                  className="flex-1 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-sm font-black py-3 rounded-xl transition-all shadow-sm"
+                  className="flex-1 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-sm font-black py-3 rounded-xl transition-colors shadow-sm"
                 >
                   Connect to Wrike →
                 </button>
@@ -672,7 +672,7 @@ export default function App() {
                     setShowOnboarding(false);
                     localStorage.setItem("xyi_onboarded", "1");
                   }}
-                  className="px-4 py-3 text-sm font-bold text-[#768994] hover:text-[#122027] rounded-xl hover:bg-slate-50 transition-all border border-[#dce4ec]"
+                  className="px-4 py-3 text-sm font-bold text-[#768994] hover:text-[#122027] rounded-xl hover:bg-slate-50 transition-colors border border-[#dce4ec]"
                 >
                   Skip
                 </button>
@@ -715,13 +715,13 @@ export default function App() {
                   setActivePage("timesheet");
                   dismissReminder();
                 }}
-                className="flex-1 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-xs font-black py-2 rounded-xl transition-all"
+                className="flex-1 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-xs font-black py-2 rounded-xl transition-colors"
               >
                 Go to Timesheeter
               </button>
               <button
                 onClick={dismissReminder}
-                className="px-3 text-xs font-bold text-[#768994] hover:bg-slate-50 rounded-xl border border-[#dce4ec] transition-all"
+                className="px-3 text-xs font-bold text-[#768994] hover:bg-slate-50 rounded-xl border border-[#dce4ec] transition-colors"
               >
                 Dismiss
               </button>
@@ -734,7 +734,7 @@ export default function App() {
       {isAdmin && (
         <button
           onClick={() => setShowAdmin(true)}
-          className="fixed bottom-6 left-24 z-[9997] flex items-center gap-2 bg-[#122027] hover:bg-[#1a2f3a] text-white text-xs font-black px-3 py-2.5 rounded-xl shadow-lg transition-all"
+          className="fixed bottom-6 left-24 z-[9997] flex items-center gap-2 bg-[#122027] hover:bg-[#1a2f3a] text-white text-xs font-black px-3 py-2.5 rounded-xl shadow-lg transition-colors"
         >
           <Shield className="w-3.5 h-3.5" /> Admin
         </button>

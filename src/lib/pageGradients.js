@@ -6,7 +6,7 @@ export const PAGE_GRADIENTS = {
   timesheet: "from-[#12a0e1] to-[#1cc1a5]",
   todayslist: "from-violet-500 to-purple-600",
   canvas: "from-amber-600 to-orange-700",
-  legacy: "from-slate-500 to-slate-700",
+  legacy: "from-[#12a0e1] to-[#1cc1a5]",
   profile: "from-sky-600 to-blue-600",
   management: "from-[#122027] to-[#12a0e1]",
   jobbook: "from-teal-600 to-emerald-700",

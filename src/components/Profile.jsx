@@ -16,6 +16,7 @@ import {
   Activity,
   Layers,
   ChevronLeft,
+  ChevronRight,
   Key,
   Settings,
   Check,
@@ -144,7 +145,11 @@ const prefersReducedMotion = () =>
 // one that was already sitting there just keeps its already-settled state.
 function useCascadeRefs() {
   const cache = useRef(new Map());
-  return useCallback((id, index) => {
+  // `base` lets a caller delay a whole group of items so they arrive AFTER
+  // their parent — History's day cards cascade in (80ms apart), and each
+  // card's ledger rows hold until that card has landed, so the two levels
+  // read as one sequence instead of fighting.
+  return useCallback((id, index, base = 0) => {
     if (cache.current.has(id)) return cache.current.get(id);
     const ref = (node) => {
       if (!node || prefersReducedMotion()) return;
@@ -156,11 +161,42 @@ function useCascadeRefs() {
           opacity: 1,
           duration: 0.28,
           ease: "power2.out",
-          delay: index * 0.025,
+          delay: base + index * 0.025,
           // Once settled, hand the properties back to CSS entirely — a
           // matrix-dimmed WrikeTaskCard has its own opacity-70 class, which
           // GSAP's inline opacity:1 would otherwise permanently shadow.
           clearProps: "opacity,transform",
+        }
+      );
+    };
+    cache.current.set(id, ref);
+    return ref;
+  }, []);
+}
+
+// The day-group header's one signature moment: the date tile's number locks
+// in with the same fade-up-deblur arrival the Analytics KPI tiles use (see
+// kpiRise in tailwind.config.js), so the section's focal point gets a crafted
+// pop without importing a new motion language. Same memoised-per-id ref
+// callback discipline as useCascadeRefs — fires once on a genuine mount,
+// never replays on an unrelated re-render.
+function useTileRevealRefs() {
+  const cache = useRef(new Map());
+  return useCallback((id, delay = 0) => {
+    if (cache.current.has(id)) return cache.current.get(id);
+    const ref = (node) => {
+      if (!node || prefersReducedMotion()) return;
+      gsap.fromTo(
+        node,
+        { scale: 0.88, opacity: 0, filter: "blur(6px)" },
+        {
+          scale: 1,
+          opacity: 1,
+          filter: "blur(0px)",
+          duration: 0.4,
+          ease: "power3.out",
+          delay,
+          clearProps: "opacity,transform,filter",
         }
       );
     };
@@ -311,9 +347,11 @@ function Empty({ icon: Icon, message }) {
 // decorations in three unrelated hues, which is exactly what the rule was
 // written to prevent.
 //
-// `interactive` drives the gradient sweep. Rows that actually go somewhere get
-// HubRow's wash; rows that don't get a quiet tint instead, because a sweep that
-// promises navigation and delivers nothing is worse than no hover.
+// `interactive` drives the gradient sweep — rows that actually go somewhere get
+// HubRow's wash on hover. `wash` opts a non-interactive row into the same sweep
+// as a pure hover accent (History's ledger rows): the row isn't clickable, so
+// the sweep is decoration that unifies the section with the job cards rather
+// than a navigation affordance. Rows with neither get a quiet tint instead.
 //
 // Deeper gradient stops than HubRow's own: those are tuned for white type at
 // display size (3:1), and these rows are 15px, which is normal text needing
@@ -342,8 +380,9 @@ function Empty({ icon: Icon, message }) {
 // row. A zero-height flex item has no baseline of its own, so the spec aligns it
 // by its bottom edge — which lands the rule exactly on the baseline with no
 // magic offset.
-function TaskRow({ dimmed, onClick, cascadeRef, align = "center", children }) {
+function TaskRow({ dimmed, onClick, cascadeRef, align = "center", wash = false, children }) {
   const interactive = !!onClick;
+  const showWash = interactive || wash;
   return (
     <div
       ref={cascadeRef}
@@ -358,7 +397,7 @@ function TaskRow({ dimmed, onClick, cascadeRef, align = "center", children }) {
           : "transition-colors duration-300 hover:bg-slate-50/80"
       }`}
     >
-      {interactive && (
+      {showWash && (
         <div className="absolute inset-0 bg-gradient-to-r from-[#12a0e1] to-[#1cc1a5] origin-left scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-out" />
       )}
       {children}
@@ -476,6 +515,20 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
   // attachment uses (Artwork/Campaign/Size/Duration/Country columns).
   const [csvOpen, setCsvOpen] = useState(false);
   const getCascadeRef = useCascadeRefs();
+  const getTileReveal = useTileRevealRefs();
+
+  // Which campaigns the user has collapsed, keyed by campaign name — the same
+  // accordion behaviour History's day groups got. Defaults open; the set only
+  // lives for the section's lifetime, so a revisit starts expanded again.
+  const [collapsed, setCollapsed] = useState(() => new Set());
+  const toggleCampaign = useCallback((campaign) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(campaign)) next.delete(campaign);
+      else next.add(campaign);
+      return next;
+    });
+  }, []);
 
   const handlePickPdf = useCallback(async (file) => {
     if (!file) return;
@@ -776,12 +829,22 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
       {/* Each campaign is its own bordered/shadowed white card — the same
           separation PeopleSection gives each department group — instead of
           all campaigns sharing one flat, unbroken column. */}
-      {sortedCampaigns.map((campaign) => (
-        <div key={campaign} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
+      {sortedCampaigns.map((campaign, cardIndex) => {
+        const isCollapsed = collapsed.has(campaign);
+        return (
+        <div key={campaign} ref={getCascadeRef(campaign, 0, cardIndex * 0.08)} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
           {/* Gradient icon chip = the same identity the Active Jobs HubRow uses
               to get here, so the teal/cyan thread survives the drill-in. */}
-          <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[#dce4ec] bg-white">
-            <span className="w-7 h-7 rounded-xl bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center shrink-0">
+          <button
+            type="button"
+            onClick={() => toggleCampaign(campaign)}
+            aria-expanded={!isCollapsed}
+            aria-controls={`campaign-rows-${cardIndex}`}
+            className="group/head w-full flex items-center gap-2.5 px-4 py-3 border-b border-[#dce4ec] bg-white text-left cursor-pointer focus:outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[#12a0e1]/25 transition-colors duration-300 hover:bg-slate-50/70"
+          >
+            {/* The gradient chip pops in with the same deblur accent History's
+                date tile uses — the one signature moment per card. */}
+            <span ref={getTileReveal(campaign, cardIndex * 0.08 + 0.12)} className="w-7 h-7 rounded-xl bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center shrink-0">
               <Film className="w-3.5 h-3.5" />
             </span>
             <span className="font-display font-bold tracking-tight text-[#122027] text-sm truncate">
@@ -791,23 +854,40 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
               {grouped[campaign].length}{" "}
               {grouped[campaign].length === 1 ? "job" : "jobs"}
             </span>
-          </div>
+            <ChevronRight
+              className={`w-4 h-4 shrink-0 text-[#768994] transition-[color,transform] duration-300 group-hover/head:text-[#122027] ${
+                isCollapsed ? "" : "rotate-90"
+              }`}
+            />
+          </button>
           {/* Faint tint so the white job cards read as cards, not as one flat
               column — the app's usual "white cards float on a tint" pattern,
-              which the old grey-cards-on-white had backwards. */}
-          <div className="p-2.5 space-y-1.5 bg-slate-50/50">
-            {grouped[campaign].map((task, i) => (
-              <WrikeTaskCard
-                key={task.id}
-                task={task}
-                filter={filter}
-                cascadeRef={getCascadeRef(task.id, i)}
-                onClick={() => setSelectedTask({ ...task, tag: task.customStatusName || task.tag || task.status })}
-              />
-            ))}
+              which the old grey-cards-on-white had backwards. Collapsing rides
+              the same 0fr→1fr grid track History's day groups use, snapping
+              instantly under reduced motion. */}
+          <div
+            id={`campaign-rows-${cardIndex}`}
+            className={`grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
+              isCollapsed ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+            }`}
+          >
+            <div className="overflow-hidden min-h-0">
+              <div className="p-2.5 space-y-1.5 bg-slate-50/50">
+                {grouped[campaign].map((task, i) => (
+                  <WrikeTaskCard
+                    key={task.id}
+                    task={task}
+                    filter={filter}
+                    cascadeRef={getCascadeRef(task.id, i, (cardIndex + 1) * 0.08)}
+                    onClick={() => setSelectedTask({ ...task, tag: task.customStatusName || task.tag || task.status })}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       <TaskDetailModal
         task={selectedTask}
@@ -1170,11 +1250,44 @@ function toIsoDate(d) {
   return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
 }
 
+// The inverse of toIsoDate — render a Date as "yyyy-mm-dd", the same shape a
+// day group's key is normalised to, so a header can match against
+// today/yesterday for its relative label.
+function isoKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function HistorySection({ tasks }) {
   const [dayFilter, setDayFilter] = useState("all");
   const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
   const totalSecs = (t) => (t.rawSeconds ?? 0) + (t.additionalSeconds ?? 0);
   const getCascadeRef = useCascadeRefs();
+  const getTileReveal = useTileRevealRefs();
+
+  // Which day groups the user has collapsed, keyed by the group's ISO date
+  // (or "Unknown"). Starts empty — every group open — because collapsing is
+  // an act of dismissal, not the default view. The set only lives for the
+  // section's lifetime; a reload starts fully expanded again.
+  const [collapsed, setCollapsed] = useState(() => new Set());
+  const toggleDay = useCallback((dayKey) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(dayKey)) next.delete(dayKey);
+      else next.add(dayKey);
+      return next;
+    });
+  }, []);
+
+  // Today / yesterday in ISO — the day-group headers compare their key
+  // against these to label the two most recent groups relative to now,
+  // which is the one hierarchy cue the flat list was missing.
+  const todayKey = isoKey(new Date());
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = isoKey(yesterday);
 
   const filtered = useMemo(
     () =>
@@ -1218,7 +1331,7 @@ function HistorySection({ tasks }) {
                 <button
                   key={d}
                   onClick={() => setDayFilter(d)}
-                  className={`text-[10px] font-black px-2.5 py-1 rounded-lg transition-all uppercase tracking-wider ${
+                  className={`text-[10px] font-black px-2.5 py-1 rounded-lg transition-[color,background-color,box-shadow] uppercase tracking-wider ${
                     isActive
                       ? dc
                         ? `bg-white shadow-sm ${dc.text}`
@@ -1238,88 +1351,119 @@ function HistorySection({ tasks }) {
         <Empty icon={Clock} message="No entries for this day." />
       ) : (
         <div className="space-y-5">
-          {grouped.order.map((dayKey) => {
+          {grouped.order.map((dayKey, cardIndex) => {
             const rows = grouped.map[dayKey];
             const groupTotal = rows.reduce((s, t) => s + totalSecs(t), 0);
+            const isCollapsed = collapsed.has(dayKey);
             // dayKey is now an ISO date (or "Unknown") so different weeks'
             // Mondays no longer collide — derive the weekday name/colour
             // from the group's own rows and label the header with the
             // actual date, so which week each group belongs to is explicit.
             const weekdayName = rows[0]?.dayOfWeek || "Unknown";
             const dc = DAY_COLORS[weekdayName] || DEFAULT_DAY;
-            // Split into parts rather than one formatted string, because the
-            // header sets them at three different sizes now.
-            const dateObj = dayKey !== "Unknown" ? new Date(`${dayKey}T00:00:00`) : null;
-            const dayNum = dateObj?.toLocaleDateString(undefined, { day: "numeric" }) ?? null;
-            const monthAbbr = dateObj?.toLocaleDateString(undefined, { month: "short" }) ?? null;
-            const yearLabel = dateObj?.getFullYear() ?? null;
+            // The tile needs the day number + month; today and yesterday also
+            // get a relative label so a group's recency reads at a glance
+            // instead of the reader doing the date math.
+            const isToday = dayKey === todayKey;
+            const isYesterday = dayKey === yesterdayKey;
+            const dayDate =
+              dayKey !== "Unknown" ? new Date(`${dayKey}T00:00:00`) : null;
+            const dayNum = dayDate?.getDate();
+            const monthAbbrev = dayDate
+              ? dayDate
+                  .toLocaleDateString(undefined, { month: "short" })
+                  .toUpperCase()
+              : null;
             return (
               // Same "each group is its own bordered/shadowed white card"
               // treatment as Completed's per-campaign cards (JobsSection),
               // just grouped by day instead of by campaign.
-              <div key={dayKey} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
-                {/* A day is a date, so the date is the graphic element: the day
-                    of the month set large, the way a diary or a tear-off
-                    calendar does it, with the weekday as the actual heading
-                    beside it. What was here before was a 28px clock chip and a
-                    14px label — the same header five times over with one hue
-                    swapped, and a heading smaller than the rows beneath it.
-                    The clock is gone because everything in this card is time;
-                    an icon repeating the container tells you nothing.
+              <div key={dayKey} ref={getCascadeRef(dayKey, 0, cardIndex * 0.08)} className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
+                {/* Day group header — a calendar date tile instead of the
+                    campaign card's generic icon chip. The day's number anchors
+                    each header (so no two groups read alike), the weekday keeps
+                    its hue, and today / yesterday get a relative label for
+                    hierarchy. Groups whose date couldn't be parsed fall back to
+                    a plain Clock chip. */}
+                <button
+                  type="button"
+                  onClick={() => toggleDay(dayKey)}
+                  aria-expanded={!isCollapsed}
+                  aria-controls={`day-rows-${dayKey}`}
+                  className="group/head w-full flex items-center gap-3 px-4 py-3 border-b border-[#dce4ec] bg-white text-left cursor-pointer focus:outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[#12a0e1]/25 transition-colors duration-300 hover:bg-slate-50/70"
+                >
+                  {dayKey !== "Unknown" ? (
+                    <>
+                      <div ref={getTileReveal(dayKey, cardIndex * 0.08 + 0.12)} className={`shrink-0 w-10 h-10 rounded-xl flex flex-col items-center justify-center leading-none ${dc.pill}`}>
+                        <span className="font-display text-[16px] font-bold tracking-[-0.02em]">
+                          {dayNum}
+                        </span>
+                        <span className="mt-0.5 text-[10px] font-black uppercase tracking-[0.12em] opacity-90">
+                          {monthAbbrev}
+                        </span>
+                      </div>
 
-                    The day's colour moves onto the numeral, which is where it
-                    can legally live: violet/sky/teal/amber/rose measure
-                    5.70 / 4.10 / 3.74 / 3.19 / 4.70 against white, so three of
-                    the five fail AA as body text but all five clear the 3:1
-                    large-text bar at 32px bold. Big is what makes the colour
-                    usable, not just prettier.
-
-                    Baseline-aligned, and it carries the same dotted leader the
-                    rows do, so the header reads as the top line of the ledger
-                    rather than a lid on a box. */}
-                <div className="flex items-baseline gap-3 sm:gap-4 px-4 py-4 border-b border-[#dce4ec] bg-white">
-                  {dayNum && (
-                    <div className="shrink-0 flex items-baseline gap-1.5">
-                      <span className={`font-display text-[28px] sm:text-[32px] font-bold leading-none tracking-[-0.05em] tabular-nums ${dc.text}`}>
-                        {dayNum}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-display font-bold tracking-tight text-[#122027] text-sm truncate">
+                            {weekdayName}
+                          </span>
+                          <span className="bg-slate-50 text-[#768994] px-2 py-0.5 rounded-full text-[10px] font-bold border border-[#dce4ec] shrink-0">
+                            {formatDurationText(groupTotal)} · {rows.length}{" "}
+                            {rows.length === 1 ? "row" : "rows"}
+                          </span>
+                        </div>
+                        {/* Older dates stay single-line — the tile already
+                            carries the day and month, so a repeated date
+                            beneath would just be noise. Today / Yesterday are
+                            the only genuinely new information worth a second
+                            line. */}
+                        {(isToday || isYesterday) && (
+                          <p className={`mt-0.5 text-[10px] font-black uppercase tracking-wider ${
+                            isToday ? "text-teal-600" : "text-[#768994]"
+                          }`}>
+                            {isToday ? "Today" : "Yesterday"}
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${dc.pill}`}>
+                        <Clock className="w-3.5 h-3.5" />
                       </span>
-                      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-[#768994]">
-                        {monthAbbr}
+                      <span className="font-display font-bold tracking-tight text-[#122027] text-sm truncate">
+                        {weekdayName}
                       </span>
-                    </div>
+                      <span className="ml-auto bg-slate-50 text-[#768994] px-2 py-0.5 rounded-full text-[10px] font-bold border border-[#dce4ec] shrink-0">
+                        {formatDurationText(groupTotal)} · {rows.length}{" "}
+                        {rows.length === 1 ? "row" : "rows"}
+                      </span>
+                    </>
                   )}
-
-                  <h3 className="font-display text-[19px] font-bold tracking-tight leading-none text-[#122027] truncate shrink-0">
-                    {weekdayName}
-                  </h3>
-                  {yearLabel && (
-                    <span className="hidden md:inline text-[10px] font-black uppercase tracking-[0.16em] text-[#b0bec5] shrink-0">
-                      {yearLabel}
-                    </span>
-                  )}
-
-                  <span
-                    aria-hidden="true"
-                    className="hidden sm:block flex-1 min-w-[1.5rem] border-b border-dotted border-[#cbd5e1]"
+                  <ChevronRight
+                    className={`w-4 h-4 shrink-0 text-[#768994] transition-[color,transform] duration-300 group-hover/head:text-[#122027] ${
+                      isCollapsed ? "" : "rotate-90"
+                    }`}
                   />
-
-                  {/* The day's total, set like the row figures it sums. */}
-                  <div className="shrink-0 text-right leading-none">
-                    <p className="font-display text-[19px] font-bold tracking-[-0.02em] tabular-nums text-[#0f766e]">
-                      {formatDurationText(groupTotal)}
-                    </p>
-                    <p className="mt-1.5 text-[10px] font-semibold text-[#768994] tabular-nums">
-                      {rows.length} {rows.length === 1 ? "entry" : "entries"}
-                    </p>
-                  </div>
-                </div>
+                </button>
 
                 {/* Faint tint so the white rows read as cards, same as the
-                    campaign cards' job-list body. */}
-                <div className="p-2.5 space-y-1.5 bg-slate-50/50">
+                    campaign cards' job-list body. Collapsing rides the grid
+                    track: 0fr→1fr collapses/expands the rows' height with no
+                    JS measurement, and the rows fade as they clip. Snaps
+                    instantly under reduced motion. */}
+                <div
+                  id={`day-rows-${dayKey}`}
+                  className={`grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
+                    isCollapsed ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+                  }`}
+                >
+                  <div className="overflow-hidden min-h-0">
+                    <div className="p-2.5 space-y-1.5 bg-slate-50/50">
                   {rows.map((t, i) => {
                     return (
-                      <TaskRow key={t.id} align="baseline" cascadeRef={getCascadeRef(t.id, i)}>
+                      <TaskRow key={t.id} align="baseline" wash cascadeRef={getCascadeRef(t.id, i, (cardIndex + 1) * 0.08)}>
                         {/* A timesheet entry is a ledger line: a label on the
                             left, a figure on the right, and a leader binding
                             them. Setting it as one — job number, then quiet
@@ -1332,20 +1476,20 @@ function HistorySection({ tasks }) {
                             Baseline-aligned rather than centred, so the leader
                             sits on the type's baseline the way it does in a
                             printed table of contents. */}
-                        <p className="relative z-10 shrink-0 font-display font-bold tracking-tight leading-none text-[17px] text-[#122027]">
+                        <p className="relative z-10 shrink-0 font-display font-bold tracking-tight leading-none text-[17px] text-[#122027] transition-colors duration-300 group-hover:text-white">
                           {t.jobNumber || "Unknown job"}
                         </p>
 
-                        <div className="relative z-10 hidden sm:flex items-baseline gap-2 min-w-0 text-[11px] font-semibold text-[#768994] whitespace-nowrap">
+                        <div className="relative z-10 hidden sm:flex items-baseline gap-2 min-w-0 text-[11px] font-semibold text-[#768994] whitespace-nowrap transition-colors duration-300 group-hover:text-white/85">
                           {t.territory && (
                             <span className="shrink-0">
                               {territoryFlags(t.territory, 4) || "🌍"} {t.territory}
                             </span>
                           )}
-                          {t.territory && t.category && <span className="text-[#dce4ec]">·</span>}
+                          {t.territory && t.category && <span className="text-[#dce4ec] transition-colors duration-300 group-hover:text-white/40">·</span>}
                           {t.category && <span className="shrink-0">{t.category}</span>}
                           {t.notes && (t.territory || t.category) && (
-                            <span className="text-[#dce4ec]">·</span>
+                            <span className="text-[#dce4ec] transition-colors duration-300 group-hover:text-white/40">·</span>
                           )}
                           {t.notes && <span className="truncate font-normal">{t.notes}</span>}
                         </div>
@@ -1357,7 +1501,7 @@ function HistorySection({ tasks }) {
                             metadata on mobile, where there is no gap to span. */}
                         <span
                           aria-hidden="true"
-                          className="relative z-10 hidden sm:block flex-1 min-w-[1.5rem] border-b border-dotted border-[#cbd5e1] transition-colors duration-300 group-hover:border-[#94a3b8]"
+                          className="relative z-10 hidden sm:block flex-1 min-w-[1.5rem] border-b border-dotted border-[#cbd5e1] transition-colors duration-300 group-hover:border-white/40"
                         />
 
                         {/* The figure the whole row exists to report, set like
@@ -1365,11 +1509,11 @@ function HistorySection({ tasks }) {
                             colour in the row. Supplementary time rides beneath
                             it as a muted note rather than in a hue of its own. */}
                         <p className="relative z-10 shrink-0 text-right leading-none">
-                          <span className="font-display text-[19px] font-bold tracking-[-0.02em] tabular-nums text-[#0f766e]">
+                          <span className="font-display text-[19px] font-bold tracking-[-0.02em] tabular-nums text-[#0f766e] transition-colors duration-300 group-hover:text-white">
                             {formatDurationText(totalSecs(t))}
                           </span>
                           {(t.additionalSeconds ?? 0) > 0 && (
-                            <span className="block mt-1 text-[10px] font-semibold text-[#768994] tabular-nums">
+                            <span className="block mt-1 text-[10px] font-semibold text-[#768994] tabular-nums transition-colors duration-300 group-hover:text-white/85">
                               incl. +{formatDurationText(t.additionalSeconds)}
                             </span>
                           )}
@@ -1377,6 +1521,8 @@ function HistorySection({ tasks }) {
                       </TaskRow>
                     );
                   })}
+                    </div>
+                  </div>
                 </div>
               </div>
             );
@@ -1627,7 +1773,7 @@ function SettingsSection({ onSave }) {
             <button
               onClick={handleDisconnect}
               disabled={disconnecting}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold text-red-500 hover:bg-red-50 border border-red-200 transition-all disabled:opacity-40"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold text-red-500 hover:bg-red-50 border border-red-200 transition-colors disabled:opacity-40"
             >
               <LogOut className="w-4 h-4" />
               {disconnecting ? "Disconnecting…" : "Disconnect Wrike"}
@@ -1635,7 +1781,7 @@ function SettingsSection({ onSave }) {
           ) : (
             <button
               onClick={startWrikeOAuth}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-sm transition-all"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-sm transition-colors"
             >
               <ExternalLink className="w-4 h-4" /> Connect to Wrike
             </button>
@@ -1666,8 +1812,8 @@ function SettingsSection({ onSave }) {
             }`}
           >
             <span
-              className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow-sm flex items-center justify-center transition-all ${
-                dark ? "left-6" : "left-1"
+              className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow-sm flex items-center justify-center transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                dark ? "translate-x-5" : "translate-x-0"
               }`}
             >
               {dark ? (
@@ -1854,7 +2000,7 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
             </div>
             <button
               onClick={() => setActiveSection("settings")}
-              className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all shrink-0 shadow-sm"
+              className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors shrink-0 shadow-sm"
             >
               <Key className="w-3.5 h-3.5" /> Connect
             </button>
@@ -1923,7 +2069,7 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
             <div className="flex items-center gap-3 mb-4">
               <button
                 onClick={() => setActiveSection(null)}
-                className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-all"
+                className="flex items-center gap-1.5 text-xs font-bold text-[#768994] hover:text-[#122027] bg-white border border-[#dce4ec] hover:border-slate-300 rounded-xl px-3 py-2 shadow-sm transition-colors"
               >
                 <ChevronLeft className="w-4 h-4" /> Hub
               </button>

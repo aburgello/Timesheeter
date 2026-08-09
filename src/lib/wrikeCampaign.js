@@ -387,6 +387,43 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   return out;
 }
 
+// Do two job descriptions describe the same job?
+//
+// Used by the Job Book reconciliation to tell "this row was filed against a
+// different job" from "this row is worded differently", which look identical
+// to a string compare and could not matter more: the first is bad data, the
+// second is every row.
+//
+// Deliberately loose, in two ways:
+//
+//   • Punctuation, underscores and case are dropped. The same description
+//     arrives as "French_Canada_Assets" from a folder title and "French Canada
+//     Assets" once reassembled.
+//   • Containment counts as agreement, because the two sides legitimately
+//     carry different amounts of the same information. scanStudioJobNumbers
+//     prefixes the region the way the timesheet site writes it ("INT - French
+//     Canada Assets"); a description read straight off the folder at pull time
+//     has no region to prefix. Neither is wrong, and demanding equality would
+//     propose a rewrite for essentially every row in the book.
+//
+// Containment errs toward saying "these agree", so a short description that
+// happens to sit inside a longer one is missed rather than falsely rewritten.
+// That is the right direction to be wrong in: a missed correction costs a
+// scruffy label, a false one overwrites a description somebody chose.
+const descKey = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+export function descriptionsAgree(a, b) {
+  const x = descKey(a);
+  const y = descKey(b);
+  // An empty side is "we don't know", never "we disagree".
+  if (!x || !y) return true;
+  return x === y || x.includes(y) || y.includes(x);
+}
+
 // Count JOBNUMBER folders anywhere beneath a node — used to score master-template
 // candidates (the real, populated template has the most).
 function countJobNumberFolders(byId, rootId, seen = new Set()) {
@@ -762,6 +799,18 @@ export function slotSuffix(title) {
 // Map every job-slot folder under a root by its suffix. Rename-resilient: it
 // matches a folder whether it's still "JOBNUMBER_…" or already renamed to
 // "XY#####_…", so re-pushing/reconciling finds the same folder every time.
+//
+// Returns an ARRAY per suffix, because a suffix does not identify a folder.
+// The Job Book deliberately allows one template slot to hold several jobs
+// (activateSlot stages another job of the same type on purpose), and each of
+// those needs its own folder — so "French_Canada_Assets" can legitimately name
+// both XY026047_French_Canada_Assets and XY026048_French_Canada_Assets.
+//
+// This used to be a plain assignment keyed on the suffix, which meant the
+// second folder silently overwrote the first and only one survived — whichever
+// the walk happened to reach last, i.e. dependent on the order Wrike returns
+// childIds. Combined with a rename that trusted the map, one job could be
+// handed another job's folder and rename it onto its own code.
 export async function mapSlotFoldersUnder(rootId) {
   const byId = await fetchAllFolders();
   const out = {};
@@ -769,12 +818,32 @@ export async function mapSlotFoldersUnder(rootId) {
     const node = byId[id];
     if (!node) return;
     if (/^(JOBNUMBER|XY\d+)_/i.test(node.title)) {
-      out[slotSuffix(node.title)] = { id: node.id, title: node.title };
+      (out[slotSuffix(node.title)] ||= []).push({ id: node.id, title: node.title });
     }
     (node.childIds || []).forEach(walk);
   };
   walk(rootId);
   return out;
+}
+
+// Which of a slot's folders belongs to this job.
+//
+//   1. A folder already carrying this job's own code — the re-push case.
+//      Matching it makes a repeat push a no-op instead of a rename.
+//   2. Otherwise an unclaimed folder still named "JOBNUMBER_…", i.e. a genuinely
+//      free slot.
+//
+// A folder already carrying a DIFFERENT job's code is never returned. That is
+// the whole point: it is somebody else's folder, and renaming it onto this code
+// destroys their allocation while leaving two folders answering to one code.
+// Returning null instead lets the caller report the job as needing a folder,
+// which is recoverable, rather than silently trading one job's work for
+// another's.
+export function pickSlotFolder(folders, code, claimedIds = new Set()) {
+  const list = folders || [];
+  const mine = list.find((f) => new RegExp(`^${code}_`, "i").test(f.title || ""));
+  if (mine) return mine;
+  return list.find((f) => !claimedIds.has(f.id) && !/^XY\d+_/i.test(f.title || "")) || null;
 }
 
 // Rename a folder (used to stamp the job code onto a JOBNUMBER_ slot folder).

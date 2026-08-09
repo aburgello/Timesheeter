@@ -23,7 +23,7 @@ export default function DeleteModal({ itemToDelete, setItemToDelete, executeDele
           </button>
           <button
             onClick={executeDelete}
-            className="px-5 py-2.5 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm shadow-rose-600/20 transition-all active:scale-95"
+            className="px-5 py-2.5 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm shadow-rose-600/20 transition-[background-color,transform] active:scale-95"
           >
             Confirm
           </button>

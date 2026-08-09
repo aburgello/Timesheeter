@@ -164,7 +164,7 @@ export default function QuickActions({ activePage, department, onNavigate, onOpe
                     opened: { opacity: 1, y: 0, scale: 1 },
                     closed: { opacity: 0, y: 8, scale: 0.9 },
                   }}
-                  transition={{ duration: 0.16, ease: [0.25, 0.1, 0.25, 1] }}
+                  transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
                   className="group flex items-center gap-2.5"
                 >
                   <span className="text-[11px] font-black uppercase tracking-widest text-[#122027] bg-white border border-[#dce4ec] rounded-xl px-2.5 py-1.5 shadow-md whitespace-nowrap">
@@ -191,7 +191,7 @@ export default function QuickActions({ activePage, department, onNavigate, onOpe
       >
         <motion.span
           animate={{ rotate: open ? 90 : 0 }}
-          transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+          transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
           className="flex"
         >
           <Zap className="w-6 h-6" strokeWidth={2.25} />

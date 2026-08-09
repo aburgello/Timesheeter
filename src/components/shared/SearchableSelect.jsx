@@ -131,7 +131,7 @@ const SearchableSelect = ({
       )}
 
       <div
-        className={`relative flex items-center bg-white border focus-within:ring-2 focus-within:ring-[#12a0e1]/20 focus-within:border-[#12a0e1] transition-all rounded-xl z-50 ${
+        className={`relative flex items-center bg-white border focus-within:ring-2 focus-within:ring-[#12a0e1]/20 focus-within:border-[#12a0e1] transition-[border-color,box-shadow] rounded-xl z-50 ${
           disabled
             ? "opacity-60 bg-slate-50"
             : "hover:border-slate-300 border-[#dce4ec] shadow-sm"

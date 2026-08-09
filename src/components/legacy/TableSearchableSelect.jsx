@@ -122,7 +122,7 @@ export default function TableSearchableSelect({
       )}
 
       <div
-        className={`relative flex items-center border rounded-xl z-50 transition-all ${
+        className={`relative flex items-center border rounded-xl z-50 transition-[border-color,background-color,box-shadow] ${
           disabled
             ? "opacity-45 cursor-not-allowed bg-transparent border-transparent"
             : isOpen
@@ -186,7 +186,7 @@ export default function TableSearchableSelect({
       {isOpen && (
         <div
           style={fixedStyle}
-          className={`fixed border shadow-2xl max-h-[350px] overflow-y-auto custom-scrollbar animate-in fade-in slide-in-from-top-2 duration-200 rounded-2xl ${
+          className={`fixed border shadow-xl shadow-slate-200/40 max-h-[350px] overflow-y-auto custom-scrollbar animate-in fade-in slide-in-from-top-2 duration-200 rounded-2xl ${
             isDarkModal
               ? "bg-[#19202b] border-[#2d3748]"
               : "bg-white border-slate-200"
@@ -219,7 +219,7 @@ export default function TableSearchableSelect({
                       <span>{groupName}</span>
                       {value && value.includes(groupName) && (
                         <span
-                          className={`px-1.5 py-0.5 rounded-full text-[9px] font-black tracking-normal ${
+                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-black tracking-normal ${
                             isDarkModal
                               ? "bg-[#4ea8de]/20 text-[#4ea8de]"
                               : "bg-[#12a0e1]/10 text-[#12a0e1]"
@@ -245,7 +245,7 @@ export default function TableSearchableSelect({
                             onChange(opt);
                             setActiveDropdown(null);
                           }}
-                          className={`w-full text-left px-3 py-2 text-[11px] font-semibold transition-all rounded-xl flex items-start leading-tight ${
+                          className={`w-full text-left px-3 py-2 text-[11px] font-semibold transition-[background-color,color] rounded-xl flex items-start leading-tight ${
                             value === opt
                               ? isDarkModal
                                 ? "bg-[#12a0e1]/20 text-white font-bold"
@@ -287,7 +287,7 @@ export default function TableSearchableSelect({
                         onChange(opt);
                         setActiveDropdown(null);
                       }}
-                      className={`w-full text-left py-2 text-[11px] font-semibold transition-all rounded-xl flex items-center ${
+                      className={`w-full text-left py-2 text-[11px] font-semibold transition-[background-color,color] rounded-xl flex items-center ${
                         isTime
                           ? "justify-center font-mono font-bold px-1"
                           : "px-3 truncate"

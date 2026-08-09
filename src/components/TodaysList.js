@@ -308,7 +308,7 @@ function AttachmentThumb({ attachment, large = false, onPreview }) {
     <button
       onClick={handleOpen}
       title={attachment.name}
-      className={`relative shrink-0 ${dim} rounded-xl border ${bg} flex flex-col items-center justify-center gap-1 hover:shadow-md hover:scale-105 transition-all`}
+      className={`relative shrink-0 ${dim} rounded-xl border ${bg} flex flex-col items-center justify-center gap-1 hover:shadow-md hover:scale-105 transition-[transform,box-shadow]`}
     >
       {loading ? (
         <div className="w-4 h-4 border-2 border-slate-300 border-t-[#12a0e1] rounded-full animate-spin" />
@@ -679,7 +679,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                 <motion.span
                   layoutId="timeframe-pill"
                   className="absolute inset-0 bg-white rounded-lg shadow-sm"
-                  transition={{ type: "spring", stiffness: 500, damping: 32 }}
+                  transition={{ type: "tween", duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                 />
               )}
               <span className="relative z-10">{tf}</span>
@@ -787,7 +787,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
             return (
               <div
                 key={person}
-                className={`flex items-stretch transition-all duration-300 ease-in-out ${
+                className={`flex items-stretch transition-[height] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
                   laneIdx > 0 ? "border-t border-[#dce4ec]" : ""
                   // +8px over the "natural" 6.5rem/72 heights — the thin
                   // scrollbar's own height comes out of a fixed-height flex
@@ -852,7 +852,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                   <div className="relative z-10 h-full flex flex-col justify-center overflow-hidden">
                     <div data-lane-rise className="flex items-baseline justify-between gap-2">
                       <span
-                        className={`font-display font-bold tracking-tight leading-none transition-all duration-300 ${
+                        className={`font-display font-bold tracking-tight leading-none transition-[color,font-size] duration-300 ${
                           isCollapsed ? "text-sm" : "text-xl sm:text-2xl"
                         } ${isFocused ? inkFocus : `text-[#122027] ${inkHover}`}`}
                       >
@@ -894,7 +894,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                       {tasks.length > 12 && <span className="text-[10px] font-bold text-[#768994]">+{tasks.length - 12}</span>}
                     </div>
                   ) : tasks.length === 0 ? (
-                    <p className="self-center text-xs italic text-slate-300">Clear — nothing due</p>
+                    <p className="self-center text-xs italic text-slate-500">Clear — nothing due</p>
                   ) : (
                     tasks.map((task) => {
                       const terr = getTerritoryData(task.title);
@@ -908,10 +908,18 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
                         <div
                           key={task.id}
                           data-card-rise
+                          role="button"
+                          tabIndex={0}
                           onClick={() => setSelectedTask(task)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setSelectedTask(task);
+                            }
+                          }}
                           className={`group/chip shrink-0 cursor-pointer rounded-lg border-l-[3px] ${getBorderColorClass(task.tag)} border-y border-r border-slate-200/70 ${
                             overdue ? "bg-rose-50/40" : "bg-white"
-                          } hover:shadow-md hover:-translate-y-0.5 transition-all ${
+                          } hover:shadow-md hover:-translate-y-0.5 transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 focus-visible:outline-none ${
                             isFocused ? "w-72 p-3.5" : "w-60 px-3 py-2.5"
                           } flex flex-col min-h-0 overflow-hidden`}
                         >
