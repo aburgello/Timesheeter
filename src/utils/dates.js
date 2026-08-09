@@ -42,3 +42,10 @@ export function isoToUk(iso) {
   const m = ISO_RE.exec(String(iso ?? "").trim());
   return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
 }
+
+/**
+ * The value for the work_date column, given whatever shape a caller set on
+ * `date`. Null rather than a guess: a row whose date we cannot read should be
+ * visibly undated, not silently dated today.
+ */
+export const toDbDate = (value) => toIsoDate(value);

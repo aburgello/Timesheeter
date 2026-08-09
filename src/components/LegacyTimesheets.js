@@ -53,6 +53,7 @@ import { COLUMNS, DAYS, TIME_OPTIONS, getDarkTagStyle } from "./legacy/legacyCon
 import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
 import TableSearchableSelect from "./legacy/TableSearchableSelect";
 import MultiCountrySelect from "./shared/MultiCountrySelect";
+import { toIsoDate } from "../utils/dates";
 import {
   splitTerritories,
   joinTerritories,
@@ -218,11 +219,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     justSaved,
   } = useLegacyRows(showToast, wrikeUserId);
 
-  // "dd/mm/yyyy" -> "yyyy-mm-dd", for comparing against weekStart (ISO)
-  const toIsoDate = (d) => {
-    const m = typeof d === "string" && d.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
-  };
   // Job Book lookup — lets guessed job/film/client be overridden by admin-curated
   // data, and self-populates Job Book from real usage the first time a job is seen.
   const jobLookup = useJobLookup();
@@ -1838,24 +1834,22 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         if (!bookLabel[k] || (j.includes(" : ") && !bookLabel[k].includes(" : "))) bookLabel[k] = j;
       });
       // Recency: code -> most recent date it was logged.
-      const parseDate = (d) => {
-        if (!d) return 0;
-        const dmy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(d);
-        if (dmy) return new Date(+dmy[3], +dmy[2] - 1, +dmy[1]).getTime();
-        const t = Date.parse(d);
-        return isNaN(t) ? 0 : t;
-      };
+      // Recency: code -> most recent date it was logged. Sorting ISO strings
+      // is the whole point of the shared parser; no Date objects needed.
+      const isoOf = (r) => r.work_date || toIsoDate(r.date) || "";
       const recency = {};
       legacyTasks.forEach((r) => {
         const k = codeKey(r.job_number || "");
         if (!k) return;
-        const t = parseDate(r.date);
+        const t = isoOf(r);
         if (!(k in recency) || t > recency[k]) recency[k] = t;
       });
       // Book jobs: real films first, then most-recently-logged, then alphabetical.
       const codes = Object.keys(bookLabel).sort((a, b) =>
         (filmRank(bookLabel[b]) - filmRank(bookLabel[a])) ||
-        ((recency[b] || 0) - (recency[a] || 0)) ||
+        // recency holds ISO date strings, so compare them as strings — a
+        // numeric subtraction here would yield NaN and scramble the order.
+        (recency[b] || "").localeCompare(recency[a] || "") ||
         bookLabel[a].localeCompare(bookLabel[b])
       );
       setRecentJobs(codes.map((k) => bookLabel[k]));

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase, whenIdentityReady, selectAll } from "../lib/supabaseClient";
 import { parseTimeToSeconds, secondsToHM } from "../utils/timeHelpers";
+import { toDbDate, toIsoDate } from "../utils/dates";
 
 // --- Translators ---
 
@@ -31,6 +32,10 @@ const toDb = (task) => ({
   category: task.category ?? null,
   day_of_week: task.dayOfWeek ?? null,
   date: task.date ?? null,
+  // Both, for now. `date` stays because older browser bundles still read it
+  // and the grid still displays from it; work_date is what the database can
+  // actually sort and filter on.
+  work_date: toDbDate(task.date),
   territory: task.territory ?? null,
   notes: task.notes ?? null,
   wrike_timelog_id: task.wrikeTimelogId ?? null,
@@ -63,6 +68,7 @@ const fromDb = (row) => ({
   category: row.category,
   dayOfWeek: row.day_of_week,
   date: row.date,
+  workDate: row.work_date ?? null,
   territory: row.territory,
   notes: row.notes,
   wrikeTimelogId: row.wrike_timelog_id,
@@ -135,17 +141,11 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
       } else {
         const mapped = data.slice().reverse().map(fromDb);
         if (weekStart) {
-          // Normalise any "dd/mm/yyyy" dates to ISO before comparing.
-          // Old entries were saved with toLocaleDateString("en-GB") which sorts
-          // incorrectly against weekStart ("24/06/2026" > "2026-06-29" lexicographically).
-          const toIso = (d) => {
-            if (!d) return null;
-            if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
-            const m = d.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-            return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
-          };
-          setTasks(mapped.filter(t => {
-            const iso = toIso(t.date);
+          // work_date when the row has it, the legacy text otherwise — a row
+          // written by a browser still running the old bundle has no
+          // work_date until it next syncs. Drop the fallback in Task 7.
+          setTasks(mapped.filter((t) => {
+            const iso = t.workDate || toIsoDate(t.date);
             return iso && iso >= weekStart;
           }));
         } else {

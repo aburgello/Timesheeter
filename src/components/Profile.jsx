@@ -45,6 +45,7 @@ import { formatDurationText } from "../utils/timeHelpers";
 import { getTagStyle } from "../utils/tagStyles";
 import { TERRITORY_FLAGS } from "../constants";
 import { splitTerritories, territoryFlags } from "../utils/territories";
+import { toIsoDate } from "../utils/dates";
 import {
   BarChart,
   Bar,
@@ -1239,17 +1240,6 @@ const DEFAULT_DAY = {
   pill: "bg-slate-100 text-slate-600",
 };
 
-// Tasks' `date` was historically saved as either "dd/mm/yyyy" (via
-// toLocaleDateString) or ISO "yyyy-mm-dd" — normalise to ISO so different
-// calendar days can be told apart (and sorted) correctly. Returns null for
-// anything unparseable rather than guessing.
-function toIsoDate(d) {
-  if (!d) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
-  const m = d.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
-}
-
 // The inverse of toIsoDate — render a Date as "yyyy-mm-dd", the same shape a
 // day group's key is normalised to, so a header can match against
 // today/yesterday for its relative label.
@@ -1306,7 +1296,7 @@ function HistorySection({ tasks }) {
   const grouped = useMemo(() => {
     const map = {};
     filtered.forEach((t) => {
-      const key = toIsoDate(t.date) || "Unknown";
+      const key = t.work_date || toIsoDate(t.date) || "Unknown";
       if (!map[key]) map[key] = [];
       map[key].push(t);
     });

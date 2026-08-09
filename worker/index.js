@@ -122,7 +122,10 @@ async function handleJobsFeed(request, env) {
   // Limit raised alongside the CSV importer: a bulk load of historical time
   // can push the table well past the old 5000 cap, and a silently truncated
   // feed reads as "those hours were never imported".
-  const res = await sbFetch(env, "/tasks?select=*&order=id.desc&limit=20000");
+  // Ordered by the day the work happened, not by id — id only reflects when a
+  // row was pulled in, which can be long after the date it is tagged with.
+  // Rows with no date fall to the bottom; ties break by most-recently-synced.
+  const res = await sbFetch(env, "/tasks?select=*&order=work_date.desc.nullslast,id.desc&limit=20000");
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     console.error(`[jobs-feed] tasks query ${res.status}:`, detail);
@@ -293,6 +296,10 @@ async function handleJobsFeedImport(request, env) {
     const task = {
       job_number: jobNumber,
       date,
+      // The same day in both columns. `date` is what the feed's export writes
+      // and older clients read; work_date is what the database can query.
+      // normaliseDate already returns ISO, so this needs no further parsing.
+      work_date: date,
       client: clean(raw.client),
       film_title: clean(raw.film_title),
       project_description: clean(raw.project_description),

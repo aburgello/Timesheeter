@@ -26,6 +26,7 @@ import {
 import { isServiceAccount, DEPT_GROUPS } from "../lib/people";
 import { layoutRect } from "../utils/zoom";
 import { useColumnResize } from "../lib/useColumnResize";
+import { toIsoDate } from "../utils/dates";
 import { SEED_CLIENTS, SEED_PROJECT_DESCRIPTIONS } from "../data/seedData";
 import { CATEGORIES } from "../constants";
 import { builtInAliasesFor } from "../utils/countryCodes";
@@ -4549,13 +4550,6 @@ export function JobsFeedSection() {
       console.error("[JobsFeed] /api/jobs-feed error", e);
     }
 
-    const toIso = (d) => {
-      if (!d) return null;
-      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
-      const m = d.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-      return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
-    };
-
     // Everything is filtered client-side below — the endpoint returns the whole
     // table either way, so narrowing here would only mean refetching on every
     // filter change.
@@ -4566,8 +4560,8 @@ export function JobsFeedSection() {
     // the work date it's tagged with. Rows without a parseable date fall
     // to the bottom; ties break by most-recently-synced first.
     tasks.sort((a, b) => {
-      const da = toIso(a.date) || "";
-      const db = toIso(b.date) || "";
+      const da = a.work_date || toIsoDate(a.date) || "";
+      const db = b.work_date || toIsoDate(b.date) || "";
       if (da !== db) return db.localeCompare(da);
       return (b.id || 0) - (a.id || 0);
     });
@@ -4610,7 +4604,7 @@ export function JobsFeedSection() {
       const positionId = cat?.rate_position_id || p?.position_id;
       return {
         ...t,
-        _iso: toIso(t.date),
+        _iso: t.work_date || toIsoDate(t.date),
         _name: p ? cleanFullName(p.first_name, p.last_name) : "—",
         _dept: p?.department || "",
         _unbilled: unbilled,

@@ -271,6 +271,10 @@ create table public.tasks (
   notes text,
   day_of_week text,
   date text,
+  -- The day the work happened. `date` above is the legacy text form — two
+  -- formats in one column, uncomparable in SQL — kept only until every client
+  -- has moved over. See migrations/20260810090000_tasks_work_date.sql.
+  work_date date,
   wrike_timelog_id text,
   created_at timestamp with time zone default now(),
   source text default 'tracker'::text,
@@ -420,6 +424,7 @@ create index jobs_job_done_idx on public.jobs using btree (job_done);
 create index jobs_start_date_idx on public.jobs using btree (start_date);
 create index profiles_position_id_idx on public.profiles using btree (position_id);
 create index idx_tasks_wrike_user_id on public.tasks using btree (wrike_user_id);
+create index tasks_work_date_idx on public.tasks using btree (work_date) where (work_date is not null);
 create index wrike_oauth_tokens_wrike_user_id_idx on public.wrike_oauth_tokens using btree (wrike_user_id);
 create index wrike_tasks_cache_updated_date_idx on public.wrike_tasks_cache using btree (updated_date);
 

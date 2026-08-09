@@ -1,4 +1,4 @@
-import { toIsoDate, isoToday, isoToUk } from "../src/utils/dates.js";
+import { toIsoDate, isoToday, isoToUk, toDbDate } from "../src/utils/dates.js";
 
 // Both stored shapes normalise
 check("ISO passes through",           toIsoDate("2026-01-05"), "2026-01-05");
@@ -27,3 +27,9 @@ check("local, not UTC", isoToday(new Date(2026, 7, 9, 23, 30)), "2026-08-09");
 // Display helper
 check("iso to UK",        isoToUk("2026-08-09"), "09/08/2026");
 check("iso to UK, null",  isoToUk(null),         "");
+
+// The value that goes into the work_date column, from whatever a caller set.
+check("from UK text",       toDbDate("09/08/2026"), "2026-08-09");
+check("from ISO text",      toDbDate("2026-08-09"), "2026-08-09");
+check("unparseable → null", toDbDate("garbage"),    null);
+check("absent → null",      toDbDate(null),         null);
