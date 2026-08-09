@@ -155,6 +155,51 @@ const STUDIO_GROUPS = [
   { label: "XYi",      keyword: "XYi",       gradient: "from-[#12a0e1] to-[#0872a0]"  },
 ];
 
+// ── Studios a film can belong to ──────────────────────────────────────────────
+// The canonical order the Job Setup picker groups by and the Films page's
+// studio editor offers. Matches STUDIO_GROUPS, plus Lionsgate (wrikeCampaign
+// scans it). The film-sync modal only offers Paramount/Universal today, but
+// films already in the Job Book can carry any of these via the backfill.
+const STUDIO_LIST = [
+  "Paramount", "Universal", "Sony", "Disney", "Warner",
+  "Netflix", "Apple", "Amazon", "Lionsgate", "XYi",
+];
+
+// ── Job Setup film picker group order ─────────────────────────────────────────
+// "Active films" (any Active job in the Job Book) floats first — those are the
+// productions a PM is actually working on. The rest sort under their studio,
+// with films that have no studio yet (typed in freeform, or awaiting a re-sync)
+// landing in Other.
+const FILM_GROUP_ORDER = ["Active films", ...STUDIO_LIST, "Other"];
+
+// Row control on the Films page: set/clear which studio a film belongs to, so
+// the Job Setup film picker groups it correctly. A plain inline select that
+// writes straight back on change. A film whose studio is somehow outside the
+// canonical list (future studio, manual SQL) keeps its value as an option so it
+// isn't silently dropped the moment the row is touched.
+function FilmStudioPicker({ item, patchItem }) {
+  const studioOptions = item.studio && !STUDIO_LIST.includes(item.studio)
+    ? [item.studio, ...STUDIO_LIST]
+    : STUDIO_LIST;
+  return (
+    <div className="w-32 shrink-0">
+      <select
+        value={item.studio || ""}
+        onChange={async (e) => {
+          const v = e.target.value || null;
+          patchItem(item.id, { studio: v });
+          const { error } = await supabase.from("films").update({ studio: v }).eq("id", item.id);
+          if (error) notify("Couldn't update studio: " + error.message, "error");
+        }}
+        className="w-full text-xs font-bold text-[#122027] bg-white border border-[#dce4ec] rounded-lg px-2 py-1.5 outline-none focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20"
+        title="Studio — where this film sits in the Job Setup film picker">
+        <option value="">— no studio —</option>
+        {studioOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+    </div>
+  );
+}
+
 // ── Category groups ────────────────────────────────────────────────────────────
 // Prefix match is first-wins — Misc catches only what Digital/Print/XYi don't.
 const CATEGORY_GROUPS = [
@@ -1171,16 +1216,43 @@ function ComboField({ label, value, onChange, options, placeholder, required, gr
 // behaviour for the pickers that have always used it; callers with genuinely
 // long lists (a year and a half of weeks, 65 item categories) raise it so the
 // tail isn't reachable only by typing.
-function StrictSelect({ value, onChange, options, placeholder, loading, className = "", limit = 60 }) {
+// `groupBy` + `groupOrder` are optional and bucketed under uppercase headers
+// when present (e.g. the Job Setup film picker groups by studio); without them
+// the list stays flat.
+function StrictSelect({ value, onChange, options, placeholder, loading, className = "", limit = 60, groupBy = null, groupOrder = null }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState(null);
   const btnRef = useRef(null);
 
+  // Grouped pickers get a much bigger cap — the 60-row cap that's plenty for a
+  // flat picker (search box sits right above) would slice off every film in a
+  // late-sorted group like XYi. Grouped lists are themselves organised, so 200
+  // stays manageable.
+  const cap = groupBy ? 200 : limit;
   const hits = useMemo(() => {
-    if (!q) return options.slice(0, limit);
-    return options.filter(o => o.toLowerCase().includes(q.toLowerCase())).slice(0, limit);
-  }, [options, q, limit]);
+    if (!q) return options.slice(0, cap);
+    return options.filter(o => o.toLowerCase().includes(q.toLowerCase())).slice(0, cap);
+  }, [options, q, cap]);
+
+  // Optional grouping: bucket hits under uppercase headers (e.g. studio),
+  // ordered by groupOrder with any group not listed sorting after in alpha
+  // order. When groupBy is absent the picker stays a flat list.
+  const groups = useMemo(() => {
+    if (!groupBy) return null;
+    const m = new Map();
+    for (const o of hits) {
+      const g = groupBy(o) || "Other";
+      if (!m.has(g)) m.set(g, []);
+      m.get(g).push(o);
+    }
+    const entries = [...m.entries()];
+    if (groupOrder) {
+      const rank = (g) => { const i = groupOrder.indexOf(g); return i === -1 ? groupOrder.length + 1 : i; };
+      entries.sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]));
+    }
+    return entries;
+  }, [hits, groupBy, groupOrder]);
 
   // layoutRect, not getBoundingClientRect: the panel below is position:fixed
   // and styled from this rect, so under html{zoom:1.1} a raw (visual) rect
@@ -1230,6 +1302,16 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
   const dropUp = !!rect && spaceBelow < 220 && spaceAbove > spaceBelow;
   const listMax = Math.max(140, Math.round((dropUp ? spaceAbove : spaceBelow) - CHROME));
 
+  const renderRow = (o) => (
+    <button key={o} type="button"
+      onClick={() => { onChange(o); setQ(""); setOpen(false); }}
+      className={`w-full text-left px-4 py-2.5 text-sm border-b border-[#dce4ec]/60 last:border-0 transition-colors ${
+        o === value ? "bg-[#12a0e1]/10 text-[#12a0e1] font-bold" : "text-[#122027] hover:bg-slate-50"
+      }`}>
+      {o}
+    </button>
+  );
+
   return (
     <div className={className}>
       <button ref={btnRef} type="button" disabled={loading}
@@ -1259,15 +1341,12 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
             </div>
             <div className="overflow-y-auto" style={{ maxHeight: listMax }}>
               {hits.length === 0 && <p className="px-4 py-3 text-sm text-[#768994]">No matches</p>}
-              {hits.map(o => (
-                <button key={o} type="button"
-                  onClick={() => { onChange(o); setQ(""); setOpen(false); }}
-                  className={`w-full text-left px-4 py-2.5 text-sm border-b border-[#dce4ec]/60 last:border-0 transition-colors ${
-                    o === value ? "bg-[#12a0e1]/10 text-[#12a0e1] font-bold" : "text-[#122027] hover:bg-slate-50"
-                  }`}>
-                  {o}
-                </button>
-              ))}
+              {groups ? groups.map(([g, items]) => (
+                <div key={g}>
+                  <div className="px-4 pt-2.5 pb-1 text-[10px] font-black uppercase tracking-widest text-[#768994]">{g}</div>
+                  {items.map(renderRow)}
+                </div>
+              )) : hits.map(renderRow)}
             </div>
           </div>
         </>,
@@ -1666,7 +1745,7 @@ function FilmSyncModal({ studio: initialStudio = "Paramount", existingFilms, onC
   const apply = async () => {
     if (!plan?.toAdd?.length) return;
     setApplying(true);
-    const rows = plan.toAdd.map((title) => ({ title }));
+    const rows = plan.toAdd.map((title) => ({ title, studio }));
     const { error } = await supabase.from("films").insert(rows);
     setApplying(false);
     if (error) { notify("Film sync failed: " + error.message, "error"); return; }
@@ -2229,6 +2308,9 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   const foldersRef = useRef(null);
   const [films, setFilms] = useState([]);
   const [filmsLoading, setFilmsLoading] = useState(true);
+  // title → { studio, active }. The picker groups on it; `films` stays a plain
+  // string list for the job form / film-sync consumers, which expect titles.
+  const [filmMeta, setFilmMeta] = useState(new Map());
   const [clients, setClients] = useState([]);
   const [workCategories, setWorkCategories] = useState([]);
   const [descs, setDescs] = useState([]);
@@ -2275,12 +2357,33 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   const [pushMode, setPushMode] = useState(null);          // null | "push" (req 5+1) | "retag" (req 2+4)
 
   // Reloadable so the Film-sync modal can refresh the picker after adding films.
+  // The picker groups by studio and floats films with an Active job to the top,
+  // so the productions a PM is actually working on are one tap away. Studio is
+  // stored on the film (set when it's synced from Wrike); "active" is derived
+  // from the Job Book so it stays current without anyone maintaining a flag.
   const loadFilms = useCallback(() => {
-    supabase.from("films").select("title").order("title").then(({ data }) => {
-      setFilms((data || []).map(f => f.title));
+    Promise.all([
+      supabase.from("films").select("title, studio").order("title"),
+      supabase.from("jobs").select("film_title").eq("status", "Active"),
+    ]).then(([filmRes, activeRes]) => {
+      const filmRows = filmRes.data || [];
+      const active = new Set((activeRes.data || []).map(j => j.film_title));
+      const meta = new Map();
+      filmRows.forEach(f => meta.set(f.title, { studio: f.studio || null, active: active.has(f.title) }));
+      setFilmMeta(meta);
+      setFilms(filmRows.map(f => f.title));
       setFilmsLoading(false);
     });
   }, []);
+
+  // Which bucket a film lands in for the picker: active films get their own
+  // pinned group on top; the rest sort under their studio, with no-studio films
+  // in Other.
+  const filmGroup = (title) => {
+    const m = filmMeta.get(title);
+    if (m?.active) return "Active films";
+    return m?.studio || "Other";
+  };
 
   // Films are added in the Films tab first — this section only picks from that
   // list, it never creates new films, so the two stay in sync by construction.
@@ -2984,7 +3087,8 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
           </button>
         </div>
         <StrictSelect value={filmTitle} onChange={v => setFilmTitle(v)}
-          options={films} placeholder="Select a film…" loading={filmsLoading} />
+          options={films} placeholder="Select a film…" loading={filmsLoading}
+          groupBy={filmGroup} groupOrder={FILM_GROUP_ORDER} />
         {!filmsLoading && films.length === 0 && (
           <p className="text-xs text-[#768994] mt-1.5">
             No films yet — <button onClick={() => setShowFilmSync(true)} className="text-[#1cc1a5] font-bold hover:underline">sync them from Wrike</button>{" "}
@@ -5942,7 +6046,11 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
                     />
                   )}
                   {activeTab === "people"     && <PeopleSection />}
-                  {activeTab === "films"      && <SimpleListSection table="films" labelField="title" label="Films" placeholder="Film title…" wrikeFilmSync onItemClick={setCampaignFilm} />}
+                  {activeTab === "films"      && (
+                    <SimpleListSection table="films" labelField="title" label="Films" placeholder="Film title…"
+                      wrikeFilmSync onItemClick={setCampaignFilm}
+                      renderRowExtra={(item, patchItem) => <FilmStudioPicker item={item} patchItem={patchItem} />} />
+                  )}
                   {activeTab === "clients"    && <SimpleListSection table="clients" labelField="name" label="Clients" quickFilters={STUDIO_GROUPS} quickFilterLabel="Filter by studio" />}
                   {activeTab === "categories" && <SimpleListSection table="job_categories" labelField="name" label="Item Categories" groups={CATEGORY_GROUPS} />}
                   {/* Territory-prefixed like project descriptions, so it reuses

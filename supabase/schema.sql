@@ -180,6 +180,10 @@ create table public.dooh_folders (
 create table public.films (
   id bigint generated always as identity not null,
   title text not null,
+  -- The studio whose Wrike folder this film was synced from (see migration
+  -- 20260809210000_films_studio for the backfill); the Job Setup picker groups
+  -- on it, NULL films land under "Other".
+  studio text,
   created_at timestamp with time zone default now()
 );
 
