@@ -3432,15 +3432,17 @@ function StudioJobScanModal({ onClose, onApplied }) {
   const [search, setSearch] = useState("");
   const [activeOnly, setActiveOnly] = useState(true);
   const [showCorrections, setShowCorrections] = useState(false);
+  const [keptCodes, setKeptCodes] = useState(new Set()); // codes "kept" in Review → job_sync_kept
 
   const loadScan = useCallback(async () => {
     setPhase("scanning");
     try {
       // Whole table — a truncated read would make jobs already in the book look
       // new and invite duplicate inserts.
-      const [found, existing] = await Promise.all([
+      const [found, existing, kept] = await Promise.all([
         scanStudioJobNumbers(),
         selectAll("jobs", "id, job_number, film_title, client"),
+        selectAll("job_sync_kept", "code"),
       ]);
       // One code can own several book rows (a bare stub plus the properly filed
       // row, or two spellings of the same description). Keep the most complete
@@ -3468,6 +3470,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
       setCandidates(found);
       setTotalFolders(found.totalFolders || 0);
       setSelected(sel);
+      setKeptCodes(new Set(kept.map((k) => k.code)));
       setPhase("review");
     } catch (e) {
       setError(e.message || String(e));
@@ -3617,20 +3620,47 @@ function StudioJobScanModal({ onClose, onApplied }) {
     });
   });
 
+  // Codes the user has told the scan to stop asking about — "Keep" in Review.
+  // Kept rows stay visible (greyed, undoable) but are excluded from the fix run
+  // and from the Fix button's count.
+  const keptCorrections = corrections.filter((c) => keptCodes.has(c.code));
+  const fixableCorrections = corrections.filter((c) => !keptCodes.has(c.code));
+  const keptRedundant = redundantRows.filter((r) => keptCodes.has(scanCodeOf(r.job_number)));
+  const fixableRedundant = redundantRows.filter((r) => !keptCodes.has(scanCodeOf(r.job_number)));
+  const keptTotal = keptCorrections.length + keptRedundant.length;
+
+  // Record (or retract) a "keep" in job_sync_kept, mirroring it into local state
+  // so the open Review reflects it immediately. Write failures surface in the
+  // header banner and leave the row untouched.
+  const keepCode = async (code) => {
+    const { error } = await supabase.from("job_sync_kept").upsert({ code }, { onConflict: "code" });
+    if (error) { setError(`Couldn't keep ${code}: ${error.message}`); return; }
+    setKeptCodes((prev) => new Set(prev).add(code));
+  };
+  const unkeepCode = async (code) => {
+    const { error } = await supabase.from("job_sync_kept").delete().eq("code", code);
+    if (error) { setError(`Couldn't undo keep for ${code}: ${error.message}`); return; }
+    setKeptCodes((prev) => { const next = new Set(prev); next.delete(code); return next; });
+  };
+
   // Correct existing book rows whose film was a pseudo-film ("2026") to the
   // real film the re-derived scan found — updates film, client, job number and
-  // description in place. Only touches the `corrections` set (safe rows).
+  // description in place. Only touches the `fixableCorrections` set; rows the
+  // user kept in Review are left alone.
   const fixMisfilmed = async () => {
-    if (!corrections.length && !redundantRows.length) return;
-    const total = corrections.length + redundantRows.length;
+    if (!fixableCorrections.length && !fixableRedundant.length) return;
+    const total = fixableCorrections.length + fixableRedundant.length;
     const ok = await confirmAction({
       title: `Fix ${total} book ${total === 1 ? "entry" : "entries"}?`,
       message:
-        (corrections.length
-          ? `${corrections.length} ${corrections.length === 1 ? "entry disagrees" : "entries disagree"} with Wrike's folder tree — wrong film, a year/placeholder film, or the folder name left inside the job number. This rewrites their film, client, description and job number to match Wrike. `
+        (fixableCorrections.length
+          ? `${fixableCorrections.length} ${fixableCorrections.length === 1 ? "entry disagrees" : "entries disagree"} with Wrike's folder tree — wrong film, a year/placeholder film, or the folder name left inside the job number. This rewrites their film, client, description and job number to match Wrike. `
           : "") +
-        (redundantRows.length
-          ? `${redundantRows.length} duplicate ${redundantRows.length === 1 ? "entry says" : "entries say"} nothing the properly filed row for the same job doesn't — a bare code, or the same description without its region prefix — and will be deleted. `
+        (fixableRedundant.length
+          ? `${fixableRedundant.length} duplicate ${fixableRedundant.length === 1 ? "entry says" : "entries say"} nothing the properly filed row for the same job doesn't — a bare code, or the same description without its region prefix — and will be deleted. `
+          : "") +
+        (keptTotal > 0
+          ? `${keptTotal} ${keptTotal === 1 ? "entry is" : "entries are"} kept as-is and left alone. `
           : "") +
         "Use Review first to see every before → after.",
       confirmLabel: `Fix ${total}`,
@@ -3640,7 +3670,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
     let fixed = 0;
     let merged = 0;
     const failures = [];
-    for (const c of corrections) {
+    for (const c of fixableCorrections) {
       const cur = existingByCode[c.code];
       // Another row for this code already *is* what Wrike says this one should
       // become. Rewriting would violate jobs_job_number_key, and the right
@@ -3667,8 +3697,8 @@ function StudioJobScanModal({ onClose, onApplied }) {
       else fixed += 1;
     }
 
-    if (redundantRows.length) {
-      const ids = redundantRows.map((r) => r.id);
+    if (fixableRedundant.length) {
+      const ids = fixableRedundant.map((r) => r.id);
       for (let i = 0; i < ids.length; i += 200) {
         const { error: delErr } = await supabase
           .from("jobs").delete().in("id", ids.slice(i, i + 200));
@@ -3680,7 +3710,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
     setFixedCount(fixed + merged);
     setError(
       failures.length
-        ? `${failures.length} of ${corrections.length} couldn't be fixed — ${failures.slice(0, 3).join("; ")}${failures.length > 3 ? "…" : ""}`
+        ? `${failures.length} of ${fixableCorrections.length} couldn't be fixed — ${failures.slice(0, 3).join("; ")}${failures.length > 3 ? "…" : ""}`
         : ""
     );
     await loadScan(); // re-derive so corrected rows drop out of the list
@@ -3748,49 +3778,91 @@ function StudioJobScanModal({ onClose, onApplied }) {
                         {redundantRows.length} duplicate {redundantRows.length === 1 ? "entry says" : "entries say"} nothing the properly filed row doesn’t — a bare code, or the same description minus its region prefix — so fixing removes {redundantRows.length === 1 ? "it" : "them"}.
                       </>
                     )}
+                    {keptTotal > 0 && (
+                      <> · {keptTotal} {keptTotal === 1 ? "entry is" : "entries are"} kept — undo in Review</>
+                    )}
                   </span>
                   <button onClick={() => setShowCorrections(v => !v)}
                     className="ml-auto shrink-0 px-3 py-1.5 bg-white border border-amber-300 hover:border-amber-400 text-amber-700 text-[11px] font-bold rounded-lg transition-colors">
                     {showCorrections ? "Hide" : "Review"}
                   </button>
-                  <button onClick={fixMisfilmed} disabled={phase === "saving"}
+                  <button onClick={fixMisfilmed} disabled={phase === "saving" || fixableCorrections.length + fixableRedundant.length === 0}
                     className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-[11px] font-bold rounded-lg transition-colors">
-                    Fix {corrections.length + redundantRows.length}
+                    Fix {fixableCorrections.length + fixableRedundant.length}
                   </button>
                 </div>
                 {showCorrections && (
                   <div className="max-h-52 overflow-y-auto border-t border-amber-100 px-6 py-2">
                     <table className="w-full text-[11px]">
                       <tbody>
-                        {corrections.map((c) => (
-                          <tr key={c.code} className="align-top">
-                            <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">{c.code}</td>
-                            <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[240px]"
-                                title={existingByCode[c.code]?.job_number}>
-                              {existingByCode[c.code]?.job_number || "—"}
-                            </td>
-                            <td className="py-1 text-[#122027] truncate max-w-[240px]" title={c.jobNumber}>
-                              → {c.jobNumber}
-                            </td>
-                          </tr>
-                        ))}
+                        {corrections.map((c) => {
+                          const kept = keptCodes.has(c.code);
+                          return (
+                            <tr key={c.code} className={`align-top ${kept ? "opacity-50" : ""}`}>
+                              <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">{c.code}</td>
+                              <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[240px]"
+                                  title={existingByCode[c.code]?.job_number}>
+                                {existingByCode[c.code]?.job_number || "—"}
+                              </td>
+                              <td className="py-1 text-[#122027] truncate max-w-[240px]" title={c.jobNumber}>
+                                → {c.jobNumber}
+                              </td>
+                              <td className="py-1 pl-2 text-right whitespace-nowrap">
+                                {kept ? (
+                                  <>
+                                    <span className="mr-1.5 text-[9px] font-black uppercase tracking-wider text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">Kept</span>
+                                    <button onClick={() => unkeepCode(c.code)}
+                                      className="px-2 py-0.5 text-[10px] font-black rounded-md bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors">
+                                      Undo
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button onClick={() => keepCode(c.code)}
+                                    className="px-2 py-0.5 text-[10px] font-black rounded-md border border-slate-300 text-slate-500 hover:border-amber-400 hover:text-amber-700 transition-colors">
+                                    Keep
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                         {/* Duplicate stubs aren't rewritten, they're removed —
                             show them here too so Review really is every change. */}
-                        {redundantRows.map((r) => (
-                          <tr key={`stub-${r.id}`} className="align-top">
-                            <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">
-                              {scanCodeOf(r.job_number)}
-                            </td>
-                            <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[240px]"
-                                title={r.job_number}>
-                              {r.job_number}
-                            </td>
-                            <td className="py-1 text-slate-500 italic truncate max-w-[240px]"
-                                title={existingByCode[scanCodeOf(r.job_number)]?.job_number}>
-                              → duplicate, removed (kept: {existingByCode[scanCodeOf(r.job_number)]?.job_number})
-                            </td>
-                          </tr>
-                        ))}
+                        {redundantRows.map((r) => {
+                          const rCode = scanCodeOf(r.job_number);
+                          const kept = keptCodes.has(rCode);
+                          return (
+                            <tr key={`stub-${r.id}`} className={`align-top ${kept ? "opacity-50" : ""}`}>
+                              <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">
+                                {rCode}
+                              </td>
+                              <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[240px]"
+                                  title={r.job_number}>
+                                {r.job_number}
+                              </td>
+                              <td className="py-1 text-slate-500 italic truncate max-w-[240px]"
+                                  title={existingByCode[rCode]?.job_number}>
+                                → duplicate, removed (kept: {existingByCode[rCode]?.job_number})
+                              </td>
+                              <td className="py-1 pl-2 text-right whitespace-nowrap">
+                                {kept ? (
+                                  <>
+                                    <span className="mr-1.5 text-[9px] font-black uppercase tracking-wider text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">Kept</span>
+                                    <button onClick={() => unkeepCode(rCode)}
+                                      className="px-2 py-0.5 text-[10px] font-black rounded-md bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors">
+                                      Undo
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button onClick={() => keepCode(rCode)}
+                                    className="px-2 py-0.5 text-[10px] font-black rounded-md border border-slate-300 text-slate-500 hover:border-amber-400 hover:text-amber-700 transition-colors">
+                                    Keep
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

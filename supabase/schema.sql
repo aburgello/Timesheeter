@@ -340,6 +340,14 @@ create table public.wrike_webhook_events (
   occurred_at timestamp with time zone not null default now()
 );
 
+-- XY codes whose book rows the Wrike scan ("Scan Wrike for job numbers") should
+-- stop asking about. A "Keep" on a scan disagreement records the code here;
+-- future scans skip corrections for it. See migration 20260809220000.
+create table public.job_sync_kept (
+  code text not null,
+  created_at timestamp with time zone not null default now()
+);
+
 -- "Working now" board indicators: one row per (person, task) they've touched.
 -- active flags the green dot; note is that person's per-task comment. Rows are
 -- garbage-collected by cleanup_board_now() (see Functions). replica identity
@@ -402,6 +410,7 @@ alter table public.wrike_tasks_cache add constraint wrike_tasks_cache_pkey prima
 alter table public.wrike_webhook_config add constraint wrike_webhook_config_pkey primary key (id);
 alter table public.wrike_webhook_config add constraint wrike_webhook_config_id_check check (id);
 alter table public.wrike_webhook_events add constraint wrike_webhook_events_pkey primary key (id);
+alter table public.job_sync_kept add constraint job_sync_kept_pkey primary key (code);
 
 -- ---------------------------------------------------------------------------
 -- Foreign keys (added after all tables + referenced unique keys exist)
@@ -474,6 +483,7 @@ alter table public.wrike_sync_meta enable row level security;
 alter table public.wrike_tasks_cache enable row level security;
 alter table public.wrike_webhook_config enable row level security;
 alter table public.wrike_webhook_events enable row level security;
+alter table public.job_sync_kept enable row level security;
 
 -- Policies. NOTE: wrike_oauth_tokens and wrike_webhook_config have RLS enabled
 -- but NO policies on purpose -- only the service-role key (which bypasses RLS)
@@ -510,6 +520,7 @@ create policy "auth_all" on public.translation_countries as permissive for all t
 create policy "anon all" on public.wrike_sync_meta as permissive for all to authenticated using (true) with check (true);
 create policy "anon all" on public.wrike_tasks_cache as permissive for all to authenticated using (true) with check (true);
 create policy "authenticated_read" on public.wrike_webhook_events as permissive for select to authenticated using (true);
+create policy "auth_all" on public.job_sync_kept as permissive for all to authenticated using (true) with check (true);
 
 -- ---------------------------------------------------------------------------
 -- Storage buckets (objects are copied separately -- see MIGRATION.md)
