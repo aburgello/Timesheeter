@@ -1,3 +1,4 @@
+import { isBoardTask, isStale } from "../src/lib/jobFilter";
 // Cloudflare Worker: Wrike OAuth (authorization code flow) + API proxy.
 //
 // Members never see a Wrike access token. They hit /api/wrike/oauth/start,
@@ -58,6 +59,13 @@ export default {
     }
     if (url.pathname === "/api/jobs-feed/import" && request.method === "POST") {
       return handleJobsFeedImport(request, env);
+    }
+    // Read-only feed for the XYi Toolbox CEP panel. Own route, not a reuse of
+    // /api/jobs-feed: that one is the TIMESHEET table and gates on a browser
+    // session cookie, neither of which suits a panel whose origin is `null`.
+    if (url.pathname === "/api/panel/jobs") {
+      if (request.method === "OPTIONS") return panelPreflight();
+      return handlePanelJobs(request, url, env);
     }
 
     return env.ASSETS.fetch(request);
@@ -908,4 +916,217 @@ async function handleProxy(request, url, env) {
   const resHeaders = new Headers(wrikeRes.headers);
   resHeaders.delete("Set-Cookie");
   return new Response(wrikeRes.body, { status: wrikeRes.status, headers: resHeaders });
+}
+
+// ── Panel jobs feed ──────────────────────────────────────────────────────────
+// Serves the XYi Toolbox panel's "Active Jobs" card from wrike_tasks_cache.
+//
+// AUTH is a shared header key, not the session cookie the browser app uses: a
+// CEP panel has no session, and its origin is `null` so cookies never attach
+// cross-origin. That is acceptable here ONLY because this route is read-only
+// and returns what every studio member can already read in Wrike — it grants
+// no privilege anyone lacks. It is emphatically not a Wrike token: those are
+// read AND write and carry an individual's identity, which is why the panel
+// never sees one.
+//
+// FILTERING BY MEMBER happens here rather than client-side so the panel gets a
+// short payload, but it is a convenience, not a security boundary — the key
+// holder could ask for anyone. The panel sends the member name its machine is
+// tagged with; profiles maps that to a Wrike user id.
+//
+// Reads the CACHE, never Wrike: wrike_tasks_cache is kept current by the app
+// and the webhook, so this costs one Supabase query and no Wrike API budget.
+// Wrike's `status` field only ever holds a BASE status. "Backlog"/"In Progress"
+// are CUSTOM status names living behind customStatusId and never appear here --
+// confirmed against the live cache, which contained only Completed/Active/
+// Cancelled. Filtering on the custom names was therefore dead weight.
+const PANEL_ACTIVE_STATUSES = ["Active", "Deferred"];
+
+function panelCors(extra = {}) {
+  return {
+    // The panel's origin is `null` (file://), which cannot be allow-listed by
+    // name. The key is the actual gate, and no credentials are sent, so `*` is
+    // both necessary and safe here.
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "X-Panel-Key, Content-Type",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    ...extra,
+  };
+}
+
+function panelPreflight() {
+  return new Response(null, { status: 204, headers: panelCors() });
+}
+
+async function handlePanelJobs(request, url, env) {
+  if (!env.PANEL_KEY || request.headers.get("X-Panel-Key") !== env.PANEL_KEY) {
+    return json({ error: "unauthorized" }, { status: 401, headers: panelCors() });
+  }
+
+  // Resolve the member name the panel sent to a Wrike user id.
+  const member = (url.searchParams.get("member") || "").trim();
+  let wrikeUserId = "";
+  if (member) {
+    const profRes = await sbFetch(env, "/profiles?select=wrike_user_id,first_name,last_name");
+    if (profRes.ok) {
+      const profiles = await profRes.json();
+      const wanted = member.toLowerCase();
+      const hit = (profiles || []).find((p) => {
+        const first = (p.first_name || "").trim().toLowerCase();
+        const full = `${p.first_name || ""} ${p.last_name || ""}`.trim().toLowerCase();
+        // The panel tags a machine with a display name ("Antonio"), which is
+        // usually the first name — accept either form rather than forcing the
+        // studio to keep two naming schemes in step.
+        return first === wanted || full === wanted;
+      });
+      if (hit) wrikeUserId = hit.wrike_user_id;
+    }
+  }
+  if (member && !wrikeUserId) {
+    // Say so rather than returning [] — an empty list would read as "no work"
+    // when the real answer is "we could not match that name".
+    return json({ error: "unknown_member", member, jobs: [] }, { status: 404, headers: panelCors() });
+  }
+
+  // FILTER IN THE DATABASE, not in JS. The first version pulled
+  // `select=id,task_data&limit=5000` and filtered here -- but PostgREST caps
+  // responses at 1000 rows by default and the query had no ORDER BY, so it
+  // returned an arbitrary slice that was 986/1000 Completed tasks. Active jobs
+  // simply never made it into the payload, and because the slice was unordered
+  // it differed between requests. Filtering server-side keeps the result small
+  // enough that no cap applies.
+  const statusFilter = `task_data->>status=in.(${PANEL_ACTIVE_STATUSES.join(",")})`;
+  const assigneeFilter = wrikeUserId
+    ? `&task_data->responsibleIds=cs.${encodeURIComponent(JSON.stringify([wrikeUserId]))}`
+    : "";
+  const res = await sbFetch(
+    env,
+    `/wrike_tasks_cache?select=id,task_data&${statusFilter}${assigneeFilter}&limit=500`
+  );
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.error(`[panel/jobs] cache query ${res.status}:`, detail);
+    return json({ error: "query_failed", detail: detail.slice(0, 200) }, { status: 502, headers: panelCors() });
+  }
+  const rows = await res.json();
+
+  // Subtask names live in rows that the filters above deliberately exclude (a
+  // subtask can be Completed while its parent is Active, and is usually
+  // assigned to nobody). Fetch just the ones referenced, by id.
+  const wantedSubIds = [];
+  for (const row of rows || []) {
+    for (const id of row?.task_data?.subTaskIds || []) wantedSubIds.push(String(id));
+  }
+  let subRows = [];
+  if (wantedSubIds.length) {
+    const ids = wantedSubIds.slice(0, 400).map((i) => `"${i}"`).join(",");
+    const subRes = await sbFetch(env, `/wrike_tasks_cache?select=id,task_data&id=in.(${ids})`);
+    if (subRes.ok) subRows = await subRes.json();
+  }
+
+  // subTaskIds gives IDs only. The cache holds every task it has seen,
+  // subtasks included, so their names are resolvable from the same rows --
+  // no second query and no Wrike call. A subtask that is not cached falls
+  // back to an empty name, which the panel renders as an unparseable row
+  // rather than inventing one.
+  const byId = new Map();
+  for (const row of [...(rows || []), ...(subRows || [])]) {
+    if (row?.id && row?.task_data) byId.set(String(row.id), row.task_data);
+  }
+
+  // ?debug=1 -- counts at each filter stage, so "why is only one job showing"
+  // is answerable with data instead of guesses. Key-gated like everything else
+  // here, and returns no task content beyond titles.
+  if (url.searchParams.get("debug")) {
+    const seenStatuses = {};
+    let withTitle = 0, topLevel = 0, mine = 0, active = 0, hasResponsible = 0, withDueDate = 0;
+    const mineTitles = [];
+    for (const row of rows || []) {
+      const t = row?.task_data;
+      if (!t || !t.title) continue;
+      withTitle++;
+      if (Array.isArray(t.responsibleIds)) hasResponsible++;
+      seenStatuses[t.status || "(none)"] = (seenStatuses[t.status || "(none)"] || 0) + 1;
+      const isTop = !(t.superTaskIds || []).length;
+      if (isTop) topLevel++;
+      const isMine = !wrikeUserId || (t.responsibleIds || []).includes(wrikeUserId);
+      if (isMine) {
+        mine++;
+        mineTitles.push({ title: t.title, status: t.status || "(none)", sub: !isTop });
+      }
+      const hasDue = t.dueDate && t.dueDate !== "No Due Date";
+      const dueOk = hasDue && !isNaN(new Date(t.dueDate).getTime()) && new Date(t.dueDate) <= new Date(new Date().setHours(23, 59, 59, 999));
+      if (isMine && isTop && hasDue) withDueDate++;
+      if (isMine && isTop && dueOk) active++;
+    }
+    return json({
+      member, wrikeUserId,
+      cacheRows: (rows || []).length,
+      subRowsFetched: (subRows || []).length,
+      withTitle, hasResponsibleIds: hasResponsible,
+      topLevel, assignedToMember: mine, assignedWithDueDate: withDueDate, passingAllFilters: active,
+      statusesSeen: seenStatuses,
+      // Everything assigned to them, INCLUDING what the filters drop, with the
+      // reason visible (sub = dropped as a subtask).
+      assigned: mineTitles.slice(0, 40),
+    }, { headers: panelCors() });
+  }
+
+  // SELECTION IS SHARED with the board -- src/lib/jobFilter.js, the same
+  // isBoardTask() TodaysList.js calls. Not a copy of its rules: the same code.
+  // That matters because the rules are subtler than they look (the "Today"
+  // window starts at the EPOCH, so it means due-today-or-overdue), and an
+  // earlier version of this route reimplemented them and quietly disagreed.
+
+  const jobs = [];
+  for (const row of rows || []) {
+    const t = row?.task_data;
+    if (!t || !t.title) continue;
+    // Status, due-date presence and the window, all in one shared predicate.
+    if (!isBoardTask(t, "Today")) continue;
+    // Stale = overdue by more than a week. The board hides these by default
+    // (its "hidden" counter in the header), and the panel is meant to be a
+    // SHORT list of what to build, so a job that has been sitting for months
+    // is noise here too. Same isStale() the board uses.
+    if (isStale(t.dueDate)) continue;
+    // Subtasks are tasks too and would otherwise be listed as jobs in their own
+    // right, duplicating what already appears inside their parent.
+    if ((t.superTaskIds || []).length > 0) continue;
+    if (wrikeUserId && !(t.responsibleIds || []).includes(wrikeUserId)) continue;
+    const status = t.customStatusId ? t.status || "" : t.status || "";
+    if (status && !PANEL_ACTIVE_STATUSES.includes(status)) continue;
+
+    jobs.push({
+      id: String(row.id),
+      title: String(t.title),
+      // The panel filters on this, so send the name it tagged the machine
+      // with rather than a Wrike id it has no way to interpret.
+      assignee: member,
+      // customStatusName is the human status the board displays ("on hold",
+      // "retouch", "to amend"); `status` is only ever the base Active/Completed.
+      status: t.customStatusName || status,
+      due_date: t.dueDate || "",
+      updated_at: t.updatedDate || "",
+      permalink: t.permalink || "",
+      subtasks: (t.subTaskIds || []).map((id) => {
+        const sub = byId.get(String(id));
+        return {
+          id: String(id),
+          name: sub?.title || "",
+          status: sub?.status || "",
+        };
+      }),
+      subtask_count: (t.subTaskIds || []).length,
+      subtasks_done: (t.subTaskIds || []).filter((id) => {
+        const sub = byId.get(String(id));
+        return sub && (sub.status === "Completed" || sub.status === "Cancelled");
+      }).length,
+    });
+  }
+
+  // Freshest first: most jobs carry no due date at all, so updated is the only
+  // ordering that reflects real activity.
+  jobs.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+
+  return json(jobs, { headers: panelCors() });
 }

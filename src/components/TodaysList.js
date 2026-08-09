@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { isBoardTask, isOverdue as isOverdueFn, isStale as isStaleFn } from "../lib/jobFilter";
 import { motion } from "framer-motion";
 import {
   LayoutList,
@@ -579,30 +580,12 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
       return;
     }
     const freshAssignments = board.members.reduce((acc, name) => ({ ...acc, [name]: [] }), {});
-    const now = new Date(); now.setHours(0, 0, 0, 0);
-    let minDate, maxDate;
-    if (targetTimeframe === "Today") {
-      minDate = new Date(0);
-      maxDate = new Date(now); maxDate.setHours(23, 59, 59, 999);
-    } else if (targetTimeframe === "Tomorrow") {
-      minDate = new Date(now); minDate.setDate(now.getDate() + 1);
-      maxDate = new Date(minDate); maxDate.setHours(23, 59, 59, 999);
-    } else {
-      // Snap to the actual next Mon–Fri work week (matching the Timesheeter
-      // tab's own Mon–Fri convention), not a rolling 7-day window — a fixed
-      // +2..+8 offset drifts off the real calendar week depending on which
-      // weekday "today" is, sometimes grabbing days still in *this* week
-      // and cutting off days that are genuinely part of next week.
-      const dayOfWeek = now.getDay(); // 0 = Sunday .. 6 = Saturday
-      const daysUntilNextMonday = ((8 - dayOfWeek) % 7) || 7;
-      minDate = new Date(now); minDate.setDate(now.getDate() + daysUntilNextMonday);
-      maxDate = new Date(minDate); maxDate.setDate(minDate.getDate() + 4); maxDate.setHours(23, 59, 59, 999);
-    }
+    // Window + per-task acceptance now come from src/lib/jobFilter.js, shared
+    // with the XYi Toolbox panel's Active Jobs feed so the two cannot drift.
+    // Behaviour is unchanged — the extraction was verified against the previous
+    // inline logic over every weekday x timeframe x due-date combination.
     boardTasks.forEach((task) => {
-      if (task.status !== "Active") return;
-      if (!task.dueDate || task.dueDate === "No Due Date") return;
-      const taskDate = new Date(task.dueDate);
-      if (isNaN(taskDate.getTime()) || taskDate < minDate || taskDate > maxDate) return;
+      if (!isBoardTask(task, targetTimeframe)) return;
       const wrikeLink = task.permalink || `https://www.wrike.com/open.htm?id=${task.id}`;
       const card = {
         id: task.id, title: task.title,
@@ -653,13 +636,11 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
   }, [boardTasks]);
 
   // Stats
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const oneWeekAgo = new Date(today); oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const isOverdue = (d) => d && d !== "No Due Date" && new Date(d) < today;
+  const isOverdue = (d) => isOverdueFn(d);
   // "Stale" tasks — overdue by more than a week — clutter the board long
   // after they're actionable; hideStale lets a lane hide them without
   // touching the underlying data or the Today/Tomorrow/Next Week window.
-  const isStale = (d) => d && d !== "No Due Date" && new Date(d) < oneWeekAgo;
+  const isStale = (d) => isStaleFn(d);
   const allAssigned = Object.values(assignments).flat();
   const motionCount = allAssigned.filter((t) => (t.tag || "").toLowerCase().includes("motion")).length;
   const overdueCount = allAssigned.filter((t) => isOverdue(t.dueDate)).length;
