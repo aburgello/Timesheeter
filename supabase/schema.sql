@@ -233,7 +233,13 @@ create table public.jobs (
   created_at timestamp with time zone default now(),
   updated_at timestamp with time zone default now(),
   status text not null default 'Inactive'::text,
-  template_slot text
+  template_slot text,
+  -- Which Wrike folder a pushed job claimed, and the name it was given. Lets
+  -- the app tell "reverted or renamed in Wrike" from "never pushed" (no folder
+  -- id) and offer to reconcile. Added in the dashboard, so this file was
+  -- missing them until 9 Aug 2026.
+  wrike_folder_id text,
+  wrike_folder_title text
 );
 
 create table public.positions (
@@ -407,6 +413,13 @@ alter table public.profiles add constraint profiles_department_fkey foreign key 
 -- ---------------------------------------------------------------------------
 -- Secondary indexes
 -- ---------------------------------------------------------------------------
+-- One Job Book row per XY code. jobs_job_number_key above guards the LABEL,
+-- which one job legitimately writes several ways ("XY014384" vs
+-- "XYi Design House Job : XY014384, Showreel"), so it could not stop duplicate
+-- rows for one job — nor the allocation race, where two people reading the
+-- highest code at once both get it and save under different film names.
+-- See supabase/migrations/20260809190000_jobs_unique_job_code.sql.
+create unique index jobs_job_code_key on public.jobs ((substring(job_number from 'XY\d{5,6}')));
 create index jobs_client_idx on public.jobs using btree (client);
 create index jobs_job_done_idx on public.jobs using btree (job_done);
 create index jobs_start_date_idx on public.jobs using btree (start_date);

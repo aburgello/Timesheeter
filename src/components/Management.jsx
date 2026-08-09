@@ -3803,14 +3803,27 @@ export function JobBookSection({ setActiveTab }) {
       third_party_cost: form.third_party_cost === "" ? null : parseFloat(form.third_party_cost),
       estimated_cost: form.estimated_cost === "" ? null : parseFloat(form.estimated_cost),
     };
-    if (editJob?.id) {
-      await supabase.from("jobs").update(payload).eq("id", editJob.id);
-    } else {
-      await supabase.from("jobs").insert(payload);
+    // supabase-js resolves rather than throws on a database error, so an
+    // unchecked write here closed the modal and reported nothing while the row
+    // was rejected. That already happened for a duplicate job number; with
+    // jobs_job_code_key it also happens for a duplicate CODE under a different
+    // label, which is exactly the case someone editing a job is most likely to
+    // hit. Keep the modal open and say why.
+    const { error } = editJob?.id
+      ? await supabase.from("jobs").update(payload).eq("id", editJob.id)
+      : await supabase.from("jobs").insert(payload);
+    setSaving(false);
+    if (error) {
+      notify(
+        error.code === "23505"
+          ? `Job number “${form.job_number}” clashes with a job already in the book — the same XY code can only be filed once.`
+          : "Couldn't save the job: " + error.message,
+        "error"
+      );
+      return;
     }
     setShowModal(false); setEditJob(null);
     await loadJobs();
-    setSaving(false);
   };
 
   const toggleDone = async (job) => {

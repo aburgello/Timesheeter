@@ -241,8 +241,22 @@ async function handleJobsFeedImport(request, env) {
     const key = nameKey(`${p.first_name || ""} ${p.last_name || ""}`);
     if (key) peopleByName[key] = p.wrike_user_id;
   }
+  // Existing jobs keyed on the CODE, not the whole label.
+  //
+  // One job legitimately arrives written several ways — "XY025091" from a
+  // panel that hadn't consulted the Job Book, "Film : XY025091, Desc" from one
+  // that had, the same description with or without the region prefix the
+  // folder scan writes. Keying on the label made an import file's variant of a
+  // job we already hold look brand-new, so it was queued for creation: before
+  // the jobs_job_code_key index that quietly produced a second row for one
+  // job, and after it, a constraint violation that fails the entire insert
+  // chunk and aborts the whole import.
+  //
+  // Mirrors jobKey in src/utils/wrikeHelpers.js — same rule, and the fallback
+  // is the same too: no code means the label is all we have to match on.
+  const codeKeyOf = (s) => (String(s || "").match(/XY\d{5,6}/i) || [""])[0].toUpperCase() || String(s || "").trim();
   const jobByNumber = {};
-  for (const j of jobs) if (j.job_number) jobByNumber[j.job_number] = j;
+  for (const j of jobs) if (j.job_number) jobByNumber[codeKeyOf(j.job_number)] = j;
 
   // A row is "the same time already logged" when job, day, person, category
   // and both durations match. Deliberately not id-based: a re-exported file
@@ -307,12 +321,15 @@ async function handleJobsFeedImport(request, env) {
     };
     const present = Object.fromEntries(Object.entries(jobFields).filter(([, v]) => v != null));
 
-    if (!jobByNumber[jobNumber] && !jobsToCreate.has(jobNumber)) {
+    const jobCodeKey = codeKeyOf(jobNumber);
+    const existingJob = jobByNumber[jobCodeKey];
+
+    if (!existingJob && !jobsToCreate.has(jobCodeKey)) {
       // Every key on every object, nulls included — PostgREST rejects a bulk
       // insert whose objects don't all share the same key set (PGRST102), and
       // spreading only the populated columns gives each row a different shape.
       // On a create a null is right anyway: the column genuinely has no value.
-      jobsToCreate.set(jobNumber, {
+      jobsToCreate.set(jobCodeKey, {
         job_number: jobNumber,
         client: task.client,
         film_title: task.film_title,
@@ -321,8 +338,14 @@ async function handleJobsFeedImport(request, env) {
         status: "Active",
         ...jobFields,
       });
-    } else if (jobByNumber[jobNumber] && Object.keys(present).length) {
-      jobsToUpdate.set(jobNumber, { ...(jobsToUpdate.get(jobNumber) || {}), ...present });
+    } else if (existingJob && Object.keys(present).length) {
+      // Keyed on the row's OWN stored label, not the file's and not the code:
+      // the apply pass patches with job_number=eq.<key>, so this has to be the
+      // string actually in the table or the PATCH matches nothing.
+      jobsToUpdate.set(existingJob.job_number, {
+        ...(jobsToUpdate.get(existingJob.job_number) || {}),
+        ...present,
+      });
     }
   });
 
