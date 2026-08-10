@@ -63,7 +63,7 @@
 
   <div class="kicker">Engineering notes</div>
   <h1>How the Timesheeter app is put together</h1>
-  <p class="subtitle">A tour of the main sections and the machinery behind them — how jobs, timesheets, analytics and Wrike stay on one page. Pairs with the job-data technical notes, which cover the resolution pipeline in full.</p>
+  <p class="subtitle">A tour of the main sections and the machinery behind them — how jobs, timesheets and Wrike stay on one page. Pairs with the job-data technical notes, which cover the resolution pipeline in full.</p>
   <div class="title-rule"></div>
 
   <h2><span class="num">1</span>The shape of the app</h2>
@@ -81,7 +81,6 @@
     <tr><td>Tracker</td><td>The day-to-day log — a Mon–Sun week grid, a timer, manual hours, and pulling your Wrike timelogs.</td><td><code>tasks</code> + Wrike timelogs</td></tr>
     <tr><td>The timesheet we use</td><td>The studio's working timesheet. Pulls timelogs, groups them by task and day, lets you edit and export.</td><td><code>tasks</code> + Wrike timelogs</td></tr>
     <tr><td>Management</td><td>Job Book, film setup, and the Wrike scan that keeps the book in step with Wrike's folder tree.</td><td><code>jobs</code>, <code>films</code>, Wrike folders</td></tr>
-    <tr><td>Studio Analytics</td><td>Hours by client, department and week, plus active-work tiles from the Wrike mirror.</td><td>tasks feed + <code>wrike_tasks_cache</code></td></tr>
     <tr><td>Canvas</td><td>Motion and launch tracking boards, fed by the Wrike mirror.</td><td><code>wrike_tasks_cache</code></td></tr>
     <tr><td>Profile / Admin</td><td>Your profile, position and rate; team administration for the management allowlist.</td><td><code>profiles</code>, <code>positions</code></td></tr>
   </table>
@@ -211,16 +210,10 @@ create unique index jobs_job_code_key
     <code>REGION_ALIASES</code>, then <code>MAGI_MARKET_CODES</code> (what production actually writes), then agreed exceptions.
     Keys are punctuation-stripped, so MAGI's <code>BE-FL</code> arrives as <code>BEFL</code> no matter how it was typed.
   </p>
-  <div class="note">
-    <strong>Territory means the country.</strong> In this document — and in the <code>tasks.territory</code> column — “territory” is
-    the country (UK, Ireland, “UK, Ireland”). The INT/UK/NM/AUS short codes derived from studio folder titles are a separate concept:
-    they shape the client name and description prefix, and aren't called territory.
-  </div>
-
   <h2><span class="num">7</span>The Wrike sync layer</h2>
   <p>
-    The boards, analytics and the scan all need to see Wrike's task tree without calling the Wrike API on every screen. A shared
-    mirror handles that (<span class="file">src/hooks/useWrikeCache.js</span>, <span class="file">src/lib/wrikeEnrich.js</span>):
+    The boards and the scan need to see Wrike's task tree without calling the Wrike API on every screen. A shared mirror handles
+    that (<span class="file">src/hooks/useWrikeCache.js</span>, <span class="file">src/lib/wrikeEnrich.js</span>):
   </p>
   <ol>
     <li><strong>Worker owns the token.</strong> All Wrike reads go through the worker, which refreshes and holds the OAuth token.</li>
@@ -236,24 +229,15 @@ create unique index jobs_job_code_key
         in the shared mirror, so the table stays a work set rather than a full dump of the Wrike account.</li>
   </ol>
 
-  <h2><span class="num">8</span>Studio Analytics</h2>
-  <p>
-    Studio Analytics reads the studio's timesheet through the worker's jobs feed — a service-side read that sees everyone's rows,
-    which the per-user database rules wouldn't allow from the browser. From that feed it breaks hours down by client, department,
-    and week. The Wrike-side tiles (active tasks, films in production, campaign progress) come from the shared task mirror in §7,
-    so they describe the same work set the boards show.
-  </p>
-
-  <h2><span class="num">9</span>Identity and access</h2>
+  <h2><span class="num">8</span>Identity and access</h2>
   <p>
     Wrike is the identity provider. The app signs into Supabase with an anonymous session and stamps the Wrike user id into the
     session's metadata; the database's row-level security then reads that id to scope a user's data to their own rows. Profiles are
     readable by everyone and editable only by the management allowlist, and the Management pages themselves are gated by the same
-    allowlist. Reads that need to span users (Studio Analytics, the scan) are routed through the worker rather than loosened on the
-    client.
+    allowlist. Reads that need to span users (the scan) are routed through the worker rather than loosened on the client.
   </p>
 
-  <h2><span class="num">10</span>Where the data lives</h2>
+  <h2><span class="num">9</span>Where the data lives</h2>
   <table>
     <tr><th>Table</th><th>Purpose</th></tr>
     <tr><td><code>jobs</code></td><td>The Job Book — one row per XY code, canonical name, film, client, dates, notes.</td></tr>
@@ -278,7 +262,6 @@ create unique index jobs_job_code_key
     <tr><td>Wrike API proxy and OAuth</td><td><span class="file">src/lib/wrikeApi.js</span>, <span class="file">worker/index.js</span></td></tr>
     <tr><td>Database reads</td><td><span class="file">src/lib/supabaseClient.js</span></td></tr>
     <tr><td>Management UI</td><td><span class="file">src/components/Management.jsx</span>, <span class="file">src/components/JobBook.jsx</span></td></tr>
-    <tr><td>Analytics</td><td><span class="file">src/components/StudioAnalytics.jsx</span></td></tr>
   </table>
 
   <footer>

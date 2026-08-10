@@ -335,17 +335,60 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   };
 
   const CODE = /XY\d{5,6}/i;
-  const seen = new Set();
-  const out = [];
+
+  // Group every folder carrying a code, THEN choose — rather than taking the
+  // first one and skipping the rest.
+  //
+  // "First" used to mean the order Wrike's /folders endpoint happened to return
+  // rows in: byId is keyed by folder id, those ids are non-numeric strings, so
+  // JS iterates them in insertion order, and insertion order is just the API's
+  // page order. Wrike documents no ordering there, so a code sitting on both a
+  // live folder and an _Archive copy resolved to whichever Wrike listed first —
+  // and could resolve differently on the next scan. When the archive copy won,
+  // the job came back archived with the archive folder's ancestry for a film,
+  // and dropped out of the scan's default "Active only" view entirely.
+  //
+  // ancestryOf already knows how to rank: it scores every PATH out of one
+  // folder as (hasStudio ? 2 : 0) + (archived ? 0 : 1). The same score decides
+  // between FOLDERS here, so a live placed copy beats an archived one no matter
+  // what order they arrive in.
+  const foldersByCode = new Map();
   Object.values(byId).forEach((f) => {
     const title = (f.title || "").trim();
     const m = title.match(CODE);
     if (!m) return;
     const code = m[0].toUpperCase();
-    if (seen.has(code)) return;          // one line per code
-    seen.add(code);
+    if (!foldersByCode.has(code)) foldersByCode.set(code, []);
+    foldersByCode.get(code).push({ f, title, m });
+  });
 
-    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived, folderPath } = ancestryOf(f.id, title);
+  const folderRank = (d) => (d.hasStudio ? 2 : 0) + (d.archived ? 0 : 1);
+
+  // Codes that live on more than one folder, so the caller can surface the
+  // ambiguity instead of it being silently resolved. Two live folders under
+  // different studios sharing a code is a data problem in Wrike that no
+  // heuristic can settle — but it should be visible, not invisible.
+  const contestedCodes = [];
+
+  const out = [];
+  foldersByCode.forEach((candidates, code) => {
+    const described = candidates.map((c) => ({ ...c, ...ancestryOf(c.f.id, c.title) }));
+
+    // Best rank wins; ties break on folder id so a rescan always agrees with
+    // itself. Arbitrary, but deterministic — which the old order was not.
+    described.sort((a, b) => folderRank(b) - folderRank(a) || String(a.f.id).localeCompare(String(b.f.id)));
+    const chosen = described[0];
+
+    if (described.length > 1) {
+      contestedCodes.push({
+        code,
+        chose: chosen.folderPath,
+        over: described.slice(1).map((d) => d.folderPath),
+      });
+    }
+
+    const { f, title, m } = chosen;
+    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived, folderPath } = chosen;
     const region = regionOf(studioTitle, studioKw);
     // "Universal Pictures UK" / "Universal Pictures International" — the client
     // the Job Book and the timesheet site both name, rather than every region's
@@ -396,6 +439,11 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
 
   out.sort((a, b) => a.code.localeCompare(b.code));
   out.totalFolders = totalFolders; // stashed on the array for the caller's diagnostics
+  // Codes found on more than one folder. The pick above is deterministic and
+  // prefers a live placed copy, but where two live folders genuinely share a
+  // code no heuristic can settle it — so hand the ambiguity to the caller
+  // rather than resolving it out of sight.
+  out.contestedCodes = contestedCodes;
   return out;
 }
 
