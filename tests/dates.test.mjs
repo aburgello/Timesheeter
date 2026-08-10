@@ -57,3 +57,30 @@ check("crosses a year boundary",  ukDateForWeekday("Monday", new Date(2027, 0, 1
 // Unknown names fall back to today rather than guessing
 check("unknown weekday", ukDateForWeekday("Someday", wed), "12/08/2026");
 check("undefined",       ukDateForWeekday(undefined, wed), "12/08/2026");
+
+// ── localDateFromIso — the Tracker pull's weekday came out of UTC ───────────
+import { localDateFromIso } from "../src/utils/dates.js";
+
+// A bare date parsed by `new Date()` is UTC midnight, so west of Greenwich its
+// getDay() is the PREVIOUS weekday. These assert the local-midnight contract.
+check("bare date keeps its own day", localDateFromIso("2026-08-08")?.getDate(),  8);
+check("bare date keeps its month",   localDateFromIso("2026-08-08")?.getMonth(), 7);
+check("Saturday stays Saturday",     localDateFromIso("2026-08-08")?.getDay(),   6);
+check("datetime is truncated to the day", localDateFromIso("2026-08-08T21:30:00")?.getDate(), 8);
+check("UK slash input also works",   localDateFromIso("08/08/2026")?.getDay(),   6);
+check("unreadable → null",           localDateFromIso("nonsense"),               null);
+check("null → null",                 localDateFromIso(null),                     null);
+
+// ── filmFromJobNumber — 41 films in the book carry a colon of their own ─────
+import { filmFromJobNumber } from "../src/utils/wrikeHelpers.js";
+
+check("film containing a colon survives",
+  filmFromJobNumber("Dune: Part Three : XY025900, INT - DOOH"), "Dune: Part Three");
+check("another real one",
+  filmFromJobNumber("SpongeBob Movie: Search for SquarePants : XY025901, Titles"),
+  "SpongeBob Movie: Search for SquarePants");
+check("plain film",     filmFromJobNumber("The Odyssey : XY025716, Markets"), "The Odyssey");
+check("no separator",   filmFromJobNumber("XY025716"),                        undefined);
+check("bare code only", filmFromJobNumber("XY025716_LUG_D6"),                 undefined);
+check("empty",          filmFromJobNumber(""),                                undefined);
+check("null",           filmFromJobNumber(null),                              undefined);

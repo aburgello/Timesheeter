@@ -59,6 +59,25 @@ export const jobKey = (jobNumber) => {
   return m ? m[0].toUpperCase() : String(jobNumber).trim();
 };
 
+/**
+ * The film title out of a canonical "Film : CODE, Description" label.
+ *
+ * Splits on " : " (space-colon-space), never the first bare colon — 41 films in
+ * the book carry a colon of their own ("Dune: Part Three", "SpongeBob Movie:
+ * Search for SquarePants", "The Fast And The Furious: 25th Anniversary"). The
+ * Tracker used /^([^:]+)\s*:/ in four places, which registered "Dune: Part
+ * Three : XY0…" under the film "Dune".
+ *
+ * undefined, not "", when the label has no " : " — that is what the callers
+ * pass to ensureJob to mean "I have nothing better to offer for this field".
+ */
+export const filmFromJobNumber = (label) => {
+  const s = String(label ?? "");
+  const i = s.indexOf(" : ");
+  if (i === -1) return undefined;
+  return s.slice(0, i).trim() || undefined;
+};
+
 export const resolveJobNumber = (fullCode, jobOptions = []) => {
   const rawXy = (String(fullCode).match(/XY\d{5,6}/i) || [""])[0].toUpperCase();
   // No code at all — a free-text internal job. Nothing to normalise.

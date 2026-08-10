@@ -50,6 +50,22 @@ export function isoToUk(iso) {
  */
 export const toDbDate = (value) => toIsoDate(value);
 
+/**
+ * "YYYY-MM-DD" (or an ISO datetime) → a Date at LOCAL midnight of that day.
+ *
+ * `new Date("2026-08-09")` is parsed as UTC midnight per the spec, so west of
+ * Greenwich getDay() returns the previous weekday — a Saturday timelog lands in
+ * Friday's column. Appending an explicit time forces local parsing. The Legacy
+ * pull already did this inline; the Tracker pull did not.
+ *
+ * Returns null when there is no readable date, so callers can decide rather
+ * than silently getting an Invalid Date.
+ */
+export function localDateFromIso(value) {
+  const iso = toIsoDate(String(value ?? "").split(/[T\s]/)[0]);
+  return iso ? new Date(`${iso}T00:00:00`) : null;
+}
+
 // Weekday name → JS getDay() index. Both day vocabularies in the app spell them
 // out in full and start the week on Monday (constants.DAYS_OF_WEEK is Mon–Fri,
 // legacyConstants.DAYS is Mon–Sun), so one map serves both.

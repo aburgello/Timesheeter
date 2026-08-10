@@ -51,6 +51,13 @@ function parseDdMmYyyy(s) {
   return new Date(y, m - 1, d);
 }
 
+// Wrike stamps completedDate on CANCELLED tasks as well as finished ones — 736
+// of them in this account against 25,386 genuinely completed — so "has a
+// completedDate" is not "was finished". Every count below used to treat the two
+// alike, which inflated the completed tile, the completed-per-month chart and
+// campaign progress with abandoned work.
+const isFinished = (t) => !!t?.completedDate && t.status !== "Cancelled";
+
 const fmtInt = (n) => n.toLocaleString("en-GB");
 const fmtHours = (n) => (n >= 100 ? Math.round(n).toLocaleString("en-GB") : n.toFixed(1)) + "h";
 
@@ -465,7 +472,7 @@ export default function StudioAnalytics({ wrikeData = [] }) {
     let active = 0, completedThisMonth = 0;
     for (const t of wrikeData) {
       if (t.status === "Active") active++;
-      if (t.completedDate && new Date(t.completedDate) >= monthStart) completedThisMonth++;
+      if (isFinished(t) && new Date(t.completedDate) >= monthStart) completedThisMonth++;
     }
     const hours30 = (logRows || []).reduce((s, r) => {
       const d = parseDdMmYyyy(r.date);
@@ -488,7 +495,7 @@ export default function StudioAnalytics({ wrikeData = [] }) {
     }
     const byKey = new Map(buckets.map((b) => [b.key, b]));
     for (const t of wrikeData) {
-      if (!t.completedDate) continue;
+      if (!isFinished(t)) continue;
       const b = byKey.get(t.completedDate.slice(0, 7));
       if (b) b.value++;
     }
@@ -505,7 +512,7 @@ export default function StudioAnalytics({ wrikeData = [] }) {
       if (!name || name === "Unknown Project") continue;
       let rec = per.get(name);
       if (!rec) { rec = { done: 0, active: 0 }; per.set(name, rec); }
-      if (t.completedDate) rec.done++;
+      if (isFinished(t)) rec.done++;
       else if (t.status === "Active") rec.active++;
     }
     // Match either way — the campaign name contains a film title, or (for a

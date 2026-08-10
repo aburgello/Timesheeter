@@ -1,6 +1,6 @@
 import { DAYS_OF_WEEK } from "../constants";
-import { guessFieldsFromTask } from "../utils/wrikeHelpers";
-import { ukDateForWeekday } from "../utils/dates";
+import { guessFieldsFromTask, filmFromJobNumber } from "../utils/wrikeHelpers";
+import { ukDateForWeekday, localDateFromIso } from "../utils/dates";
 import { fetchExistingTimelogIds } from "../lib/supabaseClient";
 import {
   splitTerritories,
@@ -77,9 +77,8 @@ export function useTaskActions(state) {
     // Register this job in the shared Job Book so a Wrike pull (possibly from
     // another session/device) can find it by code instead of only matching by
     // coincidence against this browser's local jobOptions list.
-    const jobColonMatch = jobNumber.match(/^([^:]+)\s*:/);
     state.jobLookup?.ensureJob(jobNumber, {
-      filmTitle: jobColonMatch ? jobColonMatch[1].trim() : undefined,
+      filmTitle: filmFromJobNumber(jobNumber),
     });
 
     const newTask = {
@@ -198,7 +197,8 @@ export function useTaskActions(state) {
       todayLogs.forEach((log) => {
         if (existingTimelogIds.has(log.id)) return;
         const fields = guessFields(log.taskId, log.comment, "Wrike Timelog");
-        const logDate = new Date(log.trackedDate);
+        // Local midnight, not UTC — see localDateFromIso.
+        const logDate = localDateFromIso(log.trackedDate) || new Date(log.trackedDate);
         const logDayName = dayNames[logDate.getDay()];
         // Derive project description from job number "Film : CODE, Description"
         const projectDescription = fields.jobNumber?.includes(",")
@@ -282,8 +282,7 @@ export function useTaskActions(state) {
     const taskIds = groupTasks.map((t) => t.id);
     // Re-derive filmTitle from the (possibly newly-picked) job number "Film Name : CODE, ..." —
     // otherwise a stale filmTitle from a bad Wrike folder-tree guess would survive the edit.
-    const jobColonMatch = editGroupForm.jobNumber.match(/^([^:]+)\s*:/);
-    const filmTitle = jobColonMatch ? jobColonMatch[1].trim() : undefined;
+    const filmTitle = filmFromJobNumber(editGroupForm.jobNumber);
     state.jobLookup?.ensureJob(editGroupForm.jobNumber, { filmTitle });
     updateTasks(taskIds, {
       jobNumber: editGroupForm.jobNumber,
@@ -317,9 +316,8 @@ export function useTaskActions(state) {
     if (editTaskForm.jobNumber && !jobOptions.includes(editTaskForm.jobNumber)) {
       setJobOptions((prev) => [...prev, editTaskForm.jobNumber]);
     }
-    const editJobColonMatch = editTaskForm.jobNumber.match(/^([^:]+)\s*:/);
     state.jobLookup?.ensureJob(editTaskForm.jobNumber, {
-      filmTitle: editJobColonMatch ? editJobColonMatch[1].trim() : undefined,
+      filmTitle: filmFromJobNumber(editTaskForm.jobNumber),
     });
     setEditingTaskId(null);
     triggerToast("Subtask detached and moved successfully!", "success");
@@ -492,9 +490,9 @@ export function useTaskActions(state) {
     if (recentTaskDraft.jobNumber && !jobOptions.includes(recentTaskDraft.jobNumber)) {
       setJobOptions((prev) => [...prev, recentTaskDraft.jobNumber]);
     }
-    const jobColonMatch = (recentTaskDraft.jobNumber || "").match(/^([^:]+)\s*:/);
+
     state.jobLookup?.ensureJob(recentTaskDraft.jobNumber, {
-      filmTitle: jobColonMatch ? jobColonMatch[1].trim() : undefined,
+      filmTitle: filmFromJobNumber(recentTaskDraft.jobNumber),
     });
     const newTask = {
       id: Date.now(),

@@ -2391,12 +2391,16 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
   const loadFilms = useCallback(() => {
     Promise.all([
       supabase.from("films").select("title, studio").order("title"),
-      supabase.from("jobs").select("film_title, updated_at"),
-    ]).then(([filmRes, jobRes]) => {
+      // selectAll: a plain read stops at 1000 rows without erroring, and the
+      // book is at 949. Past that, "most recently worked-on film first" would
+      // have been decided by an arbitrary subset of jobs — and silently, since
+      // a truncated page looks exactly like a complete one.
+      selectAll("jobs", "film_title, updated_at"),
+    ]).then(([filmRes, jobRows]) => {
       const filmRows = filmRes.data || [];
       // Most recent activity per film — the film's newest job touch.
       const latestJob = new Map();
-      (jobRes.data || []).forEach((j) => {
+      (jobRows || []).forEach((j) => {
         if (!j.film_title) return;
         const ts = new Date(j.updated_at || 0).getTime();
         const prev = latestJob.get(j.film_title);
