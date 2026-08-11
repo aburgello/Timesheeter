@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useEditor, EditorContent, NodeViewWrapper, ReactNodeViewRenderer } from "@tiptap/react";
+import { Node, mergeAttributes } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -20,45 +21,83 @@ import {
   Palette, Image as ImageIcon,
 } from "lucide-react";
 
-// Images live in the public "notes-images" Supabase Storage bucket rather
-// than inline (base64) in the note's JSON — the same pattern DOOH specs use
-// (Canvas.js's "dooh-specs" bucket) — so a page full of screenshots doesn't
+// Images and videos live in the public "notes-images" Supabase Storage bucket
+// rather than inline (base64) in the note's JSON — the same pattern DOOH specs
+// use (Canvas.js's "dooh-specs" bucket) — so a page full of screenshots doesn't
 // balloon the jsonb column and every save doesn't have to round-trip the
-// image bytes.
-async function uploadNoteImage(file) {
-  const ext = (file.name.split(".").pop() || "png").toLowerCase();
+// media bytes. For video this is not merely an optimisation: the note travels
+// through the Yjs document on every keystroke, and a <video> can only stream
+// and seek from a real URL — never from an embedded data URI, which the
+// browser must download in full before it will play a single frame.
+
+// Supabase's per-file upload ceiling on the free plan. Checked here so an
+// oversized drop fails with an explanation instead of a silent no-op.
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+const isImageFile = (f) => f.type.startsWith("image/");
+// Not every video/* file actually plays in a browser — an iPhone .mov is
+// usually HEVC, which Chrome and Firefox won't decode. We can't transcode
+// client-side, so those upload fine and then show an empty player; the
+// canPlayType probe below warns at pick time rather than after the upload.
+const isVideoFile = (f) => f.type.startsWith("video/");
+const isMediaFile = (f) => isImageFile(f) || isVideoFile(f);
+
+function videoPlayabilityWarning(file) {
+  const probe = document.createElement("video");
+  // "" = definitely not supported, "maybe"/"probably" = worth attempting.
+  return probe.canPlayType(file.type) === ""
+    ? `${file.name} uses a format this browser can't play (${file.type || "unknown"}). It will upload, but the player may stay blank — re-encode to MP4 (H.264) or WebM first.`
+    : null;
+}
+
+async function uploadNoteMedia(file) {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    reportError(new Error(`Note upload too large: ${file.name} is ${(file.size / 1024 / 1024).toFixed(1)}MB (limit ${MAX_UPLOAD_BYTES / 1024 / 1024}MB)`));
+    return null;
+  }
+  const fallbackExt = isVideoFile(file) ? "mp4" : "png";
+  const ext = (file.name.split(".").pop() || fallbackExt).toLowerCase();
   const path = `${crypto.randomUUID()}.${ext}`;
-  const { error } = await supabase.storage.from("notes-images").upload(path, file, { cacheControl: "3600", upsert: false });
-  if (error) return null;
+  const { error } = await supabase.storage
+    .from("notes-images")
+    .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
+  if (error) {
+    reportError(error);
+    return null;
+  }
   const { data } = supabase.storage.from("notes-images").getPublicUrl(path);
   return data.publicUrl;
 }
 
-async function insertUploadedImage(view, file, atPos) {
-  const url = await uploadNoteImage(file);
+async function insertUploadedMedia(view, file, atPos) {
+  const url = await uploadNoteMedia(file);
   if (!url) return;
   const { state, dispatch } = view;
   const pos = atPos ?? state.selection.from;
-  const node = state.schema.nodes.image.create({ src: url });
+  const node = state.schema.nodes[isVideoFile(file) ? "video" : "image"].create({ src: url });
   dispatch(state.tr.insert(pos, node));
 }
 
 // Drag-to-resize handle on the bottom-right corner, shown only while the
-// image node is the current ProseMirror selection. Width is stored as a
+// media node is the current ProseMirror selection. Width is stored as a
 // node attribute (part of the doc JSON, so it round-trips through
 // save/load like any other content) rather than as transient DOM state.
-function ImageResizeView({ node, updateAttributes, selected }) {
-  const { src, alt, width } = node.attrs;
-  const imgRef = useRef(null);
-
-  const onResizeStart = useCallback((e) => {
+// Shared by the image and video node views — the gesture is identical, only
+// the element being measured differs.
+function useDragResize(elRef, updateAttributes) {
+  return useCallback((e) => {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = imgRef.current.getBoundingClientRect().width;
+    const startWidth = elRef.current.getBoundingClientRect().width;
+    // The drag is measured against the media's own parent, so a width dragged
+    // out here stays proportional when the pane is resized later — dropping a
+    // fixed pixel count in would pin it to whatever this window happens to be.
+    const trackWidth = elRef.current.parentElement?.parentElement?.getBoundingClientRect().width || startWidth;
     const zoom = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
     const onMove = (ev) => {
       const dx = (ev.clientX - startX) / zoom;
-      updateAttributes({ width: Math.max(80, Math.round(startWidth + dx)) });
+      const pct = ((startWidth + dx) / trackWidth) * 100;
+      updateAttributes({ width: `${Math.min(100, Math.max(15, Math.round(pct)))}%` });
     };
     const onUp = () => {
       document.removeEventListener("pointermove", onMove);
@@ -66,39 +105,227 @@ function ImageResizeView({ node, updateAttributes, selected }) {
     };
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
-  }, [updateAttributes]);
+  }, [elRef, updateAttributes]);
+}
 
+// Video defaults to filling the text column: left to its intrinsic size a
+// clip exported at some arbitrary resolution sets its own width, so a note
+// with several of them looked ragged for no reason the author could see.
+// Images keep their intrinsic size ("auto") — notes are full of small
+// screenshots and pasted logos, and blowing those up to the column width
+// would upscale them into a blur.
+const DEFAULT_VIDEO_WIDTH = "100%";
+const DEFAULT_IMAGE_WIDTH = "auto";
+
+// The presets are what make a row of clips possible: two halves or three
+// thirds sit side by side because the node views are inline-block, so they
+// flow like words and wrap when they run out of room. The subtracted pixels
+// leave the gutter between them.
+const WIDTH_PRESETS = [
+  { label: "Full", title: "Full column width", value: "100%" },
+  { label: "½", title: "Half width — two fit side by side", value: "calc(50% - 5px)" },
+  { label: "⅓", title: "Third width — three fit side by side", value: "calc(33.333% - 7px)" },
+];
+
+// Widths were once plain pixel numbers. Those notes still exist, so a number
+// keeps meaning pixels; everything written since is a CSS length.
+const cssWidth = (width, fallback = DEFAULT_VIDEO_WIDTH) => {
+  if (width == null || width === "") return fallback;
+  return typeof width === "number" ? `${width}px` : width;
+};
+
+function ResizeHandle({ onPointerDown }) {
+  return (
+    <span
+      onPointerDown={onPointerDown}
+      title="Drag to resize"
+      style={{
+        position: "absolute", right: -5, bottom: -5, width: 14, height: 14, borderRadius: 4,
+        background: "var(--rne-accent)", border: "2px solid #fff", boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+        cursor: "nwse-resize", touchAction: "none", zIndex: 2,
+      }}
+    />
+  );
+}
+
+// Width presets, shown above the media while it's selected. Sits inside the
+// node view rather than in a portal like the text toolbars: it's anchored to
+// the node, so it has no reason to escape the node's own box.
+function WidthPresets({ current, defaultWidth, onPick }) {
+  return (
+    <span
+      contentEditable={false}
+      style={{
+        position: "absolute", top: -14, left: 0, zIndex: 3, display: "flex", gap: 2, padding: 2,
+        borderRadius: 8, background: "var(--rne-surface, #fff)", border: "1px solid var(--rne-rule, #e3e8ef)",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.12)", lineHeight: 1,
+      }}
+    >
+      {WIDTH_PRESETS.map((p) => {
+        const active = cssWidth(current, defaultWidth) === p.value;
+        return (
+          <button
+            key={p.label}
+            type="button"
+            title={p.title}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onPick(p.value); }}
+            style={{
+              minWidth: 24, height: 20, padding: "0 6px", borderRadius: 6, border: "none", cursor: "pointer",
+              fontSize: 11, fontWeight: 700, fontFamily: "inherit",
+              background: active ? "var(--rne-accent)" : "transparent",
+              color: active ? "#fff" : "var(--rne-muted, #64748b)",
+            }}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
+
+function MediaFrame({ width, defaultWidth, selected, editable, updateAttributes, onResizeStart, children }) {
+  const resolved = cssWidth(width, defaultWidth);
+  const intrinsic = resolved === "auto";
   return (
     <NodeViewWrapper
       as="span"
-      style={{ display: "inline-block", position: "relative", maxWidth: "100%", lineHeight: 0 }}
+      className="rne-media"
+      // data-intrinsic lets the CSS hand sizing back to the media's own
+      // dimensions; an explicit width always wins over it.
+      data-intrinsic={intrinsic ? "true" : undefined}
+      style={{ width: intrinsic ? undefined : resolved, outline: selected ? "2px solid var(--rne-accent)" : "none", outlineOffset: 2 }}
     >
-      <img
-        ref={imgRef}
-        src={src}
-        alt={alt || ""}
-        draggable={false}
-        className="rne-img"
-        style={{ width: width ? `${width}px` : undefined, outline: selected ? "2px solid var(--rne-accent)" : "none", outlineOffset: 2 }}
-      />
-      {selected && (
-        <span
-          onPointerDown={onResizeStart}
-          title="Drag to resize"
-          style={{
-            position: "absolute", right: -5, bottom: -5, width: 14, height: 14, borderRadius: 4,
-            background: "var(--rne-accent)", border: "2px solid #fff", boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
-            cursor: "nwse-resize", touchAction: "none",
-          }}
-        />
+      {children}
+      {selected && editable && (
+        <>
+          <WidthPresets
+            current={width}
+            defaultWidth={defaultWidth}
+            onPick={(value) => updateAttributes({ width: value })}
+          />
+          <ResizeHandle onPointerDown={onResizeStart} />
+        </>
       )}
     </NodeViewWrapper>
   );
 }
 
+function ImageResizeView({ node, updateAttributes, selected, editor }) {
+  const { src, alt, width } = node.attrs;
+  const imgRef = useRef(null);
+  const onResizeStart = useDragResize(imgRef, updateAttributes);
+
+  return (
+    <MediaFrame
+      width={width}
+      defaultWidth={DEFAULT_IMAGE_WIDTH}
+      selected={selected}
+      editable={editor.isEditable}
+      updateAttributes={updateAttributes}
+      onResizeStart={onResizeStart}
+    >
+      <img ref={imgRef} src={src} alt={alt || ""} draggable={false} className="rne-img" />
+    </MediaFrame>
+  );
+}
+
+function VideoResizeView({ node, updateAttributes, selected, editor }) {
+  const { src, width } = node.attrs;
+  const videoRef = useRef(null);
+  const onResizeStart = useDragResize(videoRef, updateAttributes);
+
+  return (
+    <MediaFrame
+      width={width}
+      defaultWidth={DEFAULT_VIDEO_WIDTH}
+      selected={selected}
+      editable={editor.isEditable}
+      updateAttributes={updateAttributes}
+      onResizeStart={onResizeStart}
+    >
+      <video
+        ref={videoRef}
+        src={src}
+        controls
+        // metadata only: the poster frame and duration appear immediately, but
+        // nothing downloads the body of the file until someone hits play. A
+        // note with several clips would otherwise pull tens of megabytes of
+        // Storage egress just by being opened.
+        preload="metadata"
+        playsInline
+        draggable={false}
+        className="rne-video"
+        // The controls are real DOM inside an atom node view. Without this,
+        // ProseMirror treats a pointerdown on the scrubber as the start of a
+        // node drag and the timeline can't be dragged.
+        onPointerDown={(e) => e.stopPropagation()}
+      />
+    </MediaFrame>
+  );
+}
+
 const ResizableImage = Image.extend({
+  // The base Image extension knows only src/alt/title, and TipTap drops
+  // attributes a node hasn't declared — so every image resize was being
+  // thrown away on save, however carefully the node view stored it. Declaring
+  // width here is what actually makes it survive a reload.
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: {
+        default: null,
+        renderHTML: ({ width }) => (width ? { style: `width: ${cssWidth(width)}` } : {}),
+        parseHTML: (el) => el.style.width || null,
+      },
+    };
+  },
+
   addNodeView() {
     return ReactNodeViewRenderer(ImageResizeView);
+  },
+});
+
+// TipTap ships no video node, so this is the minimal one: an atom block
+// holding a Storage URL plus the same width attribute images carry. renderHTML
+// matters even though the node view owns the on-screen rendering — it is what
+// gets produced when a note is copied out or serialised to HTML.
+const Video = Node.create({
+  name: "video",
+  group: "block",
+  atom: true,
+  draggable: true,
+
+  addAttributes() {
+    return {
+      src: { default: null },
+      width: {
+        default: null,
+        renderHTML: ({ width }) => (width ? { style: `width: ${cssWidth(width)}` } : {}),
+        parseHTML: (el) => el.style.width || null,
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: "video[src]" }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ["video", mergeAttributes(HTMLAttributes, { controls: "true", preload: "metadata", class: "rne-video" })];
+  },
+
+  addCommands() {
+    return {
+      setVideo:
+        (options) =>
+        ({ commands }) =>
+          commands.insertContent({ type: this.name, attrs: options }),
+    };
+  },
+
+  addNodeView() {
+    return ReactNodeViewRenderer(VideoResizeView);
   },
 });
 
@@ -123,7 +350,7 @@ const decodeYState = (str) => {
 const hasContent = (content) => {
   if (!content) return false;
   const json = JSON.stringify(content);
-  return json.includes('"text"') || json.includes('"image"');
+  return json.includes('"text"') || json.includes('"image"') || json.includes('"video"');
 };
 
 const TEXT_COLORS = [
@@ -164,6 +391,7 @@ const SLASH_COMMANDS = [
   { title: "Code block", kw: "code block", ic: "</>", run: (e) => e.chain().focus().toggleCodeBlock().run() },
   { title: "Divider", kw: "divider hr rule line", ic: "—", run: (e) => e.chain().focus().setHorizontalRule().run() },
   { title: "Image", kw: "image picture photo upload embed", ic: "🖼", run: (_e, helpers) => helpers?.openImagePicker() },
+  { title: "Video", kw: "video movie clip film upload embed mp4", ic: "🎬", run: (_e, helpers) => helpers?.openVideoPicker() },
 ];
 
 // depth 1 = the top-level block (paragraph/heading/list/etc.) directly under
@@ -204,6 +432,7 @@ function NoteEditor({
   const dragFromRef = useRef(null);
   const wrapRef = useRef(null);
   const imageInputRef = useRef(null);
+  const videoInputRef = useRef(null);
   // Has this editor ever displayed content in this session? Gates the
   // empty-save guard in onUpdate — see there.
   const sawContentRef = useRef(false);
@@ -287,6 +516,7 @@ function NoteEditor({
       TextStyle,
       Color,
       ResizableImage.configure({ inline: false }),
+      Video,
       ...(collab
         ? [
             Collaboration.configure({ document: collab.doc }),
@@ -333,18 +563,18 @@ function NoteEditor({
         return false;
       },
       handlePaste(view, event) {
-        const files = Array.from(event.clipboardData?.files || []).filter((f) => f.type.startsWith("image/"));
+        const files = Array.from(event.clipboardData?.files || []).filter(isMediaFile);
         if (!files.length) return false;
         event.preventDefault();
-        files.forEach((file) => insertUploadedImage(view, file));
+        files.forEach((file) => insertUploadedMedia(view, file));
         return true;
       },
       handleDrop(view, event) {
-        const files = Array.from(event.dataTransfer?.files || []).filter((f) => f.type.startsWith("image/"));
+        const files = Array.from(event.dataTransfer?.files || []).filter(isMediaFile);
         if (!files.length) return false;
         event.preventDefault();
         const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? view.state.selection.from;
-        files.forEach((file) => insertUploadedImage(view, file, pos));
+        files.forEach((file) => insertUploadedMedia(view, file, pos));
         return true;
       },
     },
@@ -620,7 +850,10 @@ function NoteEditor({
     if (!slashRangeRef.current) return;
     const { from, to } = slashRangeRef.current;
     editor.chain().focus().deleteRange({ from, to }).run();
-    cmd.run(editor, { openImagePicker: () => imageInputRef.current?.click() });
+    cmd.run(editor, {
+      openImagePicker: () => imageInputRef.current?.click(),
+      openVideoPicker: () => videoInputRef.current?.click(),
+    });
     slashRangeRef.current = null;
     setSlash(null);
   };
@@ -629,8 +862,18 @@ function NoteEditor({
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    const url = await uploadNoteImage(file);
+    const url = await uploadNoteMedia(file);
     if (url) editor.chain().focus().setImage({ src: url }).run();
+  };
+
+  const onVideoFileChosen = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const warning = videoPlayabilityWarning(file);
+    if (warning && !window.confirm(`${warning}\n\nUpload anyway?`)) return;
+    const url = await uploadNoteMedia(file);
+    if (url) editor.chain().focus().setVideo({ src: url }).run();
   };
 
   // Right-click anywhere on a block's row opens the slash menu for that
@@ -667,8 +910,8 @@ function NoteEditor({
       onContextMenu={onEditorContextMenu}
     >
       <style>{`
-        .rne-root .ProseMirror { outline: none; font-size: 16px; line-height: 1.7; color: var(--rne-fg); max-width: var(--rne-measure, 46rem); margin-inline: auto; padding: 4px 24px 48px; transition: max-width 0.2s ease; }
-        @media (min-width: 640px) { .rne-root .ProseMirror { padding: 4px 48px 48px; } }
+        .rne-root .ProseMirror { outline: none; font-size: 16px; line-height: 1.7; color: var(--rne-fg); max-width: var(--rne-measure, 46rem); margin-inline: auto; padding: 4px 14px 48px; transition: max-width 0.2s ease; }
+        @media (min-width: 640px) { .rne-root .ProseMirror { padding: 4px 22px 48px; } }
         .rne-root h2 { font-size: 1.55rem; font-weight: 750; letter-spacing: -0.01em; margin: 0 0 10px; }
         .rne-root h3 { font-size: 1.28rem; font-weight: 750; letter-spacing: -0.01em; margin: 18px 0 8px; }
         .rne-root p { margin: 0 0 12px; }
@@ -687,7 +930,18 @@ function NoteEditor({
         .rne-root ul[data-type="taskList"] li > label { margin-top: 3px; }
         .rne-root ul[data-type="taskList"] input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--rne-accent); cursor: pointer; }
         .rne-root hr { border: none; border-top: 1px solid var(--rne-rule); margin: 18px 0; }
-        .rne-root img.rne-img { max-width: 100%; height: auto; border-radius: 10px; margin: 4px 0 14px; display: block; cursor: pointer; }
+        /* Media flows inline-block rather than as its own block row, which is
+           what lets two half-width or three third-width items sit side by
+           side and wrap onto the next line on their own when the pane is too
+           narrow — no grid, no wrapper node, just normal inline flow. */
+        .rne-root .rne-media { display: inline-block; position: relative; vertical-align: top; max-width: 100%; line-height: 0; margin: 4px 8px 14px 0; }
+        .rne-root .rne-media > img, .rne-root .rne-media > video { width: 100%; height: auto; display: block; border-radius: 10px; }
+        .rne-root .rne-media[data-intrinsic] > img { width: auto; max-width: 100%; }
+        .rne-root img.rne-img { cursor: pointer; }
+        .rne-root video.rne-video { background: #000; }
+        /* Below the phone breakpoint a half or a third is unreadable, so every
+           item takes the full column regardless of the width it was given. */
+        @media (max-width: 640px) { .rne-root .rne-media { width: 100% !important; margin-right: 0; } }
         /* Collaborator carets. The name hangs BELOW the cursor and stays put —
            above-on-hover meant you had to go find a cursor and hover it to learn
            who was typing. Below-and-always keeps the name attached to the
@@ -710,6 +964,7 @@ function NoteEditor({
       <EditorContent editor={editor} />
 
       <input ref={imageInputRef} type="file" accept="image/*" onChange={onImageFileChosen} style={{ display: "none" }} />
+      <input ref={videoInputRef} type="file" accept="video/*" onChange={onVideoFileChosen} style={{ display: "none" }} />
 
       {dropIndicator && createPortal(
         <div

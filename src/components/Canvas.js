@@ -53,6 +53,7 @@ import {
   List,
   RefreshCw,
   Users,
+  Share2,
   User,
   Maximize2,
   Minimize2,
@@ -231,8 +232,24 @@ function CollapsibleCard({ icon: Icon, title, subtitle, isOpen, onToggle, childr
 // a campaign was enough to save one. Judging on the string being non-empty
 // counted six such blanks as six wrap-ups. Test for actual content instead —
 // the same check RichNoteEditor makes before persisting.
+// Distinct from every personal colour (which come from profiles) and from the
+// team board's terracotta, so "Shared with me" doesn't read as someone's space.
+const SHARED_ACCENT = "#0d9488";
+
+// Deep link to a single note/sketch: "#canvas/note-<uuid>".
+//
+// The second hash segment is safe to hang this on. App.jsx routes on the
+// FIRST segment only (pageFromHash splits on "/"), and it rewrites the hash
+// solely when that first segment disagrees with the active page — so "canvas"
+// still resolves the page and the note id survives instead of being stamped
+// out by the app's own hash bookkeeping.
+const NOTE_LINK_RE = /^#?canvas\/note-([0-9a-fA-F-]{36})/;
+const notePageIdFromHash = () => (window.location.hash.match(NOTE_LINK_RE) || [])[1] || null;
+const noteLinkFor = (pageId) =>
+  `${window.location.origin}${window.location.pathname}#canvas/note-${pageId}`;
+
 const hasNoteContent = (raw) =>
-  !!raw && (raw.includes('"text"') || raw.includes('"image"'));
+  !!raw && (raw.includes('"text"') || raw.includes('"image"') || raw.includes('"video"'));
 
 function EndOfCampaignNotesCard({ campaigns, department }) {
   const [search, setSearch] = useState("");
@@ -831,13 +848,124 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
   // Separate from editorExpanded: that flag now auto-fires for ANY open note
   // (see the effect below) purely to reclaim the campaigns column's width —
   // it says nothing about whether THIS card's own topics/pages rail should
-  // hide. A sketch benefits from every pixel (railCollapsed defaults true for
-  // it); a text note doesn't need the rail gone just because a note is open,
-  // so it stays visible unless the user explicitly asks for full focus via
-  // the maximize button.
+  // hide. The rail is set per opened page in that same effect (collapsed for
+  // a sketch, visible for a text note), so this initial value only covers
+  // the state before anything is open.
   const [railCollapsed, setRailCollapsed] = useState(false);
 
   const currentUserId = useMemo(() => localStorage.getItem("wrike_user_id") || null, []);
+
+  // --- Sharing a single page with named teammates -------------------------
+  // Two separate reads rather than loading the whole share table: the pages
+  // shared *with me* (for the "Shared with me" board), and the shares *on the
+  // open page* (for the share menu). Pages shared from another department
+  // aren't in `pages` — that's fetched per-department — so shared pages are
+  // fetched by id and kept in their own list.
+  const [sharedPages, setSharedPages] = useState([]);
+  const [pageShares, setPageShares] = useState([]);
+  const [shareOpen, setShareOpen] = useState(false);
+
+  const loadSharedWithMe = useCallback(async () => {
+    if (!currentUserId) return;
+    const { data: rows } = await supabase
+      .from("canvas_note_shares")
+      .select("page_id, shared_by_wrike_id")
+      .eq("shared_with_wrike_id", currentUserId);
+    const ids = (rows || []).map((r) => r.page_id);
+    if (!ids.length) { setSharedPages([]); return; }
+    const { data: p } = await supabase.from("canvas_notes_pages").select("*").in("id", ids);
+    const sharedBy = new Map((rows || []).map((r) => [r.page_id, r.shared_by_wrike_id]));
+    setSharedPages((p || []).map((pg) => ({ ...pg, shared_by: sharedBy.get(pg.id) })));
+  }, [currentUserId]);
+
+  useEffect(() => { if (isOpen) loadSharedWithMe(); }, [isOpen, loadSharedWithMe]);
+
+  // Who the open page is shared with. Reloaded per page so the menu can't
+  // show another page's recipients.
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedPageId) { setPageShares([]); return; }
+    (async () => {
+      const { data } = await supabase
+        .from("canvas_note_shares")
+        .select("id, shared_with_wrike_id")
+        .eq("page_id", selectedPageId);
+      if (!cancelled) setPageShares(data || []);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedPageId]);
+
+  useEffect(() => { setShareOpen(false); }, [selectedPageId]);
+
+  // --- Opening a shared link ----------------------------------------------
+  // A link can point at a page from any topic or department, so it may not be
+  // in `pages` (this department only) or `sharedPages`. Fetch the row by id
+  // and keep it here so the editor can resolve it either way.
+  const [linkedPages, setLinkedPages] = useState([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    const openFromHash = async () => {
+      const id = notePageIdFromHash();
+      if (!id) return;
+      setSelectedPageId(id);
+      const { data } = await supabase.from("canvas_notes_pages").select("*").eq("id", id).maybeSingle();
+      if (cancelled || !data) return;
+      setLinkedPages((prev) => (prev.some((p) => p.id === data.id) ? prev : [...prev, data]));
+      setSelectedFolderId(data.folder_id);
+      // Land on the board the page actually belongs to, so the header and
+      // accent describe where you are rather than whichever board happened
+      // to be open when the link was followed.
+      const { data: folder } = await supabase
+        .from("canvas_notes_folders")
+        .select("owner_wrike_id")
+        .eq("id", data.folder_id)
+        .maybeSingle();
+      if (cancelled) return;
+      const owner = folder?.owner_wrike_id || null;
+      setActiveBoard(!owner ? "team" : owner === currentUserId ? "mine" : owner);
+    };
+    openFromHash();
+    window.addEventListener("hashchange", openFromHash);
+    return () => { cancelled = true; window.removeEventListener("hashchange", openFromHash); };
+  }, [isOpen, currentUserId]);
+
+  const [linkCopied, setLinkCopied] = useState(false);
+  const copyPageLink = async () => {
+    if (!selectedPageId) return;
+    try {
+      await navigator.clipboard.writeText(noteLinkFor(selectedPageId));
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 1800);
+    } catch {
+      // Clipboard access can be refused (permissions, insecure origin). Say
+      // so rather than flashing "Copied!" over a clipboard that never changed.
+      window.prompt("Copy this link:", noteLinkFor(selectedPageId));
+    }
+  };
+
+  const toggleShare = async (wrikeId) => {
+    if (!selectedPageId) return;
+    const existing = pageShares.find((s) => s.shared_with_wrike_id === wrikeId);
+    if (existing) {
+      setPageShares((prev) => prev.filter((s) => s.id !== existing.id));
+      await supabase.from("canvas_note_shares").delete().eq("id", existing.id);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("canvas_note_shares")
+      .insert({
+        page_id: selectedPageId,
+        shared_with_wrike_id: wrikeId,
+        shared_by_wrike_id: currentUserId,
+      })
+      .select("id, shared_with_wrike_id")
+      .single();
+    // Optimism is added only once the row exists — a failed insert that left
+    // the name ticked would read as "shared" when nothing had been.
+    if (!error && data) setPageShares((prev) => [...prev, data]);
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1044,14 +1172,32 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
   // true with no way back short of a page refresh. Keyed on selectedPageId
   // itself (not editorExpanded) so toggling the parent flag manually doesn't
   // immediately get overridden by this effect re-firing.
+  // Every page the editor can resolve, kept in a ref rather than in the
+  // effect's deps below: those lists change on every realtime update, and
+  // re-running the effect for that would snap the rail back and undo a
+  // collapse the user had just done by hand.
+  const allPagesRef = useRef([]);
+  allPagesRef.current = [pages, sharedPages, linkedPages];
+
   useEffect(() => {
     if (selectedPageId && !editorExpanded) toggleEditorExpanded();
     if (!selectedPageId && editorExpanded) toggleEditorExpanded();
-    // Rail stays visible for any newly-opened page, sketch or text — the
-    // user can still collapse it manually via the maximize button.
-    setRailCollapsed(false);
+    // A sketch opens with the rail already out of the way — it's a canvas,
+    // and every pixel of width counts. A text note keeps the list visible;
+    // its prose is capped at a readable measure anyway, so hiding the rail
+    // would buy nothing but a longer trip back to the other notes. Either
+    // way the maximize button still toggles it by hand.
+    const kind = allPagesRef.current.flat().find((p) => p.id === selectedPageId)?.kind;
+    setRailCollapsed(kind === "sketch");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPageId]);
+
+  // A sketch reached by a shared link is fetched after the effect above has
+  // already run, so its kind wasn't known then — collapse once it lands.
+  useEffect(() => {
+    const linked = linkedPages.find((p) => p.id === selectedPageId);
+    if (linked?.kind === "sketch") setRailCollapsed(true);
+  }, [linkedPages, selectedPageId]);
 
   // Memoised: this is handed to the editor, which uses it to build the Yjs
   // awareness state at mount. A fresh object literal each render would look
@@ -1070,7 +1216,13 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
   // nulled on unmount, so switching notes can't leave a stale one behind.
   const [collabProvider, setCollabProvider] = useState(null);
 
-  const selectedPage = pages.find((p) => p.id === selectedPageId);
+  // `pages` only holds this department's pages, so a page shared from another
+  // department is findable only in sharedPages — without this fallback,
+  // opening one from "Shared with me" would select nothing.
+  const selectedPage =
+    pages.find((p) => p.id === selectedPageId)
+    || sharedPages.find((p) => p.id === selectedPageId)
+    || linkedPages.find((p) => p.id === selectedPageId);
   // A text note's own editor column is already the wide 1fr side of the
   // two-column grid regardless of whether the rail is collapsed — capping
   // its prose at the same narrow 46rem either way just wastes the room a
@@ -1083,7 +1235,10 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
   // One accent for the whole active board: terracotta for the team board, the
   // owner's colour for a personal/teammate space — so the section reads as
   // "whose space am I in" at a glance, not just a coloured pill.
-  const boardAccent = activeBoard === "team" ? "#c2410d" : activeBoard === "mine" ? myColor : colorFor(activeBoard);
+  const boardAccent = activeBoard === "team" ? "#c2410d"
+    : activeBoard === "mine" ? myColor
+    : activeBoard === "shared" ? SHARED_ACCENT
+    : colorFor(activeBoard);
 
   // Pull plain text out of a stored TipTap document — powers the note-list
   // preview snippet and the editor's live word count. Accepts either a full
@@ -1199,6 +1354,31 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
             </button>
           )}
 
+          {/* Only appears once something has actually been shared with you —
+              an always-present empty board would just be furniture. */}
+          {sharedPages.length > 0 && (
+            <button
+              onClick={() => { setActiveBoard("shared"); setSelectedPageId(null); }}
+              className={`inline-flex items-center gap-2 pl-3 pr-4 py-2 rounded-2xl text-sm font-black tracking-wide transition-[color,background-color,border-color,box-shadow] focus-visible:ring-2 focus-visible:ring-[#c2410d]/40 focus-visible:outline-none ${
+                activeBoard === "shared" ? "text-white shadow-md" : "bg-white/80 border border-[#ece4d8] text-[#8a8073] hover:text-[#5a5147]"
+              }`}
+              style={activeBoard === "shared"
+                ? { background: `linear-gradient(135deg, ${SHARED_ACCENT}, ${SHARED_ACCENT}cc)` }
+                : { borderColor: `${SHARED_ACCENT}30` }}
+            >
+              <span
+                className="w-6 h-6 rounded-lg grid place-items-center shrink-0"
+                style={activeBoard === "shared"
+                  ? { backgroundColor: "#ffffff2a", color: "#fff" }
+                  : { backgroundColor: `${SHARED_ACCENT}18`, color: SHARED_ACCENT }}
+              >
+                <Share2 className="w-3.5 h-3.5" />
+              </span>
+              Shared with me
+              <span className="text-[11px] font-bold tabular-nums opacity-70">{sharedPages.length}</span>
+            </button>
+          )}
+
           {teammateIds.map((id) => {
             const color = colorFor(id);
             const isActive = activeBoard === id;
@@ -1235,6 +1415,10 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                inline (it's derived from the member's own colour). */
             style={activeBoard === "mine" ? { borderColor: `${myColor}44`, backgroundColor: `${myColor}08` } : undefined}
           >
+            {/* "Shared with me" is a read-through of other people's pages —
+                there's no topic of yours here for a new note to belong to, so
+                the create controls step aside rather than failing on click. */}
+            {activeBoard !== "shared" && (
             <div className="p-2.5 border-b border-slate-100 flex items-center gap-1.5">
               <button
                 onClick={() => handleNewNote("text")}
@@ -1252,10 +1436,11 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                 <PenTool className="w-4 h-4" />
               </button>
             </div>
+            )}
 
             <div className="flex items-center gap-2 px-3 pt-2.5 pb-1">
               <span className="text-[10px] font-black uppercase tracking-[0.13em] text-[#8a8073] flex-1 truncate">
-                {activeBoard === "mine" ? myName : boardLabelFor(department)}
+                {activeBoard === "mine" ? myName : activeBoard === "shared" ? "Shared with me" : boardLabelFor(department)}
               </span>
               {activeBoard === "mine" && (
                 <button
@@ -1305,7 +1490,41 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
             )}
 
             <div className="flex-1 overflow-y-auto px-2 pb-3">
-              {activeBoardFolders.length === 0 ? (
+              {activeBoard === "shared" ? (
+                // Shared pages come from every topic and department, so they
+                // list flat — grouping them under topic headers would imply a
+                // structure the recipient has no access to navigate.
+                sharedPages.map((page) => {
+                  const active = selectedPageId === page.id;
+                  const isSketch = page.kind === "sketch";
+                  return (
+                    <div
+                      key={page.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => { setSelectedFolderId(page.folder_id); setSelectedPageId(page.id); }}
+                      className={`group/page flex items-start gap-2.5 mx-1 px-2 py-2 rounded-lg cursor-pointer transition-colors ${
+                        active ? "bg-white shadow-sm" : "hover:bg-black/[0.03]"
+                      }`}
+                    >
+                      <span
+                        className="w-6 h-6 rounded-md grid place-items-center shrink-0 mt-0.5"
+                        style={{ backgroundColor: active ? `${boardAccent}18` : "#00000008", color: active ? boardAccent : "#8a8073" }}
+                      >
+                        {isSketch ? <PenTool className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className={`block text-[13px] font-semibold truncate leading-tight ${active ? "" : "text-[#3a352e]"}`} style={active ? { color: boardAccent } : undefined}>
+                          {page.title || "Untitled"}
+                        </span>
+                        <span className="block text-[11px] text-[#8a8073] truncate mt-0.5">
+                          {page.shared_by ? `Shared by ${nameFor(page.shared_by)}` : "Shared with you"}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })
+              ) : activeBoardFolders.length === 0 ? (
                 <p className="text-xs font-semibold text-[#8a8073] px-2 py-4">
                   No topics yet — add one with the + above.
                 </p>
@@ -1420,7 +1639,10 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
             <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-100 shrink-0">
               <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.13em]" style={{ color: `${boardAccent}` }}>
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: boardAccent }} />
-                {activeBoard === "mine" ? myName : activeBoard === "team" ? boardLabelFor(department) : nameFor(activeBoard)}
+                {activeBoard === "mine" ? myName
+                  : activeBoard === "team" ? boardLabelFor(department)
+                  : activeBoard === "shared" ? "Shared with me"
+                  : nameFor(activeBoard)}
               </span>
               {selectedPage?.kind === "sketch" && (
                 <input
@@ -1432,6 +1654,86 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
               )}
               <div className="flex-1" />
               {selectedPage && <SaveStatus state={pageSaveState} lastSavedAt={pageLastSavedAt} />}
+              {/* Share lives in the top bar rather than the document head so
+                  it's reachable for sketches too — they skip the head. */}
+              {selectedPage && currentUserId && (
+                <div className="relative shrink-0">
+                  <button
+                    onClick={() => setShareOpen((v) => !v)}
+                    title="Share this page with teammates"
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors ${
+                      pageShares.length ? "text-white" : "text-[#8a8073] hover:bg-black/5"
+                    }`}
+                    style={pageShares.length ? { backgroundColor: SHARED_ACCENT } : undefined}
+                  >
+                    <Share2 className="w-4 h-4" />
+                    {pageShares.length > 0 && <span className="tabular-nums">{pageShares.length}</span>}
+                  </button>
+                  {shareOpen && (
+                    <>
+                      <div className="fixed inset-0 z-[60]" onClick={() => setShareOpen(false)} />
+                      <div className="absolute right-0 top-full mt-1.5 z-[61] w-60 max-h-72 overflow-y-auto rounded-xl border border-[#ece4d8] bg-white shadow-xl p-1.5">
+                        {/* Copy link sits above the people list: sending a
+                            link is the quickest way to get someone to a page,
+                            and it works whether or not you also tick them. */}
+                        <button
+                          onClick={copyPageLink}
+                          className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-black/[0.04] transition-colors text-left"
+                        >
+                          <span
+                            className="w-6 h-6 rounded-lg grid place-items-center shrink-0"
+                            style={{ backgroundColor: `${SHARED_ACCENT}18`, color: SHARED_ACCENT }}
+                          >
+                            {linkCopied ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
+                          </span>
+                          <span className="min-w-0 flex-1 text-[12px] font-bold text-[#3a352e]">
+                            {linkCopied ? "Link copied" : "Copy link to this page"}
+                          </span>
+                        </button>
+                        <p className="px-2 pt-1.5 pb-1 text-[10px] font-black uppercase tracking-[0.12em] text-[#8a8073] border-t border-[#f2ece2] mt-1">
+                          Notify
+                        </p>
+                        {profiles.filter((pr) => pr.wrike_user_id !== currentUserId).length === 0 ? (
+                          <p className="px-2 py-2 text-[11px] text-[#8a8073]">No teammates found.</p>
+                        ) : (
+                          profiles
+                            .filter((pr) => pr.wrike_user_id !== currentUserId)
+                            .map((pr) => {
+                              const on = pageShares.some((s) => s.shared_with_wrike_id === pr.wrike_user_id);
+                              const color = colorFor(pr.wrike_user_id);
+                              return (
+                                <button
+                                  key={pr.wrike_user_id}
+                                  onClick={() => toggleShare(pr.wrike_user_id)}
+                                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-black/[0.04] transition-colors text-left"
+                                >
+                                  <span
+                                    className="w-6 h-6 rounded-lg grid place-items-center text-[10px] font-black shrink-0"
+                                    style={{ backgroundColor: `${color}18`, color }}
+                                  >
+                                    {(pr.first_name || "?").charAt(0)}
+                                  </span>
+                                  <span className="min-w-0 flex-1 text-[12px] font-semibold text-[#3a352e] truncate">
+                                    {[pr.first_name, pr.last_name].filter(Boolean).join(" ") || pr.wrike_user_id}
+                                  </span>
+                                  <span
+                                    className={`w-4 h-4 rounded grid place-items-center shrink-0 border ${on ? "border-transparent" : "border-[#d5cdbf]"}`}
+                                    style={on ? { backgroundColor: SHARED_ACCENT } : undefined}
+                                  >
+                                    {on && <Check className="w-3 h-3 text-white" />}
+                                  </span>
+                                </button>
+                              );
+                            })
+                        )}
+                        <p className="px-2 pt-2 pb-1 text-[10px] leading-snug text-[#a29889] border-t border-[#f2ece2] mt-1">
+                          Ticking puts this page in their “Shared with me”. Everyone signed in can already open any note — this isn’t a permission.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
               {selectedPage && (
                 <button
                   onClick={() => setRailCollapsed((v) => !v)}
@@ -1451,7 +1753,7 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
                 {selectedPage.kind !== "sketch" && (
                 <div className={`w-full mx-auto px-6 sm:px-12 pt-7 shrink-0 transition-[max-width] duration-200 ${proseWide ? "max-w-[62rem]" : "max-w-[46rem]"}`}>
                   <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.12em] mb-3" style={{ color: boardAccent }}>
-                    <span>{activeBoard === "mine" ? myName : boardLabelFor(department)}</span>
+                    <span>{activeBoard === "mine" ? myName : activeBoard === "shared" ? "Shared with me" : boardLabelFor(department)}</span>
                     {selectedPageFolder && <><span className="opacity-40">/</span><span className="text-[#8a8073] truncate">{selectedPageFolder.name}</span></>}
                   </div>
                   <input
@@ -2186,7 +2488,18 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   //
   // Opens on Campaigns: the switcher alone over an empty page reads as a
   // page that failed to load, and the art-wall is what this page is for.
-  const [canvasView, setCanvasView] = useState("campaigns");
+  // ...unless a shared note link brought us here, in which case opening on
+  // Campaigns would hide the very page the link was for.
+  const [canvasView, setCanvasView] = useState(() => (notePageIdFromHash() ? "notes" : "campaigns"));
+
+  // Following a second link while already on this page changes only the hash,
+  // so nothing would remount — switch to Notes on the hash change itself.
+  useEffect(() => {
+    const onHash = () => { if (notePageIdFromHash()) setCanvasView("notes"); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
   const [collapsedStudios, setCollapsedStudios] = useState({}); // {studio: true} = folded
   // Notes "expand" → full page width: hides the campaigns panel + the notes rail.
   const [notesExpanded, setNotesExpanded] = useState(false);

@@ -1,5 +1,10 @@
 import React, { useRef, useCallback, useEffect, useState } from "react";
-import { Excalidraw, getSceneVersion } from "@excalidraw/excalidraw";
+import {
+  Excalidraw,
+  getSceneVersion,
+  restoreElements,
+  viewportCoordsToSceneCoords,
+} from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import { supabase } from "../../lib/supabaseClient";
 import { reportError } from "../../lib/monitoring";
@@ -48,6 +53,96 @@ async function uploadFiles(path, files) {
   return !error;
 }
 
+// --- Video on the canvas -----------------------------------------------
+//
+// Excalidraw has no video element, but it does have "embeddable" — an iframe
+// it treats as a first-class object: freely placed, resized, and (the reason
+// this works at all) in its list of *bindable* types, so arrows attach to a
+// clip and stay attached when it moves. Excalidraw's URL resolver falls
+// through to a generic iframe for any link that passes validateEmbeddable,
+// and an iframe pointing at an .mp4 is the browser's own video player.
+//
+// Videos deliberately do NOT go through the `files` map that images use.
+// That map is serialised to Storage as one JSON blob holding every image as
+// base64 — fine for screenshots, ruinous for a 10 MB clip, which would be
+// re-encoded and re-uploaded whole on every scene change. An embeddable
+// carries only its URL, so a video costs the scene a few hundred bytes and
+// the save path never touches the media.
+const STORAGE_PREFIX = `${supabase.storage.from(BUCKET).getPublicUrl("").data.publicUrl}`;
+
+// Clips are framed through our own /api/embed/video page rather than pointed
+// straight at the .mp4. A raw media URL in an iframe renders Chrome's built-in
+// media document, which decides for itself whether to start playing; our
+// wrapper sets `controls` and no autoplay, so a board opens silent and still.
+const EMBED_PREFIX = "/api/embed/video?src=";
+const embedUrlFor = (fileUrl) => `${EMBED_PREFIX}${encodeURIComponent(fileUrl)}`;
+
+// Boards saved before the wrapper existed hold links straight to the .mp4,
+// and those are exactly the ones that render Chrome's media document and
+// start playing the moment the board opens. Rewriting them on load fixes
+// every existing board without a migration. It's deliberately not a write:
+// the element's `version` is untouched, so getSceneVersion is unchanged and
+// this triggers no save — it just means a legacy link never reaches the
+// renderer as a bare media URL again.
+const withWrappedVideoLinks = (elements) =>
+  (elements || []).map((el) =>
+    el?.type === "embeddable" && typeof el.link === "string" && el.link.startsWith(STORAGE_PREFIX)
+      ? { ...el, link: embedUrlFor(el.link) }
+      : el
+  );
+
+// Only our own embed page may be framed. Excalidraw's default allowlist (of
+// YouTube, Figma and friends) is replaced entirely by this, so a board can't
+// become a vector for embedding an arbitrary third-party page. Boards written
+// before the wrapper existed still hold direct Storage URLs, so those stay
+// valid too.
+const validateEmbeddable = (url) => {
+  if (typeof url !== "string") return false;
+  if (url.startsWith(STORAGE_PREFIX)) return true;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.origin === window.location.origin && parsed.pathname === "/api/embed/video";
+  } catch {
+    return false;
+  }
+};
+
+const VIDEO_FALLBACK_SIZE = { width: 480, height: 270 };
+
+// Read the clip's real dimensions so the element lands with the right aspect
+// ratio instead of a guessed box the author has to reshape by hand.
+function probeVideoSize(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const probe = document.createElement("video");
+    const done = (size) => { URL.revokeObjectURL(url); resolve(size); };
+    probe.onloadedmetadata = () => {
+      const { videoWidth: w, videoHeight: h } = probe;
+      if (!w || !h) return done(VIDEO_FALLBACK_SIZE);
+      // Normalise to a sensible on-canvas size rather than the file's pixel
+      // dimensions — a 4K clip would otherwise arrive as a 3840px monster.
+      const scale = Math.min(1, 480 / w);
+      done({ width: Math.round(w * scale), height: Math.round(h * scale) });
+    };
+    probe.onerror = () => done(VIDEO_FALLBACK_SIZE);
+    probe.preload = "metadata";
+    probe.src = url;
+  });
+}
+
+async function uploadCanvasVideo(file) {
+  const ext = (file.name.split(".").pop() || "mp4").toLowerCase();
+  const path = `sketch-media/${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage
+    .from(BUCKET)
+    .upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
+  if (error) {
+    reportError(error, { where: "sketch video upload" });
+    return null;
+  }
+  return supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
 export default function ExcalidrawPageEditor({ pageId, content, onChange }) {
   const saveTimerRef = useRef(null);
   const sceneVersionRef = useRef(null);
@@ -58,6 +153,76 @@ export default function ExcalidrawPageEditor({ pageId, content, onChange }) {
   // of discarding it.
   const pendingRef = useRef(null);
   const [initialData, setInitialData] = useState(null);
+  const apiRef = useRef(null);
+  const videoInputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+
+  // Drop a clip onto the canvas and it lands where the pointer let go; use
+  // the toolbar button and it lands in the middle of what you're looking at.
+  const insertVideo = useCallback(async (file, at) => {
+    if (!apiRef.current) return;
+    setBusy(true);
+    try {
+      const [url, size] = await Promise.all([uploadCanvasVideo(file), probeVideoSize(file)]);
+      if (!url) return;
+      const state = apiRef.current.getAppState();
+      const origin = at
+        ? viewportCoordsToSceneCoords({ clientX: at.clientX, clientY: at.clientY }, state)
+        : viewportCoordsToSceneCoords(
+            { clientX: state.offsetLeft + state.width / 2, clientY: state.offsetTop + state.height / 2 },
+            state
+          );
+      // restoreElements, not convertToExcalidrawElements. The latter passes
+      // embeddable/iframe/freedraw skeletons through untouched —
+      // `case "embeddable": { s = l; break }` — filling in none of the fields
+      // every element is required to carry. The half-built element reached
+      // the renderer without id/seed/groupIds/boundElements and it read
+      // .length off one of them. restoreElements is the supported normaliser
+      // and fills the whole shape.
+      const [element] = restoreElements(
+        [
+          {
+            type: "embeddable",
+            x: origin.x - size.width / 2,
+            y: origin.y - size.height / 2,
+            width: size.width,
+            height: size.height,
+            link: embedUrlFor(url),
+          },
+        ],
+        null
+      );
+      if (!element) {
+        reportError(new Error("Sketch video: element failed to restore"), { url });
+        return;
+      }
+      apiRef.current.updateScene({
+        elements: [...apiRef.current.getSceneElements(), element],
+        // Select it on arrival, so it can be moved or arrowed to straight
+        // away without hunting for it.
+        appState: { selectedElementIds: { [element.id]: true } },
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  // Excalidraw handles dropped images itself but ignores video files, so this
+  // listens on the capture phase: video is claimed before Excalidraw sees the
+  // event, anything else falls through to its own handling untouched.
+  const onDropCapture = useCallback((e) => {
+    const file = Array.from(e.dataTransfer?.files || []).find((f) => f.type.startsWith("video/"));
+    if (!file) return;
+    e.preventDefault();
+    e.stopPropagation();
+    insertVideo(file, { clientX: e.clientX, clientY: e.clientY });
+  }, [insertVideo]);
+
+  const onVideoChosen = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) await insertVideo(file);
+  };
 
   // Resolve the scene's images before handing Excalidraw its initialData —
   // it takes that once, on mount, so there's nothing to hand it later.
@@ -92,7 +257,7 @@ export default function ExcalidrawPageEditor({ pageId, content, onChange }) {
       }
 
       setInitialData({
-        elements: content?.elements || [],
+        elements: withWrappedVideoLinks(content?.elements),
         // Zoom isn't persisted, so every open starts from the same explicit
         // 50% — sketches tend to be wider than the panel, and starting zoomed
         // out shows the whole board instead of a cropped-in corner.
@@ -185,9 +350,41 @@ export default function ExcalidrawPageEditor({ pageId, content, onChange }) {
     // cause, so the canvas still fills the outer box edge-to-edge instead of
     // rendering undersized inside it.
     <div style={{ height: "100%", minHeight: 640, position: "relative", overflow: "hidden" }}>
-      <div style={{ position: "absolute", top: 0, left: 0, width: "110%", height: "110%", zoom: 1 / 1.1 }}>
-        <Excalidraw initialData={initialData} onChange={handleChange} />
+      <div
+        style={{ position: "absolute", top: 0, left: 0, width: "110%", height: "110%", zoom: 1 / 1.1 }}
+        onDropCapture={onDropCapture}
+      >
+        <Excalidraw
+          initialData={initialData}
+          onChange={handleChange}
+          excalidrawAPI={(api) => { apiRef.current = api; }}
+          validateEmbeddable={validateEmbeddable}
+          renderTopRightUI={() => (
+            <button
+              type="button"
+              onClick={() => videoInputRef.current?.click()}
+              disabled={busy}
+              title="Add a video to this board"
+              style={{
+                display: "flex", alignItems: "center", gap: 6, height: 32, padding: "0 10px",
+                borderRadius: 8, border: "1px solid var(--default-border-color, #e3e8ef)",
+                background: "var(--island-bg-color, #fff)", color: "var(--text-primary-color, #1b1b1f)",
+                fontSize: 12, fontWeight: 600, cursor: busy ? "wait" : "pointer",
+                opacity: busy ? 0.6 : 1, whiteSpace: "nowrap",
+              }}
+            >
+              {busy ? "Uploading…" : "🎬 Video"}
+            </button>
+          )}
+        />
       </div>
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept="video/*"
+        onChange={onVideoChosen}
+        style={{ display: "none" }}
+      />
     </div>
   );
 }

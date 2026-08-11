@@ -33,6 +33,9 @@ export default {
     const url = new URL(request.url);
     const isHttps = url.protocol === "https:";
 
+    if (url.pathname === "/api/embed/video") {
+      return handleVideoEmbed(url, env);
+    }
     if (url.pathname === "/api/wrike/oauth/start") {
       return handleOAuthStart(url, env, isHttps);
     }
@@ -102,6 +105,46 @@ function json(body, init = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+  });
+}
+
+// ── Video embed page (Notes Canvas sketches) ─────────────────────────────────
+// Excalidraw can only host another document via an iframe. Pointed straight at
+// an .mp4, that iframe gets Chrome's built-in media document — whose behaviour
+// (autoplay in particular) is the browser's to decide, not ours, and varies by
+// version. Serving our own one-page wrapper puts playback back under our
+// control: `controls`, `preload="metadata"`, and pointedly NO autoplay, so a
+// board full of clips opens silent and still.
+//
+// The src is restricted to this project's own Storage bucket. Without that
+// check the route would happily frame any URL on request — an open embedder
+// sitting on our origin, usable to dress a third-party page up as ours.
+function handleVideoEmbed(url, env) {
+  const src = url.searchParams.get("src") || "";
+  const allowedPrefix = `${env.SUPABASE_URL}/storage/v1/object/public/notes-images/`;
+  if (!src.startsWith(allowedPrefix)) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  // src is same-origin-prefixed and already proven to be our own Storage URL,
+  // but it still lands inside an HTML attribute, so quote-escape it.
+  const safeSrc = src.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+</style></head>
+<body><video src="${safeSrc}" controls preload="metadata" playsinline></video></body></html>`;
+  return new Response(html, {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "public, max-age=3600",
+      // The page holds exactly one media element from a known origin; nothing
+      // here should ever run a script or be framed by anyone but us.
+      "Content-Security-Policy":
+        `default-src 'none'; media-src ${env.SUPABASE_URL}; style-src 'unsafe-inline'; frame-ancestors 'self'`,
+      "X-Content-Type-Options": "nosniff",
+    },
   });
 }
 
