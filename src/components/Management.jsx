@@ -5469,12 +5469,13 @@ function PeopleSection() {
   const [loading, setLoading]       = useState(true);
   const [syncing, setSyncing]       = useState(false);
   const [syncMsg, setSyncMsg]       = useState("");
-  const [expanded, setExpanded]     = useState({});
+  // One department open at a time, matching the Administration hub above it:
+  // opening one closes the last. Holds a label, or null for all closed.
+  const [openGroup, setOpenGroup]   = useState(null);
   const [search, setSearch]         = useState("");
-  // Per-department: has its expand/collapse animation finished? Multiple
-  // departments can be open at once here (unlike the top-level hub, this
-  // isn't an exclusive accordion), so this has to be tracked per label, not
-  // as one shared flag. See toggleGroup below for why it matters.
+  // Per-department: has its expand/collapse animation finished? Still keyed by
+  // label rather than a single flag, because a search shows several groups
+  // open at once (see isGroupOpen).
   const [settled, setSettled]       = useState({});
 
   const load = useCallback(async () => {
@@ -5611,26 +5612,22 @@ function PeopleSection() {
     return out;
   }, [filteredPeople]);
 
-  // While searching, auto-open every department that has a match so results
-  // are visible without the user having to expand each group by hand.
-  useEffect(() => {
-    if (!search.trim()) return;
-    setExpanded(prev => {
-      const next = { ...prev };
-      for (const group of DEPT_GROUPS) {
-        if ((buckets[group.label] || []).length > 0) next[group.label] = true;
-      }
-      return next;
-    });
-  }, [search, buckets]);
+  // Searching suspends the accordion. A search that could only ever reveal
+  // one department's matches would hide most of its own results, so while
+  // there's a query every department holding a match shows open; the
+  // one-at-a-time rule returns as soon as the box is cleared.
+  const searching = !!search.trim();
+  const isGroupOpen = (label) =>
+    searching ? (buckets[label] || []).length > 0 : openGroup === label;
 
   const toggleGroup = (label) => {
     // Any toggle (opening or closing) starts a height transition, so the
     // clipping needs to be hidden again until it finishes — otherwise a
     // dropdown left open from before the animation started would render
-    // past the box's edge mid-transition.
-    setSettled(prev => ({ ...prev, [label]: false }));
-    setExpanded(prev => ({ ...prev, [label]: !prev[label] }));
+    // past the box's edge mid-transition. The outgoing group needs the same
+    // treatment, since opening one now collapses another.
+    setSettled(prev => ({ ...prev, [label]: false, ...(openGroup ? { [openGroup]: false } : {}) }));
+    setOpenGroup(prev => (prev === label ? null : label));
   };
 
   const PersonCard = ({ p }) => {
@@ -5642,22 +5639,22 @@ function PeopleSection() {
     const initials = `${cleanFirst[0] || ""}${cleanLast[0] || ""}`.toUpperCase() || "?";
     const fullName = [cleanFirst, cleanLast].filter(Boolean).join(" ") || "Unknown";
     return (
-      <div className="flex items-stretch bg-white border border-[#dce4ec] rounded-2xl overflow-hidden
-                      hover:border-slate-300 hover:-translate-y-px hover:shadow-[0_8px_22px_-10px_rgba(18,32,39,0.22)]
-                      transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]">
-        {/* Flush to the card's own edges (top/bottom/left), full height —
-            clipped to the card's rounded-2xl by the parent's overflow-hidden
-            rather than rounding the image itself, so it reads as one card
-            with a portrait on the left, not a small avatar floating in
-            padding. */}
+      // A directory row, not a profile card. The previous version gave each
+      // person a full-height portrait strip and stacked the two dropdowns,
+      // which put a department of a dozen people well past a screenful. The
+      // portrait is now a thumbnail and the dropdowns sit side by side, which
+      // roughly halves the height without losing anything on it.
+      <div className="flex items-center gap-3 bg-white border border-[#dce4ec] rounded-xl px-3 py-2
+                      hover:border-slate-300 hover:shadow-[0_6px_16px_-10px_rgba(18,32,39,0.25)]
+                      transition-[box-shadow,border-color] duration-200">
         {p.avatar_url ? (
-          <img src={p.avatar_url} alt={fullName} className="w-28 sm:w-32 shrink-0 object-cover" />
+          <img src={p.avatar_url} alt={fullName} className="w-10 h-10 rounded-lg shrink-0 object-cover" />
         ) : (
-          <div className="w-28 sm:w-32 shrink-0 bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center font-display font-bold text-2xl tracking-tight">
+          <div className="w-10 h-10 rounded-lg shrink-0 bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center font-display font-bold text-sm tracking-tight">
             {initials}
           </div>
         )}
-        <div className="flex-1 min-w-0 flex items-center gap-3 p-3.5">
+        <div className="flex-1 min-w-0 flex items-center gap-3">
           <div className="flex-1 min-w-0">
             {/* The display name is editable here because Wrike is the only
                 other source of it, and Wrike is where the emoji and dropped
@@ -5698,18 +5695,21 @@ function PeopleSection() {
                 title="Rename"
                 className="group/name flex items-center gap-1.5 max-w-full text-left"
               >
-                <span className="font-display text-[17px] font-bold text-[#122027] tracking-tight truncate">{fullName}</span>
+                <span className="font-display text-[14px] font-bold text-[#122027] tracking-tight truncate">{fullName}</span>
                 <Pencil className="w-3 h-3 shrink-0 text-slate-300 opacity-0 group-hover/name:opacity-100 transition-opacity" />
               </button>
             )}
-            <p className="text-xs text-[#768994] truncate">{p.email || p.wrike_user_id}</p>
+            <p className="text-[11px] leading-tight text-[#768994] truncate">{p.email || p.wrike_user_id}</p>
           </div>
           {/* Same searchable dropdown Job Book uses for its pickers, instead
               of a bare native <select> — the app's one dropdown style. "No
               department"/"No position" are plain entries in the option list
               (StrictSelect is selection-only, no separate clear affordance),
               translated back to null on the way out. */}
-          <div className="flex flex-col gap-1.5 shrink-0 w-36 sm:w-40">
+          {/* Side by side rather than stacked — this is the single biggest
+              saving in the row's height, and both fields still get a usable
+              width at two columns. */}
+          <div className="flex items-center gap-1.5 shrink-0 [&>*]:w-32 sm:[&>*]:w-36">
             <StrictSelect
               value={p.department || "No department"}
               onChange={(v) => updateField(p.wrike_user_id, { department: v === "No department" ? null : v })}
@@ -5784,7 +5784,10 @@ function PeopleSection() {
           <p className="text-xs">Try a shorter search, or clear it to see everyone.</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        // Gap tightens while a department is open, for the same reason its
+        // siblings condense: every pixel above the open group pushes its
+        // people further down the page.
+        <div className={`flex flex-col ${openGroup && !searching ? "gap-2" : "gap-3"}`}>
           {/* Same HubRow accordion as Administration's own hub, one level
               down — a department header behaves exactly like a group row
               (gradient sweep, chevron rotates open) instead of the small
@@ -5792,7 +5795,12 @@ function PeopleSection() {
           {DEPT_GROUPS.map(group => {
             const items = buckets[group.label] || [];
             if (items.length === 0) return null;
-            const isOpen = !!expanded[group.label];
+            const isOpen = isGroupOpen(group.label);
+            // Siblings of an open group shrink and drop their description,
+            // exactly as the Administration hub's rows do — the point is to
+            // keep the open group's people on screen rather than pushed off
+            // the bottom by full-height rows above them.
+            const isCondensed = !searching && !!openGroup && !isOpen;
             return (
               // No overflow-hidden on this outer card — its rounded corners
               // come from the two children below clipping themselves
@@ -5809,6 +5817,7 @@ function PeopleSection() {
                     }}
                     onClick={() => toggleGroup(group.label)}
                     open={isOpen}
+                    condensed={isCondensed}
                   />
                 </div>
                 <AnimatePresence initial={false}>
@@ -5819,7 +5828,12 @@ function PeopleSection() {
                       exit={{ height: 0, opacity: 0 }}
                       transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
                       onAnimationComplete={() => setSettled(prev => ({ ...prev, [group.label]: true }))}
-                      style={{ overflow: settled[group.label] ? "visible" : "hidden" }}
+                      // While searching, groups can render already-open on
+                      // mount, where AnimatePresence's initial={false} means
+                      // no animation runs and onAnimationComplete never
+                      // fires — without this they'd clip their dropdowns
+                      // forever.
+                      style={{ overflow: searching || settled[group.label] ? "visible" : "hidden" }}
                       className="bg-slate-50 border-t border-[#dce4ec] rounded-b-2xl"
                     >
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 p-3.5">
