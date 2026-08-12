@@ -624,6 +624,48 @@ async function refreshAccessToken(env, refreshToken) {
   return res.json();
 }
 
+// Refresh one token row, sharing a single in-flight refresh per session_token.
+// Returns the updated row; throws if the refresh itself fails.
+//
+// THE ONLY PLACE THAT SHOULD CALL refreshAccessToken + updateTokenRow. Wrike
+// rotates the refresh_token on use, so two concurrent refreshes of the same row
+// mean the second spends an already-dead token and fails with
+// token_refresh_failed — even though the first has just written a perfectly
+// valid one to the DB. refreshInFlight is what stops that, and it only works if
+// every caller goes through it.
+//
+// The proxy always did. The panel feed did not: it called refreshAccessToken
+// directly, so a panel request and that member's own browser session hitting a
+// near-expired token at the same moment raced each other, and the person at the
+// browser could be signed out by an After Effects panel on someone else's
+// machine. One implementation now, so the two cannot drift apart again.
+async function refreshTokenRow(env, row) {
+  const key = row.session_token;
+  if (!refreshInFlight.has(key)) {
+    refreshInFlight.set(
+      key,
+      (async () => {
+        try {
+          const refreshed = await refreshAccessToken(env, row.refresh_token);
+          return await updateTokenRow(env, key, {
+            access_token: refreshed.access_token,
+            refresh_token: refreshed.refresh_token || row.refresh_token,
+            api_host: refreshed.host || row.api_host,
+            expires_at: new Date(Date.now() + Number(refreshed.expires_in || 3600) * 1000).toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        } finally {
+          refreshInFlight.delete(key);
+        }
+      })()
+    );
+  }
+  // Every concurrent caller — the one that started this refresh and any that
+  // arrived while it was in flight — awaits the SAME promise and gets the SAME
+  // resulting row, instead of each spending its own refresh_token.
+  return refreshInFlight.get(key);
+}
+
 // ── Route handlers ───────────────────────────────────────────────────────────
 
 async function handleOAuthStart(url, env, isHttps) {
@@ -920,31 +962,7 @@ async function handleProxy(request, url, env) {
   };
 
   const refreshToken = async () => {
-    const key = row.session_token;
-    if (!refreshInFlight.has(key)) {
-      refreshInFlight.set(
-        key,
-        (async () => {
-          try {
-            const refreshed = await refreshAccessToken(env, row.refresh_token);
-            return await updateTokenRow(env, key, {
-              access_token: refreshed.access_token,
-              refresh_token: refreshed.refresh_token || row.refresh_token,
-              api_host: refreshed.host || row.api_host,
-              expires_at: new Date(Date.now() + Number(refreshed.expires_in || 3600) * 1000).toISOString(),
-              updated_at: new Date().toISOString(),
-            });
-          } finally {
-            refreshInFlight.delete(key);
-          }
-        })()
-      );
-    }
-    // Every concurrent caller — the one that started this refresh and any
-    // that arrived while it was in flight — awaits the SAME promise and gets
-    // the SAME resulting row, instead of each spending its own (possibly
-    // already-rotated-out) refresh_token.
-    row = await refreshInFlight.get(key);
+    row = await refreshTokenRow(env, row);
   };
 
   // Proactive refresh when the token is about to expire by the clock.
@@ -1048,14 +1066,10 @@ async function panelWrikeToken(env) {
   let row = tokenRows && tokenRows[0];
   if (!row) return null;
   if (new Date(row.expires_at).getTime() - Date.now() < 60_000) {
-    const refreshed = await refreshAccessToken(env, row.refresh_token);
-    row = await updateTokenRow(env, row.session_token, {
-      access_token: refreshed.access_token,
-      refresh_token: refreshed.refresh_token || row.refresh_token,
-      api_host: refreshed.host || row.api_host,
-      expires_at: new Date(Date.now() + Number(refreshed.expires_in || 3600) * 1000).toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    // Shares the proxy's in-flight refresh rather than racing it — see
+    // refreshTokenRow. This used to refresh directly, which could invalidate a
+    // browser session's token mid-request.
+    row = await refreshTokenRow(env, row);
   }
   return row;
 }
@@ -1333,17 +1347,25 @@ async function handlePanelJobs(request, url, env) {
   }
   let subRows = [];
   if (wantedSubIds.length) {
+    // CACHE FIRST, ALWAYS -- then overlay live rows on top. The previous
+    // version treated these as either/or: a live refresh used Wrike's rows and
+    // skipped the cache entirely, so when those rows came back without usable
+    // titles the whole table rendered blank. Worse than the stale names it
+    // replaced, and only visible on refresh.
+    //
+    // Additive means the worst case is cached names, never no names.
+    const ids = wantedSubIds.slice(0, 400).map((i) => `"${i}"`).join(",");
+    const subRes = await sbFetch(env, `/wrike_tasks_cache?select=id,task_data&id=in.(${ids})`);
+    if (subRes.ok) subRows = await subRes.json();
+
     if (liveUsed) {
-      // On a live refresh the SUBTASKS have to come from Wrike too. Fetching
-      // fresh parents but reading their children out of the cache produced a
-      // job with an empty table -- the parent was new, so its subtask rows had
-      // never been cached. That is worse than the stale data it replaced.
-      subRows = await panelLiveSubtasks(env, wantedSubIds);
-    }
-    if (!subRows.length) {
-      const ids = wantedSubIds.slice(0, 400).map((i) => `"${i}"`).join(",");
-      const subRes = await sbFetch(env, `/wrike_tasks_cache?select=id,task_data&id=in.(${ids})`);
-      if (subRes.ok) subRows = await subRes.json();
+      // Fresh subtasks for a parent whose children were never cached. Only
+      // rows that actually carry a title overlay the cached copy -- a live row
+      // without one would blank a name we already had.
+      const live = await panelLiveSubtasks(env, wantedSubIds);
+      for (const row of live) {
+        if (row && row.task_data && row.task_data.title) subRows.push(row);
+      }
     }
   }
 
@@ -1481,7 +1503,7 @@ async function handlePanelJobs(request, url, env) {
   return json(jobs, {
     headers: panelCors({
       "X-Panel-Live": liveUsed ? "1" : "0",
-      "X-Panel-Build": "2026-08-12-member-lookup-4",
+      "X-Panel-Build": "2026-08-12-subtasks-additive-5",
     }),
   });
 }
