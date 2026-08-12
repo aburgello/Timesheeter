@@ -1356,7 +1356,17 @@ export default function TaskDetailModal({
           </div>
 
           <div className="flex flex-1 min-h-0 overflow-hidden divide-x divide-[#dce4ec]">
-            <div className="flex-1 min-w-0 flex flex-col overflow-y-auto p-5 gap-4">
+            {/* [&>*]:shrink-0 is load-bearing. This is a flex column that also
+                scrolls, and flex items default to shrink:1 — so when the cards
+                inside it total more than the column's height, the browser
+                SQUASHES them instead of letting the column scroll. The cards
+                that lose are the ones that can absorb it: Notes & Context and
+                Subtasks both wrap their body in max-h-* overflow-y-auto, so
+                they collapsed to their header and a sliver of body, with 12
+                subtasks unreachable behind a 4px scroller. Stopping the
+                children shrinking makes the column do the scrolling, which is
+                what it was always meant to do. */}
+            <div className="flex-1 min-w-0 flex flex-col overflow-y-auto p-5 gap-4 [&>*]:shrink-0">
               {(amendLoading || amendNote) && (
                 <div className="bg-rose-50 rounded-2xl border border-rose-200">
                   <div className="flex items-center gap-2 px-4 py-2.5 border-b border-rose-200/70 bg-white/60">
