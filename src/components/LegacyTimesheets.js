@@ -62,6 +62,9 @@ import {
   territoryCode,
   toTimesheetTerritories,
 } from "../utils/territories";
+import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
+import { mergeMultiCountryRows } from "../utils/mergeMultiCountry";
+import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
 
 // A grid textarea that grows to fit its text instead of hiding it.
 //
@@ -144,6 +147,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const [activeDay, setActiveDay] = useState(() => {
     return localStorage.getItem("xyi_legacy_activeDay") || "Monday";
   });
+
+  // How this member wants pulled rows to arrive — their default category and
+  // whether markets get merged into one entry. Stored on their profile, so
+  // these follow them between machines; see hooks/useTimesheetPrefs.js.
+  const { defaultCategory, groupMultiCountry, setPrefs } = useTimesheetPrefs();
 
   // useLegacyRows is initialised after showToast below
 
@@ -717,10 +725,29 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       }
     }
 
+    // Category, best evidence first.
+    //
+    // 1. The Wrike status, but ONLY when it is spelled exactly like one of the
+    //    65 CATEGORIES. In practice that never happens — Wrike's statuses are
+    //    workflow states ("Delivering", "Backlog", "Motion", "Active") and the
+    //    categories are billing lines ("Print - Retouching") — so this is very
+    //    nearly dead code. It stays because if a workflow IS ever named to
+    //    match, that is a deliberate statement about the work and beats
+    //    everything below it.
+    //
+    // 2. The member's own default. This wins over the keyword rules on purpose.
+    //    Those rules can only ever produce three of the 65 categories, and for
+    //    anyone whose work isn't production/localisation they are wrong every
+    //    single time — letting them override the default would defeat the point
+    //    of having set one.
+    //
+    // 3. The keyword rules, for members who have set no default. Unchanged
+    //    behaviour, so nobody's pull changes until they opt in.
     let guessedCategory =
       linkedTask.customStatusName || linkedTask.status || "";
     if (!CATEGORIES.includes(guessedCategory)) {
-      if (searchTarget.includes("PRINT"))
+      if (defaultCategory) guessedCategory = defaultCategory;
+      else if (searchTarget.includes("PRINT"))
         guessedCategory = "Print - Production/Localisation";
       else if (
         searchTarget.includes("REVISION") ||
@@ -1556,22 +1583,36 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             is3D: false,
             timeSpent: secondsToHM(totalHours * 3600),
             additionalTime: "none",
+            // Raw, unrounded hours, carried only so mergeMultiCountryRows can
+            // sum before rounding. useTasks maps an explicit column whitelist,
+            // so this never reaches Supabase — but it is stripped there anyway
+            // rather than relying on that.
+            _rawHours: totalHours,
           });
         }
       );
 
-      if (newRows.length > 0) {
-        addRows(newRows);
+      const pulledRows = groupMultiCountry
+        ? mergeMultiCountryRows(newRows)
+        : newRows.map(({ _rawHours, ...r }) => r);
+
+      if (pulledRows.length > 0) {
+        addRows(pulledRows);
         // The grid only shows rows from the current week (weekStart) — a
         // debug pull for an older date saves fine but won't appear here, so
         // say so instead of implying it's now visible in the table below.
-        const pulledBeforeThisWeek = newRows.some(
+        const pulledBeforeThisWeek = pulledRows.some(
           (r) => (toIsoDate(r.date) || "") < weekStart
         );
+        const n = pulledRows.length;
+        // Report the merge when it did something, so a pull that turns six
+        // market rows into two isn't mistaken for six missing timelogs.
+        const mergedAway = newRows.length - n;
+        const mergeNote = mergedAway > 0 ? ` (${newRows.length} market rows merged into ${n})` : "";
         showToast(
           pulledBeforeThisWeek
-            ? `Pulled ${newRows.length} row${newRows.length !== 1 ? "s" : ""} from Wrike — from a previous week, so it won't show in this grid. Check Jobs Feed to verify.`
-            : `Pulled ${newRows.length} row${newRows.length !== 1 ? "s" : ""} from Wrike.`,
+            ? `Pulled ${n} row${n !== 1 ? "s" : ""} from Wrike${mergeNote} — from a previous week, so it won't show in this grid. Check Jobs Feed to verify.`
+            : `Pulled ${n} row${n !== 1 ? "s" : ""} from Wrike${mergeNote}.`,
           "success"
         );
       } else {
@@ -3119,6 +3160,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               <Lock className="w-3.5 h-3.5" />
               {isDayFrozen ? `${activeDay} locked` : `Lock ${activeDay}`}
             </button>
+            <span className="w-px h-4 bg-[#dce4ec] shrink-0" />
+            <PullDefaultsPopover
+              defaultCategory={defaultCategory}
+              groupMultiCountry={groupMultiCountry}
+              setPrefs={setPrefs}
+            />
           </div>
         </div>
 

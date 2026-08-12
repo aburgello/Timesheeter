@@ -258,7 +258,12 @@ create table public.profiles (
   position_id bigint,
   department text,
   reports_to text,
-  canvas_color text
+  canvas_color text,
+  -- Per-member timesheet preferences. NULL default_category = never chosen, so
+  -- the pull's keyword guess still applies; see
+  -- migrations/20260812120000_timesheet_prefs_per_member.sql.
+  default_category text,
+  group_multi_country boolean not null default false
 );
 
 create table public.project_descriptions (

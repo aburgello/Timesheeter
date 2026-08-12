@@ -27,6 +27,8 @@ import {
   EyeOff,
   Moon,
   Sun,
+  SlidersHorizontal,
+  Tag,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { isDarkMode, toggleDarkMode } from "../lib/theme";
@@ -38,6 +40,9 @@ import { useWrikeUser } from "../hooks/useWrikeUser";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import { startWrikeOAuth, disconnectWrike, fetchWrikeOAuthStatus } from "../lib/wrikeApi";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
+import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
+import SearchableSelect from "./shared/SearchableSelect";
+import { CATEGORIES } from "../constants.js";
 import TaskDetailModal, { CsvPreviewModal } from "./TaskDetailModal";
 import DeliverySpecsModal from "./DeliverySpecsModal";
 import { parsePdfDeliverySpecs } from "../utils/pdfTableParser";
@@ -1712,6 +1717,7 @@ function SettingsSection({ onSave }) {
   const [status, setStatus] = useState({ checked: false, connected: false });
   const [disconnecting, setDisconnecting] = useState(false);
   const [dark, setDark] = useState(isDarkMode);
+  const { defaultCategory, groupMultiCountry, setPrefs } = useTimesheetPrefs();
 
   useEffect(() => {
     fetchWrikeOAuthStatus().then((s) =>
@@ -1813,6 +1819,78 @@ function SettingsSection({ onSave }) {
               )}
             </span>
           </button>
+        </div>
+      </div>
+
+      {/* Timesheet card — the same two preferences the Legacy grid's own
+          bottom-centre popover edits, reading and writing the same profile
+          columns through the same hook. Two places to change them, one stored
+          value: the popover is where you notice you want them, this is where
+          you go looking for them. */}
+      {/* No overflow-hidden, unlike the cards above: the category picker's menu
+          is absolutely positioned and a clipping ancestor cuts it off at the
+          card's own bottom edge. The header takes the rounded top corners
+          itself instead, which is all overflow-hidden was buying here. */}
+      <div className="border border-[#dce4ec] rounded-2xl">
+        <div className="bg-slate-50 border-b border-[#dce4ec] px-5 py-3 flex items-center gap-2 rounded-t-2xl">
+          <SlidersHorizontal className="w-4 h-4 text-[#12a0e1]" />
+          <span className="text-sm font-black text-[#122027]">Timesheet</span>
+        </div>
+
+        <div className="p-5 flex items-center gap-4 border-b border-[#dce4ec]">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-[#122027]">
+              Merge markets into one entry
+            </p>
+            <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
+              When you pull from Wrike, rows on the same job, day and category
+              are combined into a single entry covering every market, with the
+              time added up. Useful if you do small amounts across many
+              territories.
+            </p>
+          </div>
+          <button
+            onClick={() => setPrefs({ groupMultiCountry: !groupMultiCountry })}
+            role="switch"
+            aria-checked={groupMultiCountry}
+            aria-label="Merge markets into one entry"
+            className={`relative w-12 h-7 rounded-full shrink-0 transition-colors ${
+              groupMultiCountry ? "bg-[#12a0e1]" : "bg-slate-200"
+            }`}
+          >
+            <span
+              className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                groupMultiCountry ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          <div>
+            <p className="text-sm font-bold text-[#122027]">Default category</p>
+            <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
+              Pulled rows land on this category instead of being guessed from
+              the task name. Leave it empty and the guess applies, which only
+              ever picks between production/localisation and revisions.
+            </p>
+          </div>
+          <SearchableSelect
+            options={CATEGORIES}
+            value={defaultCategory || ""}
+            onChange={(v) => setPrefs({ defaultCategory: v || null })}
+            placeholder="No default"
+            icon={Tag}
+            isGrouped={true}
+          />
+          {defaultCategory && (
+            <button
+              onClick={() => setPrefs({ defaultCategory: null })}
+              className="text-xs font-bold text-[#768994] hover:text-[#122027] transition-colors"
+            >
+              Clear default
+            </button>
+          )}
         </div>
       </div>
 
