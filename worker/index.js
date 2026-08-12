@@ -1031,6 +1031,149 @@ function panelPreflight() {
   return new Response(null, { status: 204, headers: panelCors() });
 }
 
+// A usable Wrike token for the panel routes, which have no session of their
+// own -- only the shared panel key. Takes the freshest connected member's and
+// refreshes it through the proxy's own helpers when it is about to expire.
+// /workflows and the board's task query are both account-level reads that
+// return the same thing whoever asks.
+//
+// Returns null rather than throwing: every caller degrades to the cached path.
+async function panelWrikeToken(env) {
+  const rowsRes = await sbFetch(
+    env,
+    "/wrike_oauth_tokens?select=*&order=expires_at.desc&limit=1"
+  );
+  if (!rowsRes.ok) return null;
+  const tokenRows = await rowsRes.json();
+  let row = tokenRows && tokenRows[0];
+  if (!row) return null;
+  if (new Date(row.expires_at).getTime() - Date.now() < 60_000) {
+    const refreshed = await refreshAccessToken(env, row.refresh_token);
+    row = await updateTokenRow(env, row.session_token, {
+      access_token: refreshed.access_token,
+      refresh_token: refreshed.refresh_token || row.refresh_token,
+      api_host: refreshed.host || row.api_host,
+      expires_at: new Date(Date.now() + Number(refreshed.expires_in || 3600) * 1000).toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }
+  return row;
+}
+
+// Wrike's custom status NAMES ("Render review", "On hold", "Backlog") live
+// behind customStatusId and are NOT in the task cache -- the comment above
+// PANEL_ACTIVE_STATUSES says exactly that. The website resolves them by
+// fetching /workflows and building an id->name map (Profile.jsx,
+// statusNameMap); the panel feed had no equivalent, so every subtask reached
+// the panel as its base group ("Active") and a batch already in Render review
+// looked ready to localise.
+//
+// CACHED IN MODULE SCOPE with a long TTL. Workflows change about never, and
+// this endpoint's whole promise is "one Supabase query, no Wrike API budget"
+// -- a fetch per request would break that. A cold isolate pays one call.
+//
+// The token is ANY connected member's: /workflows is account-level read-only
+// metadata, identical whoever asks, and the panel key already grants what any
+// studio member can read in Wrike. There is no session here to take one from.
+//
+// NEVER THROWS. Any failure returns {} and callers fall back to the base
+// status exactly as before -- a missing status name must not take the feed
+// down with it.
+let panelStatusMapCache = { at: 0, map: null };
+const PANEL_STATUS_MAP_TTL = 60 * 60 * 1000;
+
+async function panelStatusNameMap(env) {
+  if (panelStatusMapCache.map && Date.now() - panelStatusMapCache.at < PANEL_STATUS_MAP_TTL) {
+    return panelStatusMapCache.map;
+  }
+  try {
+    const row = await panelWrikeToken(env);
+    if (!row) return {};
+
+    const wfRes = await fetch(`https://${row.api_host}/api/v4/workflows`, {
+      headers: { Authorization: `Bearer ${row.access_token}` },
+    });
+    if (!wfRes.ok) return {};
+    const body = await wfRes.json();
+    const map = {};
+    for (const wf of body.data || []) {
+      for (const cs of wf.customStatuses || []) {
+        if (cs && cs.id) map[cs.id] = cs.name || "";
+      }
+    }
+    panelStatusMapCache = { at: Date.now(), map };
+    return map;
+  } catch (err) {
+    console.error("[panel/jobs] workflows lookup failed:", err);
+    return {};
+  }
+}
+
+// LIVE FETCH for the panel's refresh button (?refresh=1). Everything else
+// reads wrike_tasks_cache, which is only as current as the last time somebody
+// had the Motion board open in a browser -- that is what made a job the board
+// showed under Luke invisible to the panel, and what made identical requests
+// return 7 jobs one minute and 112 the next.
+//
+// Deliberately USER-TRIGGERED, never automatic: a normal panel open still costs
+// one Supabase query and no Wrike budget.
+//
+// IT DOES NOT WRITE TO wrike_tasks_cache. The Motion board upserts ENRICHED
+// tasks there (folder names, status names, its own derived fields) and the
+// website reads them back. Writing RAW Wrike tasks into the same rows would
+// quietly replace richer data with thinner data underneath the website. The
+// panel takes the truth for its own response and leaves the cache to its owner.
+//
+// Mirrors the board's own query (useMotionBoardTasks.js fetchBoardTasks) --
+// same fields, same paging, same dueDate shape (Wrike rejects a trailing "Z"
+// on this filter, unlike updatedDate).
+// superTaskIds is REQUESTED, unlike the board's own list: the filter below
+// drops subtasks so they aren't listed as jobs in their own right, and without
+// this field every subtask would look top-level and appear twice -- once as
+// itself, once inside its parent.
+const PANEL_LIVE_FIELDS = "[customFields,parentIds,responsibleIds,subTaskIds,superTaskIds,description]";
+
+function panelWrikeDate(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+async function panelLiveTasks(env, teamIds) {
+  const row = await panelWrikeToken(env);
+  if (!row || !teamIds.length) return null;
+
+  // End of TOMORROW, matching the two-window filter the cached path uses.
+  const end = new Date();
+  end.setDate(end.getDate() + 1);
+  end.setHours(23, 59, 59, 0);
+
+  const dueDate = encodeURIComponent(JSON.stringify({ end: panelWrikeDate(end) }));
+  const responsibles = encodeURIComponent(JSON.stringify(teamIds));
+  const fields = encodeURIComponent(PANEL_LIVE_FIELDS);
+
+  let out = [];
+  let nextPageToken = null;
+  // Bounded: a runaway pager on someone's refresh click must not spend the
+  // whole Wrike budget.
+  for (let page = 0; page < 10; page++) {
+    const qs = nextPageToken
+      ? `nextPageToken=${nextPageToken}`
+      : `status=Active&dueDate=${dueDate}&responsibles=${responsibles}&fields=${fields}&pageSize=1000`;
+    const res = await fetch(`https://${row.api_host}/api/v4/tasks?${qs}`, {
+      headers: { Authorization: `Bearer ${row.access_token}` },
+    });
+    if (!res.ok) {
+      console.warn("[panel/jobs] live fetch failed", res.status, await res.text().catch(() => ""));
+      return out.length ? out : null;
+    }
+    const body = await res.json();
+    out = out.concat(body.data || []);
+    nextPageToken = body.nextPageToken || null;
+    if (!nextPageToken) break;
+  }
+  return out;
+}
+
 async function handlePanelJobs(request, url, env) {
   if (!env.PANEL_KEY || request.headers.get("X-Panel-Key") !== env.PANEL_KEY) {
     return json({ error: "unauthorized" }, { status: 401, headers: panelCors() });
@@ -1081,7 +1224,49 @@ async function handlePanelJobs(request, url, env) {
     console.error(`[panel/jobs] cache query ${res.status}:`, detail);
     return json({ error: "query_failed", detail: detail.slice(0, 200) }, { status: 502, headers: panelCors() });
   }
-  const rows = await res.json();
+  let rows = await res.json();
+
+  // ?refresh=1 -- the panel's refresh button. Replaces the cached rows with a
+  // live read from Wrike for the whole team, then carries on through exactly
+  // the same filters and shaping below, so refreshed and cached responses can
+  // never diverge in their rules.
+  //
+  // Falls back silently to the cached rows if the live read fails: a refresh
+  // that returns yesterday's data beats a refresh that returns an error.
+  let liveUsed = false;
+  if (url.searchParams.get("refresh") === "1") {
+    const teamIds = [];
+    const teamRes = await sbFetch(env, "/profiles?select=wrike_user_id");
+    if (teamRes.ok) {
+      for (const p of (await teamRes.json()) || []) {
+        if (p && p.wrike_user_id) teamIds.push(p.wrike_user_id);
+      }
+    }
+    const live = await panelLiveTasks(env, teamIds);
+    if (live && live.length) {
+      // FLATTEN dates.due -> dueDate. The cache holds tasks the Motion board
+      // has already ENRICHED (wrikeEnrich.js: `dueDate: task.dates?.due`), but
+      // Wrike's own API returns the date nested under `dates`. Handing raw
+      // tasks straight through meant every one failed isBoardTask's dueDate
+      // check and a live refresh returned an empty list -- worse than the
+      // stale data it replaced.
+      //
+      // Only the fields the filters below actually read are normalised; the
+      // rest of the raw task is passed through untouched.
+      rows = live.map((t) => ({
+        id: t.id,
+        task_data: {
+          ...t,
+          dueDate: t.dueDate || (t.dates && t.dates.due) || "No Due Date",
+        },
+      }));
+      liveUsed = true;
+    }
+  }
+
+  // One lookup per request, served from the module cache almost every time.
+  const statusNames = await panelStatusNameMap(env);
+  const customName = (t) => (t && t.customStatusId ? statusNames[t.customStatusId] || "" : "");
 
   // Subtask names live in rows that the filters above deliberately exclude (a
   // subtask can be Completed while its parent is Active, and is usually
@@ -1128,7 +1313,12 @@ async function handlePanelJobs(request, url, env) {
         mineTitles.push({ title: t.title, status: t.status || "(none)", sub: !isTop });
       }
       const hasDue = t.dueDate && t.dueDate !== "No Due Date";
-      const dueOk = hasDue && !isNaN(new Date(t.dueDate).getTime()) && new Date(t.dueDate) <= new Date(new Date().setHours(23, 59, 59, 999));
+      // End of TOMORROW, matching the two-window filter the real route uses --
+      // a diagnostic that disagrees with the thing it diagnoses is worse than
+      // no diagnostic.
+      const dueCutoff = new Date(new Date().setHours(23, 59, 59, 999));
+      dueCutoff.setDate(dueCutoff.getDate() + 1);
+      const dueOk = hasDue && !isNaN(new Date(t.dueDate).getTime()) && new Date(t.dueDate) <= dueCutoff;
       if (isMine && isTop && hasDue) withDueDate++;
       if (isMine && isTop && dueOk) active++;
     }
@@ -1156,7 +1346,14 @@ async function handlePanelJobs(request, url, env) {
     const t = row?.task_data;
     if (!t || !t.title) continue;
     // Status, due-date presence and the window, all in one shared predicate.
-    if (!isBoardTask(t, "Today")) continue;
+    //
+    // BOTH windows, not one. "Today" runs from the EPOCH to end of today, so
+    // it means due-today-or-overdue; "Tomorrow" is a separate, single-day
+    // window rather than a cumulative one. Swapping to "Tomorrow" would have
+    // dropped today's work entirely, so the panel asks for the union: what is
+    // due or late, plus what lands tomorrow. Still the shared predicate --
+    // jobFilter.js is untouched, so the board is unaffected.
+    if (!isBoardTask(t, "Today") && !isBoardTask(t, "Tomorrow")) continue;
     // Stale = overdue by more than a week. The board hides these by default
     // (its "hidden" counter in the header), and the panel is meant to be a
     // SHORT list of what to build, so a job that has been sitting for months
@@ -1177,7 +1374,7 @@ async function handlePanelJobs(request, url, env) {
       assignee: member,
       // customStatusName is the human status the board displays ("on hold",
       // "retouch", "to amend"); `status` is only ever the base Active/Completed.
-      status: t.customStatusName || status,
+      status: customName(t) || t.customStatusName || status,
       due_date: t.dueDate || "",
       updated_at: t.updatedDate || "",
       permalink: t.permalink || "",
@@ -1196,7 +1393,7 @@ async function handlePanelJobs(request, url, env) {
           // flight -- the group alone reports every one of those as Active.
           // Same cached task_data the parent reads it from, so no extra query
           // and no extra Wrike call.
-          customStatusName: sub?.customStatusName || "",
+          customStatusName: customName(sub) || sub?.customStatusName || "",
         };
       }),
       subtask_count: (t.subTaskIds || []).length,
@@ -1211,5 +1408,8 @@ async function handlePanelJobs(request, url, env) {
   // ordering that reflects real activity.
   jobs.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
 
-  return json(jobs, { headers: panelCors() });
+  // Header, not a wrapper object: the response has always been a bare array
+  // and changing that shape would be a breaking change for one bit of
+  // diagnostics.
+  return json(jobs, { headers: panelCors({ "X-Panel-Live": liveUsed ? "1" : "0" }) });
 }
