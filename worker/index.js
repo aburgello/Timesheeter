@@ -1186,7 +1186,17 @@ async function handlePanelJobs(request, url, env) {
         return {
           id: String(id),
           name: sub?.title || "",
+          // Wrike's status GROUP -- only ever Active/Completed/Deferred/
+          // Cancelled. Kept as-is so nothing that already reads it changes.
           status: sub?.status || "",
+          // ADDITIVE. The custom workflow status the board actually shows
+          // ("Delivering", "Backlog", "Motion"), which the parent task above
+          // has always sent and the subtasks never did. The panel needs it to
+          // tell a batch that still wants localising from one already in
+          // flight -- the group alone reports every one of those as Active.
+          // Same cached task_data the parent reads it from, so no extra query
+          // and no extra Wrike call.
+          customStatusName: sub?.customStatusName || "",
         };
       }),
       subtask_count: (t.subTaskIds || []).length,
