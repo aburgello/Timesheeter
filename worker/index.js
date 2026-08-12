@@ -1138,6 +1138,40 @@ function panelWrikeDate(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+// Subtasks by id, straight from Wrike. Wrike takes a comma-separated id list
+// on /tasks/{ids}; 100 is its documented ceiling, so this chunks.
+// Returns [] on any failure so the caller falls back to the cache.
+async function panelLiveSubtasks(env, ids) {
+  const row = await panelWrikeToken(env);
+  if (!row || !ids.length) return [];
+  const unique = [...new Set(ids.map(String))].slice(0, 400);
+  const fields = encodeURIComponent(PANEL_LIVE_FIELDS);
+  const out = [];
+  for (let i = 0; i < unique.length; i += 100) {
+    const chunk = unique.slice(i, i + 100).join(",");
+    try {
+      const res = await fetch(`https://${row.api_host}/api/v4/tasks/${chunk}?fields=${fields}`, {
+        headers: { Authorization: `Bearer ${row.access_token}` },
+      });
+      if (!res.ok) {
+        console.warn("[panel/jobs] live subtask fetch failed", res.status);
+        return [];
+      }
+      const body = await res.json();
+      for (const t of body.data || []) {
+        out.push({
+          id: t.id,
+          task_data: { ...t, dueDate: t.dueDate || (t.dates && t.dates.due) || "No Due Date" },
+        });
+      }
+    } catch (err) {
+      console.warn("[panel/jobs] live subtask fetch threw", err);
+      return [];
+    }
+  }
+  return out;
+}
+
 async function panelLiveTasks(env, teamIds) {
   const row = await panelWrikeToken(env);
   if (!row || !teamIds.length) return null;
@@ -1183,19 +1217,41 @@ async function handlePanelJobs(request, url, env) {
   const member = (url.searchParams.get("member") || "").trim();
   let wrikeUserId = "";
   if (member) {
-    const profRes = await sbFetch(env, "/profiles?select=wrike_user_id,first_name,last_name");
+    // ORDERED and RANKED, because `profiles` can hold more than one row for a
+    // person. Unordered + .find() silently took whichever duplicate PostgREST
+    // returned first: "Luke" resolved to KUAYJKOM instead of Luke Trott's
+    // KUAQK77L, so every Wrike query asked about the wrong person and came
+    // back empty. An arbitrary pick is not a tie-break.
+    const profRes = await sbFetch(
+      env,
+      "/profiles?select=wrike_user_id,first_name,last_name,department,updated_at&order=updated_at.desc"
+    );
     if (profRes.ok) {
-      const profiles = await profRes.json();
-      const wanted = member.toLowerCase();
-      const hit = (profiles || []).find((p) => {
+      const profiles = (await profRes.json()) || [];
+      const wanted = member.trim().toLowerCase();
+      // Best match wins, not first seen: an exact full name beats a first
+      // name, which beats a surname. The panel tags a machine with a display
+      // name ("Antonio"), usually the first name -- but "Trott" is how this
+      // studio refers to Luke, so a surname has to resolve too.
+      const score = (p) => {
         const first = (p.first_name || "").trim().toLowerCase();
-        const full = `${p.first_name || ""} ${p.last_name || ""}`.trim().toLowerCase();
-        // The panel tags a machine with a display name ("Antonio"), which is
-        // usually the first name — accept either form rather than forcing the
-        // studio to keep two naming schemes in step.
-        return first === wanted || full === wanted;
-      });
-      if (hit) wrikeUserId = hit.wrike_user_id;
+        const last = (p.last_name || "").trim().toLowerCase();
+        const full = (first + " " + last).trim();
+        if (full === wanted) return 3;
+        if (first === wanted) return 2;
+        if (last === wanted) return 1;
+        return 0;
+      };
+      let best = null;
+      let bestScore = 0;
+      for (const p of profiles) {
+        if (!p || !p.wrike_user_id) continue;
+        const sc = score(p);
+        // Ties go to the more recently updated row (the query is ordered), so
+        // the answer is at least deterministic rather than luck.
+        if (sc > bestScore) { bestScore = sc; best = p; }
+      }
+      if (best) wrikeUserId = best.wrike_user_id;
     }
   }
   if (member && !wrikeUserId) {
@@ -1277,9 +1333,18 @@ async function handlePanelJobs(request, url, env) {
   }
   let subRows = [];
   if (wantedSubIds.length) {
-    const ids = wantedSubIds.slice(0, 400).map((i) => `"${i}"`).join(",");
-    const subRes = await sbFetch(env, `/wrike_tasks_cache?select=id,task_data&id=in.(${ids})`);
-    if (subRes.ok) subRows = await subRes.json();
+    if (liveUsed) {
+      // On a live refresh the SUBTASKS have to come from Wrike too. Fetching
+      // fresh parents but reading their children out of the cache produced a
+      // job with an empty table -- the parent was new, so its subtask rows had
+      // never been cached. That is worse than the stale data it replaced.
+      subRows = await panelLiveSubtasks(env, wantedSubIds);
+    }
+    if (!subRows.length) {
+      const ids = wantedSubIds.slice(0, 400).map((i) => `"${i}"`).join(",");
+      const subRes = await sbFetch(env, `/wrike_tasks_cache?select=id,task_data&id=in.(${ids})`);
+      if (subRes.ok) subRows = await subRes.json();
+    }
   }
 
   // subTaskIds gives IDs only. The cache holds every task it has seen,
@@ -1411,5 +1476,12 @@ async function handlePanelJobs(request, url, env) {
   // Header, not a wrapper object: the response has always been a bare array
   // and changing that shape would be a breaking change for one bit of
   // diagnostics.
-  return json(jobs, { headers: panelCors({ "X-Panel-Live": liveUsed ? "1" : "0" }) });
+  // X-Panel-Build is a hand-bumped marker so "is my fix deployed?" is one curl
+  // rather than a deduction from behaviour. Bump it with any change here.
+  return json(jobs, {
+    headers: panelCors({
+      "X-Panel-Live": liveUsed ? "1" : "0",
+      "X-Panel-Build": "2026-08-12-member-lookup-4",
+    }),
+  });
 }
