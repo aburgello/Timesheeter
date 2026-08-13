@@ -17,7 +17,7 @@ import { boardLabelFor } from "../lib/departments";
 import { PAGE_GRADIENTS } from "../lib/pageGradients";
 import { reportError } from "../lib/monitoring";
 import { FILM_MAPPINGS } from "../constants.js";
-import { docToPlainText, docHasText } from "../utils/tiptapText";
+import { docToPlainText, docToHtml, docHasText, escapeHtml } from "../utils/tiptapText";
 import {
   Layout,
   Sparkles,
@@ -569,22 +569,95 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign, covers,
     [exportRows, selected, department, nameFor]
   );
 
+  // The same agenda as HTML, for the rich half of the clipboard. Inline styles
+  // rather than classes: this is pasted into Slack, Docs, Word or an email,
+  // none of which carry a stylesheet across, so anything not on the element
+  // itself is simply lost.
+  const buildExportHtml = useCallback(
+    (mode) => {
+      const title = selected?.title || "Campaign";
+      const parts = [
+        `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#122027">`,
+        `<h1 style="font-size:18px;margin:0 0 4px">End of Campaign — ${escapeHtml(title)}</h1>`,
+        `<p style="font-size:12px;color:#768994;margin:0 0 16px">${escapeHtml(department)} team</p>`,
+      ];
+
+      if (!exportRows.length) {
+        parts.push(`<p>No notes written up yet.</p></div>`);
+        return parts.join("");
+      }
+
+      const heading = (text) =>
+        `<h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.06em;margin:20px 0 8px">${escapeHtml(text)}</h2>`;
+      const who = (name) =>
+        `<p style="font-weight:700;margin:12px 0 2px">${escapeHtml(name)}</p>`;
+      const body = (html) => `<div style="margin:0 0 6px">${html}</div>`;
+
+      if (mode === "section") {
+        for (const section of EOC_SECTIONS) {
+          const written = exportRows
+            .map((r) => ({ name: nameFor(r.author_id), html: docToHtml(r[section.key]) }))
+            .filter((r) => r.html);
+          if (!written.length) continue;
+          parts.push(heading(section.label));
+          for (const { name, html } of written) parts.push(who(name), body(html));
+        }
+      } else {
+        for (const row of exportRows) {
+          parts.push(heading(nameFor(row.author_id)));
+          for (const section of EOC_SECTIONS) {
+            const html = docToHtml(row[section.key]);
+            if (!html) continue;
+            parts.push(who(section.label), body(html));
+          }
+        }
+      }
+
+      parts.push("</div>");
+      return parts.join("");
+    },
+    [exportRows, selected, department, nameFor]
+  );
+
   const [copied, setCopied] = useState("");
   const flagCopied = useCallback((what) => {
     setCopied(what);
     setTimeout(() => setCopied(""), 2000);
   }, []);
 
+  // ONE COPY CARRYING BOTH FORMATS. The destination picks: Slack, Docs, Word
+  // and mail clients take the HTML and render real headings and bullets; a
+  // plain-text editor takes the text/plain flavour and gets the indented
+  // version. Nothing to choose at copy time, and no format that is wrong
+  // somewhere.
+  //
+  // Falls back to writeText where ClipboardItem isn't available or the write is
+  // refused — the plain text alone is still the whole agenda, just flatter.
   const copyExport = useCallback(
     async (mode) => {
+      const text = buildExport(mode);
       try {
-        await navigator.clipboard.writeText(buildExport(mode));
+        if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              "text/html": new Blob([buildExportHtml(mode)], { type: "text/html" }),
+              "text/plain": new Blob([text], { type: "text/plain" }),
+            }),
+          ]);
+        } else {
+          await navigator.clipboard.writeText(text);
+        }
         flagCopied(mode);
       } catch (err) {
-        reportError(err, { scope: "eoc-export-copy" });
+        try {
+          await navigator.clipboard.writeText(text);
+          flagCopied(mode);
+        } catch {
+          reportError(err, { scope: "eoc-export-copy" });
+        }
       }
     },
-    [buildExport, flagCopied]
+    [buildExport, buildExportHtml, flagCopied]
   );
 
   // Share the campaign itself, so "add your notes" comes with somewhere to go.

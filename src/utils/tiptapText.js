@@ -128,3 +128,121 @@ export function docToPlainText(raw) {
 export function docHasText(raw) {
   return docToPlainText(raw).length > 0;
 }
+
+// ── HTML ─────────────────────────────────────────────────────────────────────
+//
+// The same documents again, as HTML, for the rich half of the clipboard. This
+// is where bullets stay bullets and bold stays bold when the agenda is pasted
+// into Slack, Docs or an email — the plain-text version above flattens all of
+// that into hyphens and indentation.
+
+export function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Marks ARE kept here, unlike the plain-text path: in HTML they survive the
+// paste, so dropping them would lose emphasis the writer put in deliberately.
+function inlineHtml(node) {
+  if (!node) return "";
+  if (node.type === "hardBreak") return "<br>";
+  if (node.type === "image") return "[image]";
+  if (node.type === "video") return "[video]";
+  if (node.type !== "text") return (node.content || []).map(inlineHtml).join("");
+
+  let html = escapeHtml(node.text || "");
+  for (const mark of node.marks || []) {
+    switch (mark.type) {
+      case "bold": html = `<strong>${html}</strong>`; break;
+      case "italic": html = `<em>${html}</em>`; break;
+      case "underline": html = `<u>${html}</u>`; break;
+      case "strike": html = `<s>${html}</s>`; break;
+      case "code": html = `<code>${html}</code>`; break;
+      case "link": {
+        const href = escapeHtml(mark.attrs?.href || "");
+        // Only http(s) and mailto survive. A pasted javascript: or data: URL
+        // would otherwise be carried into whatever document this lands in.
+        html = /^(https?:|mailto:)/i.test(href) ? `<a href="${href}">${html}</a>` : html;
+        break;
+      }
+      default: break;
+    }
+  }
+  return html;
+}
+
+function blockHtml(node) {
+  if (!node) return "";
+  switch (node.type) {
+    case "doc":
+      return (node.content || []).map(blockHtml).join("");
+    case "paragraph": {
+      const inner = inlineHtml(node);
+      return inner.trim() ? `<p>${inner}</p>` : "";
+    }
+    case "heading": {
+      const inner = inlineHtml(node);
+      if (!inner.trim()) return "";
+      const level = Math.min(Math.max(node.attrs?.level || 2, 1), 6);
+      return `<h${level}>${inner}</h${level}>`;
+    }
+    // Arrow-wrapped, not a bare `.map(listItemHtml)`: map passes the index as
+    // the second argument, which would land in listItemHtml's `prefix` and
+    // print "0"/"1" in front of every item.
+    case "bulletList":
+      return `<ul>${(node.content || []).map((li) => listItemHtml(li)).join("")}</ul>`;
+    case "orderedList": {
+      const start = node.attrs?.start || 1;
+      const attr = start !== 1 ? ` start="${start}"` : "";
+      return `<ol${attr}>${(node.content || []).map((li) => listItemHtml(li)).join("")}</ol>`;
+    }
+    case "taskList":
+      // Rendered as a plain list with a box glyph rather than real checkboxes:
+      // an <input> pastes as an interactive control in some editors and is
+      // stripped entirely by others, whereas a character always survives.
+      return `<ul>${(node.content || [])
+        .map((li) => listItemHtml(li, li.attrs?.checked ? "☑ " : "☐ "))
+        .join("")}</ul>`;
+    case "blockquote":
+      return `<blockquote>${(node.content || []).map(blockHtml).join("")}</blockquote>`;
+    case "codeBlock":
+      return `<pre><code>${escapeHtml(inlineText(node))}</code></pre>`;
+    case "horizontalRule":
+      return "<hr>";
+    case "image":
+      return "<p>[image]</p>";
+    case "video":
+      return "<p>[video]</p>";
+    default: {
+      const inner = inlineHtml(node);
+      return inner.trim() ? `<p>${inner}</p>` : "";
+    }
+  }
+}
+
+function listItemHtml(item, prefix = "") {
+  const inner = (item.content || []).map(blockHtml).join("");
+  if (!inner) return "";
+  // A list item wrapping its text in <p> gains a paragraph's margins in most
+  // targets, which spaces a tight list out into something twice as long.
+  const tightened = inner.replace(/^<p>([\s\S]*?)<\/p>/, "$1");
+  return `<li>${prefix}${tightened}</li>`;
+}
+
+/** A stored note as an HTML fragment. "" when the note is empty. */
+export function docToHtml(raw) {
+  let doc = raw;
+  if (typeof raw === "string") {
+    if (!raw.trim()) return "";
+    try {
+      doc = JSON.parse(raw);
+    } catch {
+      return `<p>${escapeHtml(raw.trim())}</p>`;
+    }
+  }
+  if (!doc || typeof doc !== "object") return "";
+  return blockHtml(doc);
+}

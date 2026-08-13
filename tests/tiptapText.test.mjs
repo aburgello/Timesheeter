@@ -101,3 +101,43 @@ check(
   docHasText('{"type":"doc","content":[{"type":"paragraph"},{"type":"paragraph"}]}'),
   false
 );
+
+// ── HTML export ─────────────────────────────────────────────────────────────
+import { docToHtml, escapeHtml } from "../src/utils/tiptapText.js";
+
+check("a paragraph becomes a p", docToHtml(doc(para("Turnaround was quick"))), "<p>Turnaround was quick</p>");
+
+// Marks are KEPT here, unlike the plain-text path — in HTML they survive the
+// paste, so dropping them would lose emphasis the writer meant.
+check(
+  "bold survives",
+  docToHtml(doc({ type: "paragraph", content: [{ type: "text", text: "Really", marks: [{ type: "bold" }] }, { type: "text", text: " good" }] })),
+  "<p><strong>Really</strong> good</p>"
+);
+
+check("bullets become a real list", docToHtml(bullets), "<ul><li>Specs were clear</li><li>Markets landed on time</li></ul>");
+check("numbered lists become ol", docToHtml(ordered), "<ol><li>Lock the market list</li><li>Then brief</li></ol>");
+check("checklists carry a box glyph", docToHtml(tasks), "<ul><li>☑ Chase specs</li><li>☐ Book the debrief</li></ul>");
+check("nested lists nest", docToHtml(nested), "<ul><li>Late drops<ul><li>Propose a cutoff</li></ul></li></ul>");
+
+// The whole reason this escapes: a note is user text and may contain markup
+// characters, which would otherwise break the document it is pasted into.
+check("angle brackets are escaped", docToHtml(doc(para("a < b & c > d"))), "<p>a &lt; b &amp; c &gt; d</p>");
+check("escapeHtml quotes too", escapeHtml('a "b" <c>'), "a &quot;b&quot; &lt;c&gt;");
+
+// A javascript: URL must not be carried into whatever document this lands in.
+const evilLink = doc({
+  type: "paragraph",
+  content: [{ type: "text", text: "click", marks: [{ type: "link", attrs: { href: "javascript:alert(1)" } }] }],
+});
+check("a javascript: link is stripped to plain text", docToHtml(evilLink), "<p>click</p>");
+
+const goodLink = doc({
+  type: "paragraph",
+  content: [{ type: "text", text: "brief", marks: [{ type: "link", attrs: { href: "https://wrike.com/x" } }] }],
+});
+check("an http link is kept", docToHtml(goodLink), '<p><a href="https://wrike.com/x">brief</a></p>');
+
+check("empty document", docToHtml(doc()), "");
+check("null", docToHtml(null), "");
+check("blank paragraphs produce nothing", docToHtml(doc(para(""), para(""))), "");
