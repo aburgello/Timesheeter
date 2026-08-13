@@ -576,9 +576,20 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign, covers,
   const buildExportHtml = useCallback(
     (mode) => {
       const title = selected?.title || "Campaign";
+
+      // EVERY HEADING CARRIES AN INNER <strong>, which looks redundant and is
+      // not. Slack discards heading tags wholesale on paste — h1 and h2 arrive
+      // as ordinary body text — but it does honour <strong>. Without this the
+      // hierarchy inverted: person names (h2) rendered plain while the section
+      // labels beneath them rendered bold. The tag still carries real heading
+      // structure into Docs and Word, so this costs those nothing.
+      //
+      // The top level is also UPPERCASED, because once Slack has flattened
+      // everything to bold-or-not there are only two weights left to build
+      // three levels out of; case is the third signal that survives.
       const parts = [
         `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#122027">`,
-        `<h1 style="font-size:18px;margin:0 0 4px">End of Campaign — ${escapeHtml(title)}</h1>`,
+        `<h1 style="font-size:18px;margin:0 0 4px"><strong>End of Campaign — ${escapeHtml(title)}</strong></h1>`,
         `<p style="font-size:12px;color:#768994;margin:0 0 16px">${escapeHtml(department)} team</p>`,
       ];
 
@@ -587,28 +598,38 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign, covers,
         return parts.join("");
       }
 
-      const heading = (text) =>
-        `<h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.06em;margin:20px 0 8px">${escapeHtml(text)}</h2>`;
-      const who = (name) =>
-        `<p style="font-weight:700;margin:12px 0 2px">${escapeHtml(name)}</p>`;
+      const group = (text) =>
+        `<h2 style="font-size:15px;letter-spacing:0.04em;margin:22px 0 8px"><strong>${escapeHtml(text.toUpperCase())}</strong></h2>`;
+      const sub = (text) =>
+        `<h3 style="font-size:13px;margin:12px 0 2px"><strong>${escapeHtml(text)}</strong></h3>`;
       const body = (html) => `<div style="margin:0 0 6px">${html}</div>`;
+      // A rule, not a styled border: Slack keeps <hr> as a divider and drops
+      // CSS borders, and on a long agenda the group breaks are the thing that
+      // makes it skimmable in a chat window.
+      const rule = `<hr style="border:none;border-top:1px solid #dce4ec;margin:18px 0 0">`;
 
       if (mode === "section") {
+        let first = true;
         for (const section of EOC_SECTIONS) {
           const written = exportRows
             .map((r) => ({ name: nameFor(r.author_id), html: docToHtml(r[section.key]) }))
             .filter((r) => r.html);
           if (!written.length) continue;
-          parts.push(heading(section.label));
-          for (const { name, html } of written) parts.push(who(name), body(html));
+          if (!first) parts.push(rule);
+          first = false;
+          parts.push(group(section.label));
+          for (const { name, html } of written) parts.push(sub(name), body(html));
         }
       } else {
+        let first = true;
         for (const row of exportRows) {
-          parts.push(heading(nameFor(row.author_id)));
+          if (!first) parts.push(rule);
+          first = false;
+          parts.push(group(nameFor(row.author_id)));
           for (const section of EOC_SECTIONS) {
             const html = docToHtml(row[section.key]);
             if (!html) continue;
-            parts.push(who(section.label), body(html));
+            parts.push(sub(section.label), body(html));
           }
         }
       }
