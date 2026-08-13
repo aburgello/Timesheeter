@@ -288,7 +288,10 @@ const EOC_EMPTY_NOTE = { positives: "", negatives: "", improvements: "" };
 const hasNoteContent = (row) =>
   EOC_SECTIONS.some((s) => docHasText(row?.[s.key]));
 
-function EndOfCampaignNotesCard({ campaigns, department }) {
+// onOpenCampaign fires when a campaign is picked, so the page can fold the
+// Notes Canvas browser above out of the way — writing a wrap-up shouldn't mean
+// scrolling past the whole notes tree to reach it.
+function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign }) {
   const [search, setSearch] = useState("");
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
   const [notes, setNotes] = useState([]);          // every author's note on this campaign
@@ -548,8 +551,7 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
           <div className="min-w-0 flex-1">
             <h2 className="font-display text-lg font-bold text-white tracking-tight">End of Campaign Notes</h2>
             <p className="text-xs text-white/80 font-medium mt-0.5">
-              What we'd do differently next time. Everyone on the {department} team
-              writes their own — you'll see each other's side by side.
+              What we enjoyed and what we'd do differently next time.
             </p>
           </div>
           <div className="hidden sm:block shrink-0 text-right">
@@ -584,7 +586,7 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
                 return (
                   <button
                     key={c.id}
-                    onClick={() => setSelectedCampaignId(c.id)}
+                    onClick={() => { setSelectedCampaignId(c.id); onOpenCampaign?.(); }}
                     className={`group w-full text-left px-3.5 py-3 flex items-center gap-3 transition-colors ${
                       isActive ? "bg-[#c2410d]/10" : "hover:bg-[#f2f6f9]"
                     }`}
@@ -645,17 +647,12 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
                     editing over someone else's — the single shared note was a
                     blank page with everyone's name on it, which is nobody's. */}
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-min">
-                  {otherNotes.map((n) => (
-                    <EocNoteBox
-                      key={n.author_id}
-                      label={nameFor(n.author_id)}
-                      sublabel={relativeTime(n.updated_at)}
-                      accent={colorFor(n.author_id)}
-                      note={n}
-                      parseDoc={parseDoc}
-                    />
-                  ))}
-
+                  {/* YOURS FIRST. It used to sit last, on the reasoning that it
+                      was closest to where you stopped reading — but it is the
+                      one box you actually type in, and on a campaign several
+                      people have written up that put the editor below a screen
+                      of other people's notes. Reading can scroll; writing
+                      shouldn't have to. */}
                   <EocNoteBox
                     className={writing ? "xl:col-span-2" : ""}
                     label={myId ? "Your note" : "Notes"}
@@ -675,6 +672,17 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
                         : undefined
                     }
                   />
+
+                  {otherNotes.map((n) => (
+                    <EocNoteBox
+                      key={n.author_id}
+                      label={nameFor(n.author_id)}
+                      sublabel={relativeTime(n.updated_at)}
+                      accent={colorFor(n.author_id)}
+                      note={n}
+                      parseDoc={parseDoc}
+                    />
+                  ))}
                 </div>
               </>
             ) : selectedCampaignId ? (
@@ -755,14 +763,24 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
           if (!mine && !filled) return null;
           return (
             <div key={section.key} className={i > 0 ? "border-t border-slate-100" : ""}>
-              <div className="flex items-center gap-2 px-4 pt-3 pb-1">
-                <span
-                  className="shrink-0 w-1 h-3 rounded-full"
-                  style={{ background: filled ? accent : "#dce4ec" }}
-                />
-                <span className="text-[10px] font-black uppercase tracking-widest text-[#768994]">
-                  {section.label}
-                </span>
+              <div className="px-4 pt-3 pb-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="shrink-0 w-1 h-3 rounded-full"
+                    style={{ background: filled ? accent : "#dce4ec" }}
+                  />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#768994]">
+                    {section.label}
+                  </span>
+                </div>
+                {/* The question stays on screen rather than living in the
+                    placeholder. As a placeholder it vanished at the first
+                    keystroke — exactly when you are still deciding what to
+                    write — and on someone else's box it never appeared at all,
+                    so their answer arrived with no question attached. */}
+                <p className="text-[11px] text-[#94a3b8] font-medium leading-snug mt-1 ml-3">
+                  {section.prompt}
+                </p>
               </div>
               <RichNoteEditor
                 content={parseDoc(raw)}
@@ -771,9 +789,9 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
                 }
                 editable={!!mine && !!onChangeSection}
                 accent={accent}
-                // The question itself, so it is in front of you while you
-                // answer and gone once you have.
-                placeholder={mine ? section.prompt : ""}
+                // No placeholder: the question is displayed above, and
+                // repeating it inside the empty editor just says it twice.
+                placeholder=""
                 className="px-1 pb-1 min-h-[86px]"
               />
             </div>
@@ -2670,6 +2688,10 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   const [collapsedStudios, setCollapsedStudios] = useState({}); // {studio: true} = folded
   // Notes "expand" → full page width: hides the campaigns panel + the notes rail.
   const [notesExpanded, setNotesExpanded] = useState(false);
+  // The Notes Canvas browser folds away when you open a campaign in End of
+  // Campaign Notes, the same collapsed-card idiom Management's AdminHub uses.
+  // Its header row stays, so one click brings it back.
+  const [notesBrowserOpen, setNotesBrowserOpen] = useState(true);
 
   // --- SIDE PANEL STATE ---
   const [showFoldersPanel, setShowFoldersPanel] = useState(false);
@@ -4466,8 +4488,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                   {(
                   <div className="min-w-0">
                     <NotesCanvasCard
-                      isOpen
-                      onToggle={undefined}
+                      isOpen={notesBrowserOpen}
+                      onToggle={() => setNotesBrowserOpen((v) => !v)}
                       department={department}
                       pinnedFolderIds={pinnedFolders.map((f) => f.id)}
                       onTogglePin={toggleNotePin}
@@ -4734,7 +4756,11 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
 
               {/* Sits at the foot of Notes Canvas — see canvasTools. */}
               {canvasView === "notes" && !notesExpanded && (
-                <EndOfCampaignNotesCard campaigns={campaigns} department={department} />
+                <EndOfCampaignNotesCard
+                  campaigns={campaigns}
+                  department={department}
+                  onOpenCampaign={() => setNotesBrowserOpen(false)}
+                />
               )}
               </div>
             </div>
