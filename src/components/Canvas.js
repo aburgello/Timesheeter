@@ -766,7 +766,13 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign, covers,
                 {/* The bento. A box each, so adding your take never means
                     editing over someone else's — the single shared note was a
                     blank page with everyone's name on it, which is nobody's. */}
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-min">
+                {/* Three columns once there's room. Two columns of half-width
+                    boxes left a lot of air around answers that are usually a
+                    line or two, and the taller each box is the fewer people
+                    you can compare at once — which is the whole point of a
+                    grid rather than a list. auto-rows-min so a short note
+                    doesn't stretch to match a long one beside it. */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 auto-rows-min items-start">
                   {/* YOURS FIRST. It used to sit last, on the reasoning that it
                       was closest to where you stopped reading — but it is the
                       one box you actually type in, and on a campaign several
@@ -774,7 +780,7 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign, covers,
                       of other people's notes. Reading can scroll; writing
                       shouldn't have to. */}
                   <EocNoteBox
-                    className={writing ? "xl:col-span-2" : ""}
+                    className={writing ? "lg:col-span-2" : ""}
                     label={myId ? "Your note" : "Notes"}
                     sublabel={myId ? "Answer the three below" : "Connect Wrike in your Profile to write"}
                     accent={myId ? colorFor(myId) : "#c2410d"}
@@ -850,13 +856,13 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
           : "border-[#dce4ec]"
       }`}
     >
-      <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-slate-100">
-        <span className="shrink-0 w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black text-white" style={{ background: accent }}>
+      <div className="flex items-center gap-2 px-3.5 py-2 border-b border-slate-100">
+        <span className="shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[9px] font-black text-white" style={{ background: accent }}>
           {(label || "?").charAt(0).toUpperCase()}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-[12px] font-black text-[#122027] truncate">{label}</span>
-          {sublabel && <span className="block text-[10px] font-semibold text-[#94a3b8] truncate">{sublabel}</span>}
+          <span className="block text-[11px] font-black text-[#122027] truncate">{label}</span>
+          {sublabel && <span className="block text-[9px] font-semibold text-[#94a3b8] truncate">{sublabel}</span>}
         </span>
         {mine && onChangeSection && (
           <span className={`shrink-0 text-[9px] font-black uppercase tracking-widest transition-colors duration-300 ${roomy ? "text-[#c2410d]" : "text-[#c2d0da]"}`}>
@@ -870,7 +876,7 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
           scrolls internally rather than making the bento unreadable. */}
       <div
         className={`transition-[max-height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-y-auto custom-scrollbar ${
-          roomy ? "max-h-[620px]" : "max-h-[420px]"
+          roomy ? "max-h-[560px]" : "max-h-[300px]"
         }`}
       >
         {EOC_SECTIONS.map((section, i) => {
@@ -883,13 +889,13 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
           if (!mine && !filled) return null;
           return (
             <div key={section.key} className={i > 0 ? "border-t border-slate-100" : ""}>
-              <div className="px-4 pt-3 pb-1">
+              <div className={roomy ? "px-4 pt-3 pb-1" : "px-4 pt-2 pb-0.5"}>
                 <div className="flex items-center gap-2">
                   <span
-                    className="shrink-0 w-1 h-3 rounded-full"
+                    className="shrink-0 w-1 h-2.5 rounded-full"
                     style={{ background: filled ? accent : "#dce4ec" }}
                   />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#768994]">
+                  <span className="text-[9px] font-black uppercase tracking-widest text-[#768994]">
                     {section.label}
                   </span>
                 </div>
@@ -897,10 +903,15 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
                     placeholder. As a placeholder it vanished at the first
                     keystroke — exactly when you are still deciding what to
                     write — and on someone else's box it never appeared at all,
-                    so their answer arrived with no question attached. */}
-                <p className="text-[11px] text-[#94a3b8] font-medium leading-snug mt-1 ml-3">
-                  {section.prompt}
-                </p>
+                    so their answer arrived with no question attached.
+                    Hidden once you are reading a filled section rather than
+                    answering it: at that point the answer is the content and
+                    the question is a line of grey repeated for every person. */}
+                {(roomy || !filled) && (
+                  <p className="text-[10px] text-[#94a3b8] font-medium leading-snug mt-0.5 ml-3">
+                    {section.prompt}
+                  </p>
+                )}
               </div>
               <RichNoteEditor
                 content={parseDoc(raw)}
@@ -913,10 +924,16 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
                 // a 46rem reading column and centres it, so a short answer
                 // floats in the middle of a box whose labels are flush left.
                 fill
+                // Reading size unless you're actually in the box. The editing
+                // state keeps full-size type; everything else is being scanned.
+                compact={!roomy}
                 // No placeholder: the question is displayed above, and
                 // repeating it inside the empty editor just says it twice.
                 placeholder=""
-                className="px-1 pb-1 min-h-[86px]"
+                // Only the box you're writing in reserves height. A read-only
+                // section sizes to its answer — the fixed 86px was three
+                // blocks of dead space under three one-line replies.
+                className={roomy ? "min-h-[80px]" : mine ? "min-h-[40px]" : "min-h-0"}
               />
             </div>
           );

@@ -419,6 +419,10 @@ function NoteEditor({
   // editor used as a short field inside a panel (End of Campaign sections),
   // where the reading measure would centre a little text in a wide box.
   fill = false,
+  // Smaller type and tighter rhythm, for an editor being read rather than
+  // written in — a wall of 16px/1.7 body text is right for a page you are
+  // composing and far too loose for a grid of short answers you are scanning.
+  compact = false,
   // Read-only rendering: the note shows with all its formatting but can't be
   // typed into, and the editing chrome (bubble menu, slash menu, drag handles)
   // never appears. Used where a note belongs to someone else.
@@ -907,7 +911,7 @@ function NoteEditor({
   return (
     <div
       ref={wrapRef}
-      className={`rne-root ${fill ? "rne-fill" : ""} ${className}`}
+      className={`rne-root ${fill ? "rne-fill" : ""} ${compact ? "rne-compact" : ""} ${className}`}
       style={{
         "--rne-accent": accent,
         // `fill` hands the width back to the container. The measure exists for
@@ -930,6 +934,17 @@ function NoteEditor({
            short field that reads as a gap rather than as room to write. */
         .rne-root.rne-fill .ProseMirror { margin-inline: 0; padding: 4px 14px 10px; }
         @media (min-width: 640px) { .rne-root.rne-fill .ProseMirror { padding: 4px 16px 10px; } }
+        /* Reading size. Every length here scales together — type, leading and
+           the gaps between blocks — because shrinking the font alone leaves
+           paragraph margins sized for the old one and the text ends up small
+           and still sparse. */
+        .rne-root.rne-compact .ProseMirror { font-size: 13px; line-height: 1.5; padding: 2px 14px 4px; }
+        @media (min-width: 640px) { .rne-root.rne-compact .ProseMirror { padding: 2px 16px 4px; } }
+        .rne-root.rne-compact p { margin: 0 0 5px; }
+        .rne-root.rne-compact h2 { font-size: 1.05rem; margin: 0 0 5px; }
+        .rne-root.rne-compact h3 { font-size: 0.95rem; margin: 8px 0 4px; }
+        .rne-root.rne-compact ul, .rne-root.rne-compact ol { padding-left: 17px; margin: 0 0 5px; }
+        .rne-root.rne-compact li { margin: 0 0 2px; }
         .rne-root h2 { font-size: 1.55rem; font-weight: 750; letter-spacing: -0.01em; margin: 0 0 10px; }
         .rne-root h3 { font-size: 1.28rem; font-weight: 750; letter-spacing: -0.01em; margin: 18px 0 8px; }
         .rne-root p { margin: 0 0 12px; }
