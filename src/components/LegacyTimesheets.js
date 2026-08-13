@@ -24,6 +24,8 @@ import {
   XCircle,
   FileSpreadsheet,
   ChevronDown,
+  Tag,
+  Search,
   ChevronRight,
   CheckCircle,
   Lock,
@@ -64,6 +66,7 @@ import {
 } from "../utils/territories";
 import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
 import { mergeMultiCountryRows } from "../utils/mergeMultiCountry";
+import { defaultCategoryForTask } from "../utils/categoryFamily";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
 
 // A grid textarea that grows to fit its text instead of hiding it.
@@ -99,6 +102,82 @@ function AutoGrowTextarea({ value, ...rest }) {
     el.style.height = `${el.scrollHeight + border}px`;
   }, [value]);
   return <textarea ref={ref} value={value} {...rest} />;
+}
+
+// The category picker in the batch-edit bar. Its own compact list rather than
+// TableSearchableSelect: that component's menu is built for a table cell and
+// anchored to it, and this one has to open UPWARD out of a floating bar sitting
+// at the foot of the table.
+function BatchCategoryPicker({ onPick }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) { setSearch(""); return; }
+    const onDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const filtered = search
+    ? CATEGORIES.filter((c) => c.toLowerCase().includes(search.toLowerCase()))
+    : CATEGORIES;
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-white/10 hover:bg-white/20 transition-colors"
+      >
+        <Tag className="w-3.5 h-3.5" />
+        Set category
+        <ChevronDown className={`w-3 h-3 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-[300px]">
+          <div className="w-full bg-white text-[#122027] border border-[#dce4ec] rounded-2xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="p-2.5 pb-2">
+              <div className="flex items-center gap-2 bg-slate-50 border border-[#dce4ec] rounded-xl px-2.5 py-1.5">
+                <Search className="w-3.5 h-3.5 text-[#768994] shrink-0" />
+                <input
+                  autoFocus
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search categories…"
+                  className="w-full bg-transparent text-xs outline-none placeholder:text-[#768994]"
+                />
+              </div>
+            </div>
+            <div className="max-h-56 overflow-y-auto overscroll-contain px-2 pb-2">
+              {filtered.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => { onPick(c); setOpen(false); }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] hover:bg-slate-50 transition-colors truncate"
+                >
+                  {c}
+                </button>
+              ))}
+              {filtered.length === 0 && (
+                <p className="px-2.5 py-3 text-[11px] text-[#768994] text-center">
+                  No category matches “{search}”.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
@@ -735,18 +814,22 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     //    match, that is a deliberate statement about the work and beats
     //    everything below it.
     //
-    // 2. The member's own default. This wins over the keyword rules on purpose.
-    //    Those rules can only ever produce three of the 65 categories, and for
-    //    anyone whose work isn't production/localisation they are wrong every
-    //    single time — letting them override the default would defeat the point
-    //    of having set one.
+    // 2. The member's own default — with its Print/Digital half decided by the
+    //    job rather than fixed. A discipline is stable (Daisy proofreads);
+    //    which family it belongs to is a property of the job, and the job says
+    //    so itself because print and digital work sit in their own Wrike
+    //    folders. So a "Print - Proofreading" default pulls a task from a
+    //    DIGITAL folder as "Digital - Proofreading". Only ever swaps across a
+    //    matched pair, never changes the discipline, and leaves the default
+    //    alone when the path claims neither or both. See utils/categoryFamily.
     //
     // 3. The keyword rules, for members who have set no default. Unchanged
     //    behaviour, so nobody's pull changes until they opt in.
     let guessedCategory =
       linkedTask.customStatusName || linkedTask.status || "";
     if (!CATEGORIES.includes(guessedCategory)) {
-      if (defaultCategory) guessedCategory = defaultCategory;
+      if (defaultCategory)
+        guessedCategory = defaultCategoryForTask(defaultCategory, searchTarget);
       else if (searchTarget.includes("PRINT"))
         guessedCategory = "Print - Production/Localisation";
       else if (
@@ -1822,6 +1905,23 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
   const [consolidatedView, setConsolidatedView] = useState(true);
 
+  // ── Batch edit ──────────────────────────────────────────────────────────
+  // Row ids ticked for a bulk change. Real row ids only: the consolidated
+  // group header is a read-only summary and never routes an edit, so ticking
+  // one selects the subrows underneath it instead of itself.
+  const [selectedRowIds, setSelectedRowIds] = useState(() => new Set());
+
+  const toggleRowSelected = useCallback((id) => {
+    setSelectedRowIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedRowIds(new Set()), []);
+
   // ── Job-number dropdown options: jobs we've actually logged, most-recent
   // first, then the static catalogue as a fallback. RLS scopes the tasks query
   // to the caller's own rows, so this is genuinely "jobs I've logged". Dates are
@@ -2022,6 +2122,48 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Only the explicit per-day Lock blocks editing now — consolidated view is
   // fully editable (you edit real subrows, never the merged summary).
   const rowsAreEditable = !isDayFrozen;
+
+  // Every real row the grid is currently showing, in either view. Consolidated
+  // mode emits group headers too, and a collapsed group hides its subrows — so
+  // this is derived from renderItems rather than from currentDayRows, and
+  // "select all" means "all the rows you can actually see".
+  const selectableIds = useMemo(
+    () => renderItems.filter((i) => i.type !== "group").map((i) => i.row.id),
+    [renderItems]
+  );
+
+  // Ids can vanish under a selection — a pull merges rows, a day changes, a
+  // group collapses. Anything no longer on screen is dropped rather than left
+  // to be silently included in the next bulk edit.
+  useEffect(() => {
+    setSelectedRowIds((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set(selectableIds);
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [selectableIds]);
+
+  const selectedCount = selectedRowIds.size;
+  const allSelected = selectableIds.length > 0 && selectedCount === selectableIds.length;
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedRowIds((prev) =>
+      prev.size === selectableIds.length ? new Set() : new Set(selectableIds)
+    );
+  }, [selectableIds]);
+
+  // One field across every ticked row. Goes through handleUpdateRow so a bulk
+  // change behaves exactly like typing into each cell — same frozen-day guard,
+  // same Job Book side-effects, same save flash.
+  const applyToSelected = useCallback(
+    (field, value) => {
+      for (const id of selectedRowIds) handleUpdateRow(id, field, value);
+      clearSelection();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedRowIds, clearSelection]
+  );
   const showConsolidationWarning =
     !consolidatedView &&
     currentDayRows.some(
@@ -2649,6 +2791,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   >
                     {/* "Add. Time" stacks so the full stop ends its own line,
                         matching the two-line Time Spent / Client Amends labels. */}
+                    {/* Select-all lives in the first header cell rather than in
+                        a column of its own — the colgroup drives the resizable
+                        widths, so a new column would have to be threaded
+                        through every row's cells and every saved width. */}
+                    {idx === 0 && rowsAreEditable && selectableIds.length > 0 && (
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={toggleSelectAll}
+                        title={allSelected ? "Clear selection" : "Select every row on this day"}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 accent-[#12a0e1] cursor-pointer"
+                      />
+                    )}
                     {c.label === "Add. Time" ? (
                       <span className="block leading-tight">
                         <span className="block">Add.</span>
@@ -2869,6 +3024,20 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       <span key={justSaved[row.id]} className="row-saved-flash" aria-hidden="true" />
                     )}
                     <div className="flex items-start gap-2 pl-1">
+                      {/* Selection tick. Inside the first cell rather than in a
+                          column of its own, so the resizable colgroup is
+                          untouched. Always visible once the day is unlocked —
+                          a hover-only control is a feature nobody discovers. */}
+                      {rowsAreEditable && (
+                        <input
+                          type="checkbox"
+                          checked={selectedRowIds.has(row.id)}
+                          onChange={() => toggleRowSelected(row.id)}
+                          title="Select for batch edit"
+                          aria-label="Select row for batch edit"
+                          className="mt-2 w-3.5 h-3.5 shrink-0 accent-[#12a0e1] cursor-pointer"
+                        />
+                      )}
                       <button
                         onClick={() => handleDeleteRow(row.id)}
                         disabled={!rowsAreEditable}
@@ -3132,9 +3301,32 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           </div>
         )}
 
+        {/* Batch-edit bar. Replaces the tongue while rows are ticked rather
+            than stacking above it: they occupy the same spot, and two floating
+            bars competing for the same corner is worse than one that changes
+            what it offers. */}
+        {selectedCount > 0 && (
+          <div className="relative z-20 -mb-4 flex justify-center pointer-events-none">
+            <div className="pointer-events-auto flex items-center gap-2 bg-[#122027] text-white rounded-full shadow-lg px-2 py-1.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+              <span className="text-[11px] font-black uppercase tracking-widest pl-2">
+                {selectedCount} selected
+              </span>
+              <span className="w-px h-4 bg-white/20 shrink-0" />
+              <BatchCategoryPicker onPick={(val) => applyToSelected("category", val)} />
+              <button
+                onClick={clearSelection}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold text-white/60 hover:text-white transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Bottom-centre "tongue" — Consolidated + Lock floating above the
             action bar, so the table's view controls cost no vertical space. */}
-        <div className="relative z-10 -mb-4 flex justify-center pointer-events-none">
+        <div className={`relative z-10 -mb-4 flex justify-center pointer-events-none ${selectedCount > 0 ? "hidden" : ""}`}>
           <div className="pointer-events-auto flex items-center gap-1 bg-white border border-[#dce4ec] rounded-full shadow-md px-1.5 py-1">
             <button
               onClick={() => setConsolidatedView((v) => !v)}
