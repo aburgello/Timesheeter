@@ -198,6 +198,20 @@ html.dark-theme body {
 
 /* Opacity variants of already-covered backgrounds */
 .dark-theme .bg-slate-100\/70  { background-color: #1b2536 !important; }
+.dark-theme .bg-slate-100\/85  { background-color: #1b2536 !important; }
+
+/* 4. VARIANT-PREFIXED UTILITIES. Tailwind emits a variant as part of the class
+   NAME, so `supports-[backdrop-filter]:bg-slate-100/70` is the selector
+   `.supports-\[backdrop-filter\]\:bg-slate-100\/70` — a different class from
+   `.bg-slate-100\/70` entirely, which the override above therefore never
+   touches. Management's sticky breadcrumb sets both a plain background and a
+   supports- variant, so in dark mode neither was covered and the bar stayed
+   light grey across the whole page.
+
+   Specificity still works out: the variant sits inside an @supports block,
+   which does not affect specificity, so `.dark-theme .x` (two classes,
+   !important) wins over Tailwind's single class. */
+.dark-theme .supports-\[backdrop-filter\]\:bg-slate-100\/70 { background-color: #1b2536 !important; }
 .dark-theme .bg-slate-50\/40   { background-color: #162032 !important; }
 .dark-theme .bg-rose-50\/60    { background-color: #2a1e24 !important; }
 .dark-theme .bg-emerald-50\/50 { background-color: #16302a !important; }
