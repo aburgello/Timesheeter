@@ -140,6 +140,14 @@
     animation: rowSavedFade 700ms linear both;
     transform: none;
   }
+
+  /* The brand edge above the timesheet table runs forever. Every other
+     animation in the app is a one-shot tied to an action, so it stops on its
+     own; a perpetual one is exactly what this preference is asking about.
+     Holds its gradient, just stationary. */
+  .animate-gradient-flow {
+    animation: none;
+  }
 }
 
 /* Thin, quiet horizontal scrollbar for content tracks (Motion Board's lanes,

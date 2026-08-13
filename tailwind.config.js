@@ -59,7 +59,16 @@ export default {
         // `both` so the staggered tiles hold their pre-animation state during
         // their delay instead of flashing in at full opacity first.
         "kpi-rise": "kpiRise 0.65s cubic-bezier(0.16, 1, 0.3, 1) both",
-        "gradient-flow": "gradientFlow 4s linear infinite",
+        // 18s, not 4s. This is a permanent, always-on line sitting directly
+        // above the table you read — at four seconds the cyan is visibly
+        // travelling and pulls the eye off the rows. Slow enough that you only
+        // notice it if you look for it is the whole point of a brand edge.
+        //
+        // Seamless by construction: the position travels 0% → 200% against a
+        // 200% background-size, which works out to exactly one tile width, and
+        // the gradient opens and closes on the same cyan so there is no colour
+        // seam at the wrap either.
+        "gradient-flow": "gradientFlow 18s linear infinite",
       },
       fontFamily: {
         sans: [
