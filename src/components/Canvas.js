@@ -249,6 +249,29 @@ const notePageIdFromHash = () => (window.location.hash.match(NOTE_LINK_RE) || []
 const noteLinkFor = (pageId) =>
   `${window.location.origin}${window.location.pathname}#canvas/note-${pageId}`;
 
+// Deep link to one campaign's End of Campaign notes: "#canvas/eoc-<campaignId>".
+//
+// Same second-hash-segment trick as note links above, for the same reason —
+// App.jsx routes on the first segment only, so "canvas" still resolves the page
+// and this survives the app's own hash bookkeeping.
+//
+// Encoded because a campaign id is derived from its title
+// ("wrike-paw-patrol-the-dino-movie"): today that is always url-safe, but the
+// derivation is not ours to guarantee and a stray character would silently
+// truncate the link rather than fail loudly.
+const EOC_LINK_RE = /^#?canvas\/eoc-(.+)$/;
+const eocCampaignIdFromHash = () => {
+  const raw = (window.location.hash.match(EOC_LINK_RE) || [])[1];
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+};
+const eocLinkFor = (campaignId) =>
+  `${window.location.origin}${window.location.pathname}#canvas/eoc-${encodeURIComponent(campaignId)}`;
+
 // The debrief format the studio runs to. The prompt is the placeholder, so the
 // question is in front of you while you answer it and disappears once you do —
 // rather than being a heading everyone has to remember to type, which is what
@@ -291,7 +314,7 @@ const hasNoteContent = (row) =>
 // onOpenCampaign fires when a campaign is picked, so the page can fold the
 // Notes Canvas browser above out of the way — writing a wrap-up shouldn't mean
 // scrolling past the whole notes tree to reach it.
-function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign }) {
+function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign, covers, focusCampaign }) {
   const [search, setSearch] = useState("");
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
   const [notes, setNotes] = useState([]);          // every author's note on this campaign
@@ -359,20 +382,43 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign }) {
     // wrap-up notes, so the extra payload is small.
     const { data } = await supabase
       .from("campaign_eoc_notes")
-      .select("campaign_id, updated_at, positives, negatives, improvements")
+      .select("campaign_id, author_id, updated_at, positives, negatives, improvements")
       .eq("department", department);
     if (!data) return;
-    const latest = {};
+    // { campaignId: { at, authors: [id] } } — the freshest write-up on the
+    // campaign, plus who has contributed one, so the list can show at a glance
+    // whether a campaign is waiting on you rather than only that somebody
+    // touched it.
+    const meta = {};
     for (const r of data) {
       if (!hasNoteContent(r)) continue;
-      if (!latest[r.campaign_id] || new Date(r.updated_at) > new Date(latest[r.campaign_id])) {
-        latest[r.campaign_id] = r.updated_at;
-      }
+      const entry = (meta[r.campaign_id] ||= { at: null, authors: [] });
+      if (!entry.at || new Date(r.updated_at) > new Date(entry.at)) entry.at = r.updated_at;
+      if (r.author_id && !entry.authors.includes(r.author_id)) entry.authors.push(r.author_id);
     }
-    setNoteMeta(latest);
+    setNoteMeta(meta);
   }, [department]);
 
   useEffect(() => { refreshNoteMeta(); }, [refreshNoteMeta]);
+
+  // Arriving on a shared link. Waits for `campaigns` to load and checks the id
+  // is real — a link to a campaign this department can't see would otherwise
+  // select an id that matches nothing and leave the panel stuck on "Loading".
+  //
+  // APPLIED ONCE PER LINK, tracked by a ref. `campaigns` is refetched in the
+  // background and gets a new identity each time, so without this the effect
+  // would re-run and drag the selection back to the linked campaign every time
+  // the list refreshed — you'd click another film and be bounced back.
+  const appliedFocusRef = useRef(null);
+  useEffect(() => {
+    if (!focusCampaign?.id || !campaigns.length) return;
+    const token = `${focusCampaign.id}#${focusCampaign.n}`;
+    if (appliedFocusRef.current === token) return;
+    if (!campaigns.some((c) => c.id === focusCampaign.id)) return;
+    appliedFocusRef.current = token;
+    setSelectedCampaignId(focusCampaign.id);
+    onOpenCampaign?.();
+  }, [focusCampaign, campaigns, onOpenCampaign]);
 
   useEffect(() => {
     if (!selectedCampaignId) { setNotes([]); setMyContent(EOC_EMPTY_NOTE); setLoaded(false); setSaveState("idle"); setLastSavedAt(null); return; }
@@ -441,7 +487,7 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign }) {
     return campaigns
       .filter((c) => !q || c.title.toLowerCase().includes(q))
       .sort((a, b) => {
-        const aAt = noteMeta[a.id], bAt = noteMeta[b.id];
+        const aAt = noteMeta[a.id]?.at, bAt = noteMeta[b.id]?.at;
         if (aAt && bAt) return new Date(bAt) - new Date(aAt);
         if (aAt) return -1;
         if (bAt) return 1;
@@ -524,18 +570,36 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign }) {
   );
 
   const [copied, setCopied] = useState("");
+  const flagCopied = useCallback((what) => {
+    setCopied(what);
+    setTimeout(() => setCopied(""), 2000);
+  }, []);
+
   const copyExport = useCallback(
     async (mode) => {
       try {
         await navigator.clipboard.writeText(buildExport(mode));
-        setCopied(mode);
-        setTimeout(() => setCopied(""), 2000);
+        flagCopied(mode);
       } catch (err) {
         reportError(err, { scope: "eoc-export-copy" });
       }
     },
-    [buildExport]
+    [buildExport, flagCopied]
   );
+
+  // Share the campaign itself, so "add your notes" comes with somewhere to go.
+  // Falls back to a prompt: clipboard access needs a secure context and a user
+  // gesture, and a silent failure here looks like the button does nothing.
+  const copyCampaignLink = useCallback(async () => {
+    if (!selectedCampaignId) return;
+    const url = eocLinkFor(selectedCampaignId);
+    try {
+      await navigator.clipboard.writeText(url);
+      flagCopied("link");
+    } catch {
+      window.prompt("Copy this link:", url);
+    }
+  }, [selectedCampaignId, flagCopied]);
 
   return (
     <section className="mt-10">
@@ -581,29 +645,76 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign }) {
                 <p className="p-4 text-xs font-bold text-[#768994]">No campaigns match.</p>
               )}
               {sortedFilteredCampaigns.map((c) => {
-                const at = noteMeta[c.id];
+                const meta = noteMeta[c.id];
+                const at = meta?.at;
+                const authors = meta?.authors || [];
                 const isActive = c.id === selectedCampaignId;
+                const cover = covers?.[c.id];
+                const mineIn = myId && authors.includes(myId);
                 return (
                   <button
                     key={c.id}
                     onClick={() => { setSelectedCampaignId(c.id); onOpenCampaign?.(); }}
-                    className={`group w-full text-left px-3.5 py-3 flex items-center gap-3 transition-colors ${
-                      isActive ? "bg-[#c2410d]/10" : "hover:bg-[#f2f6f9]"
+                    className={`group relative w-full text-left pl-4 pr-3 py-2.5 flex items-center gap-3 transition-colors ${
+                      isActive ? "bg-[#c2410d]/[0.07]" : "hover:bg-[#f2f6f9]"
                     }`}
                   >
-                    {/* Filled = written up, hollow = still blank. */}
+                    {/* A bar rather than a tinted row alone: with poster art in
+                        every row a background wash is easy to miss, an edge
+                        against the list border is not. */}
                     <span
-                      className={`shrink-0 w-2 h-2 rounded-full border-2 ${
-                        at ? "bg-[#c2410d] border-[#c2410d]" : "border-[#c2d0da]"
+                      className={`absolute left-0 top-0 bottom-0 w-[3px] transition-colors ${
+                        isActive ? "bg-[#c2410d]" : "bg-transparent"
                       }`}
                     />
+
+                    {/* The campaign's own poster, the same art the gallery
+                        uses. A list of thirty films is far quicker to scan by
+                        artwork than by reading every title. */}
+                    <span className="shrink-0 w-9 h-12 rounded-lg overflow-hidden bg-slate-100 border border-[#dce4ec] flex items-center justify-center">
+                      {cover ? (
+                        <img src={cover} alt="" loading="lazy" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-[13px] font-black text-[#c2d0da]">
+                          {(c.title || "?").charAt(0).toUpperCase()}
+                        </span>
+                      )}
+                    </span>
+
                     <span className="min-w-0 flex-1">
-                      <span className={`block text-[13px] font-bold truncate ${isActive ? "text-[#c2410d]" : "text-[#122027]"}`}>
+                      <span className={`block text-[13px] font-bold leading-tight truncate ${isActive ? "text-[#c2410d]" : "text-[#122027]"}`}>
                         {c.title}
                       </span>
-                      <span className="block text-[10px] font-semibold text-[#94a3b8] mt-0.5">
+                      <span className="block text-[10px] font-semibold text-[#94a3b8] mt-1">
                         {at ? relativeTime(at) : "No notes yet"}
                       </span>
+                      {/* Who has written, not just that someone has. The thing
+                          you actually want off this list is "have I done this
+                          one" — so your own dot is ringed. */}
+                      {authors.length > 0 && (
+                        <span className="flex items-center gap-1 mt-1.5">
+                          {authors.slice(0, 5).map((id) => (
+                            <span
+                              key={id}
+                              title={nameFor(id)}
+                              className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-black text-white ${
+                                id === myId ? "ring-2 ring-offset-1 ring-[#c2410d]/50" : ""
+                              }`}
+                              style={{ background: colorFor(id) }}
+                            >
+                              {(nameFor(id) || "?").charAt(0).toUpperCase()}
+                            </span>
+                          ))}
+                          {authors.length > 5 && (
+                            <span className="text-[9px] font-black text-[#94a3b8]">+{authors.length - 5}</span>
+                          )}
+                          {!mineIn && myId && (
+                            <span className="ml-0.5 text-[9px] font-black uppercase tracking-wider text-[#c2410d]/70">
+                              not you yet
+                            </span>
+                          )}
+                        </span>
+                      )}
                     </span>
                   </button>
                 );
@@ -617,6 +728,15 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign }) {
                 <div className="flex items-center justify-between gap-3 mb-3 px-0.5 flex-wrap">
                   <p className="text-[13px] font-black text-[#122027] truncate">{selected?.title}</p>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={copyCampaignLink}
+                      title="Copy a link that opens this campaign's notes"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border border-[#c2410d]/30 bg-[#c2410d]/5 text-[#c2410d] hover:bg-[#c2410d]/10 transition-colors"
+                    >
+                      {copied === "link" ? <Check className="w-3 h-3" /> : <Link2 className="w-3 h-3" />}
+                      {copied === "link" ? "Copied" : "Share"}
+                    </button>
+                    <span className="w-px h-4 bg-[#dce4ec]" />
                     {/* Two buttons rather than a mode switch plus a copy: the
                         choice IS the action, and a switch you have to set
                         before copying is a step that only exists to be
@@ -2675,12 +2795,30 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   // page that failed to load, and the art-wall is what this page is for.
   // ...unless a shared note link brought us here, in which case opening on
   // Campaigns would hide the very page the link was for.
-  const [canvasView, setCanvasView] = useState(() => (notePageIdFromHash() ? "notes" : "campaigns"));
+  const [canvasView, setCanvasView] = useState(() =>
+    notePageIdFromHash() || eocCampaignIdFromHash() ? "notes" : "campaigns"
+  );
+
+  // An End of Campaign link, as { id, n }. The counter is what makes following
+  // the SAME link twice work: the effect downstream keys on this object, and a
+  // bare id would be unchanged the second time and do nothing — the same
+  // reason focusFolder carries one.
+  const [focusCampaign, setFocusCampaign] = useState(() => {
+    const id = eocCampaignIdFromHash();
+    return id ? { id, n: 0 } : null;
+  });
 
   // Following a second link while already on this page changes only the hash,
   // so nothing would remount — switch to Notes on the hash change itself.
   useEffect(() => {
-    const onHash = () => { if (notePageIdFromHash()) setCanvasView("notes"); };
+    const onHash = () => {
+      if (notePageIdFromHash()) setCanvasView("notes");
+      const eocId = eocCampaignIdFromHash();
+      if (eocId) {
+        setCanvasView("notes");
+        setFocusCampaign((prev) => ({ id: eocId, n: (prev?.n || 0) + 1 }));
+      }
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -2692,6 +2830,9 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
   // Campaign Notes, the same collapsed-card idiom Management's AdminHub uses.
   // Its header row stays, so one click brings it back.
   const [notesBrowserOpen, setNotesBrowserOpen] = useState(true);
+  // Stable identity: the card's link-following effect lists this in its deps,
+  // and an inline arrow would give it a new one every render.
+  const openCampaignNotes = useCallback(() => setNotesBrowserOpen(false), []);
 
   // --- SIDE PANEL STATE ---
   const [showFoldersPanel, setShowFoldersPanel] = useState(false);
@@ -4759,7 +4900,9 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
                 <EndOfCampaignNotesCard
                   campaigns={campaigns}
                   department={department}
-                  onOpenCampaign={() => setNotesBrowserOpen(false)}
+                  covers={covers}
+                  focusCampaign={focusCampaign}
+                  onOpenCampaign={openCampaignNotes}
                 />
               )}
               </div>
