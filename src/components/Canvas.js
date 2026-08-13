@@ -17,6 +17,7 @@ import { boardLabelFor } from "../lib/departments";
 import { PAGE_GRADIENTS } from "../lib/pageGradients";
 import { reportError } from "../lib/monitoring";
 import { FILM_MAPPINGS } from "../constants.js";
+import { docToPlainText, docHasText } from "../utils/tiptapText";
 import {
   Layout,
   Sparkles,
@@ -248,15 +249,53 @@ const notePageIdFromHash = () => (window.location.hash.match(NOTE_LINK_RE) || []
 const noteLinkFor = (pageId) =>
   `${window.location.origin}${window.location.pathname}#canvas/note-${pageId}`;
 
-const hasNoteContent = (raw) =>
-  !!raw && (raw.includes('"text"') || raw.includes('"image"') || raw.includes('"video"'));
+// The debrief format the studio runs to. The prompt is the placeholder, so the
+// question is in front of you while you answer it and disappears once you do —
+// rather than being a heading everyone has to remember to type, which is what
+// made the old free page impossible to pull apart afterwards.
+//
+// The keys are the column names in campaign_eoc_notes; see
+// migrations/20260813120000_eoc_notes_three_sections.sql.
+const EOC_SECTIONS = [
+  {
+    key: "positives",
+    label: "Positives",
+    prompt: "What worked well? Any specific shout outs?",
+  },
+  {
+    key: "negatives",
+    label: "Negatives & Solutions",
+    prompt: "What didn't work well? What solution do you propose?",
+  },
+  {
+    key: "improvements",
+    label: "Additional Improvements",
+    prompt: "Do you have additional solutions or improvements to highlight?",
+  },
+];
+
+const EOC_EMPTY_NOTE = { positives: "", negatives: "", improvements: "" };
+
+// Whether a row holds a write-up at all — any one of the three sections having
+// real text in it.
+//
+// docHasText, not a substring test on the raw JSON. TipTap serialises two blank
+// paragraphs as 68 characters of non-empty JSON, and merely opening a campaign
+// was enough to save one — so the old `!!raw && raw.includes('"text"')` counted
+// blanks as write-ups. Parsing and looking for actual text cannot be fooled
+// that way, and it is the same check the export uses to decide whether to print
+// a section, so the badge and the agenda always agree.
+const hasNoteContent = (row) =>
+  EOC_SECTIONS.some((s) => docHasText(row?.[s.key]));
 
 function EndOfCampaignNotesCard({ campaigns, department }) {
   const [search, setSearch] = useState("");
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
   const [notes, setNotes] = useState([]);          // every author's note on this campaign
   const [profiles, setProfiles] = useState([]);
-  const [myContent, setMyContent] = useState("");
+  // { positives, negatives, improvements } — each a JSON-stringified TipTap
+  // document, or "" for a section not written in.
+  const [myContent, setMyContent] = useState(EOC_EMPTY_NOTE);
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("idle");
   const [lastSavedAt, setLastSavedAt] = useState(null);
@@ -317,12 +356,12 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
     // wrap-up notes, so the extra payload is small.
     const { data } = await supabase
       .from("campaign_eoc_notes")
-      .select("campaign_id, updated_at, content")
+      .select("campaign_id, updated_at, positives, negatives, improvements")
       .eq("department", department);
     if (!data) return;
     const latest = {};
     for (const r of data) {
-      if (!hasNoteContent(r.content)) continue;
+      if (!hasNoteContent(r)) continue;
       if (!latest[r.campaign_id] || new Date(r.updated_at) > new Date(latest[r.campaign_id])) {
         latest[r.campaign_id] = r.updated_at;
       }
@@ -333,21 +372,25 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
   useEffect(() => { refreshNoteMeta(); }, [refreshNoteMeta]);
 
   useEffect(() => {
-    if (!selectedCampaignId) { setNotes([]); setMyContent(""); setLoaded(false); setSaveState("idle"); setLastSavedAt(null); return; }
+    if (!selectedCampaignId) { setNotes([]); setMyContent(EOC_EMPTY_NOTE); setLoaded(false); setSaveState("idle"); setLastSavedAt(null); return; }
     setLoaded(false);
     (async () => {
       const { data } = await supabase
         .from("campaign_eoc_notes")
-        .select("author_id, content, updated_at")
+        .select("author_id, updated_at, positives, negatives, improvements")
         .eq("campaign_id", selectedCampaignId)
         .eq("department", department);
       const rows = data || [];
       setNotes(rows);
       const mine = rows.find((r) => r.author_id === myId);
-      // The editor is remounted per campaign (keyed below), so the first
-      // change it reports is the load itself, not the author typing.
+      // The editors are remounted per campaign (keyed below), so the first
+      // change they report is the load itself, not the author typing.
       skipNextSaveRef.current = true;
-      setMyContent(mine?.content || "");
+      setMyContent({
+        positives: mine?.positives || "",
+        negatives: mine?.negatives || "",
+        improvements: mine?.improvements || "",
+      });
       setLastSavedAt(mine?.updated_at || null);
       setLoaded(true);
     })();
@@ -363,7 +406,9 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
           campaign_id: selectedCampaignId,
           department,
           author_id: myId,
-          content: myContent,
+          positives: myContent.positives,
+          negatives: myContent.negatives,
+          improvements: myContent.improvements,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "campaign_id,department,author_id" }
@@ -413,10 +458,81 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
   // campaign has one, then everyone else's, then yours. Yours is last so it
   // sits closest to where you stopped reading, and widest because it's the one
   // you type into.
-  const teamNote = notes.find((n) => n.author_id === "" && hasNoteContent(n.content));
+  // The legacy shared note (author_id === "") and the old free-form `content`
+  // column are no longer rendered anywhere — a write-up is the three sections
+  // now. Both are still in the database, untouched, so nothing anyone wrote is
+  // lost; see the migration for why they were not auto-filed into a section.
   const otherNotes = notes
-    .filter((n) => n.author_id && n.author_id !== myId && hasNoteContent(n.content))
+    .filter((n) => n.author_id && n.author_id !== myId && hasNoteContent(n))
     .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+  // What the export reads. `notes` is only refreshed on load, so my own row in
+  // it is stale the moment I type — the live editor state has to win, or you
+  // copy an agenda missing the sentence you just wrote.
+  const exportRows = useMemo(() => {
+    const others = notes.filter((n) => n.author_id && n.author_id !== myId);
+    const mineLive = myId ? [{ author_id: myId, ...myContent }] : [];
+    return [...mineLive, ...others].filter(hasNoteContent);
+  }, [notes, myId, myContent]);
+
+  // Two shapes, because the two readings are genuinely different jobs. By
+  // section is the debrief agenda — every Positive together, so one topic is
+  // discussed at a time. By person is the record of who said what.
+  const buildExport = useCallback(
+    (mode) => {
+      const title = selected?.title || "Campaign";
+      const head = `END OF CAMPAIGN — ${title.toUpperCase()} (${department})`;
+      const out = [head, "=".repeat(head.length), ""];
+
+      if (!exportRows.length) {
+        out.push("No notes written up yet.");
+        return out.join("\n");
+      }
+
+      if (mode === "section") {
+        for (const section of EOC_SECTIONS) {
+          const written = exportRows
+            .map((r) => ({ name: nameFor(r.author_id), text: docToPlainText(r[section.key]) }))
+            .filter((r) => r.text);
+          if (!written.length) continue;
+          out.push(section.label.toUpperCase(), "");
+          for (const { name, text } of written) {
+            out.push(`  ${name}`);
+            out.push(...text.split("\n").map((l) => (l ? `    ${l}` : "")));
+            out.push("");
+          }
+        }
+      } else {
+        for (const row of exportRows) {
+          out.push(nameFor(row.author_id).toUpperCase(), "");
+          for (const section of EOC_SECTIONS) {
+            const text = docToPlainText(row[section.key]);
+            if (!text) continue;
+            out.push(`  ${section.label}`);
+            out.push(...text.split("\n").map((l) => (l ? `    ${l}` : "")));
+            out.push("");
+          }
+        }
+      }
+
+      return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    },
+    [exportRows, selected, department, nameFor]
+  );
+
+  const [copied, setCopied] = useState("");
+  const copyExport = useCallback(
+    async (mode) => {
+      try {
+        await navigator.clipboard.writeText(buildExport(mode));
+        setCopied(mode);
+        setTimeout(() => setCopied(""), 2000);
+      } catch (err) {
+        reportError(err, { scope: "eoc-export-copy" });
+      }
+    },
+    [buildExport]
+  );
 
   return (
     <section className="mt-10">
@@ -496,45 +612,68 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
           <div className="flex-1 min-w-0">
             {selectedCampaignId && loaded ? (
               <>
-                <div className="flex items-center justify-between gap-3 mb-3 px-0.5">
+                <div className="flex items-center justify-between gap-3 mb-3 px-0.5 flex-wrap">
                   <p className="text-[13px] font-black text-[#122027] truncate">{selected?.title}</p>
-                  <SaveStatus state={saveState} lastSavedAt={lastSavedAt} />
+                  <div className="flex items-center gap-2">
+                    {/* Two buttons rather than a mode switch plus a copy: the
+                        choice IS the action, and a switch you have to set
+                        before copying is a step that only exists to be
+                        forgotten. */}
+                    <button
+                      onClick={() => copyExport("section")}
+                      disabled={!exportRows.length}
+                      title="Copy everyone's notes grouped by section — the debrief agenda"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border border-[#dce4ec] bg-white text-[#768994] hover:text-[#122027] hover:border-[#c2d0da] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {copied === "section" ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                      {copied === "section" ? "Copied" : "By section"}
+                    </button>
+                    <button
+                      onClick={() => copyExport("person")}
+                      disabled={!exportRows.length}
+                      title="Copy everyone's notes grouped by person"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border border-[#dce4ec] bg-white text-[#768994] hover:text-[#122027] hover:border-[#c2d0da] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {copied === "person" ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                      {copied === "person" ? "Copied" : "By person"}
+                    </button>
+                    <SaveStatus state={saveState} lastSavedAt={lastSavedAt} />
+                  </div>
                 </div>
 
                 {/* The bento. A box each, so adding your take never means
                     editing over someone else's — the single shared note was a
                     blank page with everyone's name on it, which is nobody's. */}
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-min">
-                  {teamNote && (
-                    <EocNoteBox
-                      className="xl:col-span-2"
-                      label="Team note"
-                      sublabel={`Written before individual notes · ${relativeTime(teamNote.updated_at)}`}
-                      accent="#768994"
-                      content={parseDoc(teamNote.content)}
-                    />
-                  )}
-
                   {otherNotes.map((n) => (
                     <EocNoteBox
                       key={n.author_id}
                       label={nameFor(n.author_id)}
                       sublabel={relativeTime(n.updated_at)}
                       accent={colorFor(n.author_id)}
-                      content={parseDoc(n.content)}
+                      note={n}
+                      parseDoc={parseDoc}
                     />
                   ))}
 
                   <EocNoteBox
                     className={writing ? "xl:col-span-2" : ""}
                     label={myId ? "Your note" : "Notes"}
-                    sublabel={myId ? "Add your end of campaign notes here" : "Connect Wrike in your Profile to write"}
+                    sublabel={myId ? "Answer the three below" : "Connect Wrike in your Profile to write"}
                     accent={myId ? colorFor(myId) : "#c2410d"}
                     mine
                     expanded={writing}
                     onActivity={noteActivity}
-                    content={parseDoc(myContent)}
-                    onChange={myId ? (json) => { noteActivity(); setMyContent(JSON.stringify(json)); } : undefined}
+                    note={myContent}
+                    parseDoc={parseDoc}
+                    onChangeSection={
+                      myId
+                        ? (key, json) => {
+                            noteActivity();
+                            setMyContent((prev) => ({ ...prev, [key]: JSON.stringify(json) }));
+                          }
+                        : undefined
+                    }
                   />
                 </div>
               </>
@@ -559,7 +698,7 @@ function EndOfCampaignNotesCard({ campaigns, department }) {
 // One box in the End of Campaign bento. `mine` is the only editable one: every
 // other box is somebody else's note, shown in full but read-only, so the grid
 // reads as a wall of takes rather than a document several people fight over.
-function EocNoteBox({ label, sublabel, accent, content, onChange, mine = false, expanded = false, onActivity, className = "" }) {
+function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, mine = false, expanded = false, onActivity, className = "" }) {
   // Your box is only the big one while you're actually in it. Once you stop,
   // it settles back to the size of everyone else's, so the grid reads as a
   // wall of equal takes rather than yours permanently dominating it.
@@ -591,27 +730,55 @@ function EocNoteBox({ label, sublabel, accent, content, onChange, mine = false, 
           <span className="block text-[12px] font-black text-[#122027] truncate">{label}</span>
           {sublabel && <span className="block text-[10px] font-semibold text-[#94a3b8] truncate">{sublabel}</span>}
         </span>
-        {mine && onChange && (
+        {mine && onChangeSection && (
           <span className={`shrink-0 text-[9px] font-black uppercase tracking-widest transition-colors duration-300 ${roomy ? "text-[#c2410d]" : "text-[#c2d0da]"}`}>
             {roomy ? "Editing" : "Your note"}
           </span>
         )}
       </div>
       {/* Height is what animates — the column span it sits in can't tween, so
-          the transition carries the change and the reflow lands under it. */}
+          the transition carries the change and the reflow lands under it.
+          Three sections now, so the box is taller than the single page was and
+          scrolls internally rather than making the bento unreadable. */}
       <div
-        className={`transition-[max-height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-hidden ${
-          roomy ? "max-h-[460px]" : mine ? "max-h-[320px]" : "max-h-[320px]"
+        className={`transition-[max-height] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] overflow-y-auto custom-scrollbar ${
+          roomy ? "max-h-[620px]" : "max-h-[420px]"
         }`}
       >
-        <RichNoteEditor
-          content={content}
-          onChange={onChange}
-          editable={!!mine && !!onChange}
-          accent={accent}
-          placeholder={mine ? "What would you do differently next time?" : ""}
-          className={`px-1 pt-2 overflow-y-auto ${roomy ? "min-h-[220px] max-h-[460px]" : "min-h-[140px] max-h-[320px]"}`}
-        />
+        {EOC_SECTIONS.map((section, i) => {
+          const raw = note?.[section.key] || "";
+          const filled = docHasText(raw);
+          // Somebody else's empty section is dropped rather than shown as a
+          // blank editor — three empty boxes under a name says nothing and
+          // makes the grid twice as long to read. Your own always render, or
+          // there would be nowhere to answer the question.
+          if (!mine && !filled) return null;
+          return (
+            <div key={section.key} className={i > 0 ? "border-t border-slate-100" : ""}>
+              <div className="flex items-center gap-2 px-4 pt-3 pb-1">
+                <span
+                  className="shrink-0 w-1 h-3 rounded-full"
+                  style={{ background: filled ? accent : "#dce4ec" }}
+                />
+                <span className="text-[10px] font-black uppercase tracking-widest text-[#768994]">
+                  {section.label}
+                </span>
+              </div>
+              <RichNoteEditor
+                content={parseDoc(raw)}
+                onChange={
+                  mine && onChangeSection ? (json) => onChangeSection(section.key, json) : undefined
+                }
+                editable={!!mine && !!onChangeSection}
+                accent={accent}
+                // The question itself, so it is in front of you while you
+                // answer and gone once you have.
+                placeholder={mine ? section.prompt : ""}
+                className="px-1 pb-1 min-h-[86px]"
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );

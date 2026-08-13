@@ -77,6 +77,9 @@ $function$;
 -- ---------------------------------------------------------------------------
 -- Tables
 -- ---------------------------------------------------------------------------
+-- A write-up is the three prompted sections below; `content` is the legacy
+-- free-form note, kept verbatim but no longer rendered. See
+-- migrations/20260813120000_eoc_notes_three_sections.sql.
 create table public.campaign_eoc_notes (
   campaign_id text not null,
   content text not null default ''::text,
@@ -84,7 +87,11 @@ create table public.campaign_eoc_notes (
   department text not null default 'Motion'::text,
   -- profiles.wrike_user_id of the writer. '' = the shared team note that
   -- predates per-member notes (see 20260804170000).
-  author_id text not null default ''::text
+  author_id text not null default ''::text,
+  -- The write-up proper: TipTap JSON per prompted section.
+  positives text,
+  negatives text,
+  improvements text
 );
 
 create table public.campaign_links (
