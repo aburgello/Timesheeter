@@ -423,6 +423,11 @@ function NoteEditor({
   // written in — a wall of 16px/1.7 body text is right for a page you are
   // composing and far too loose for a grid of short answers you are scanning.
   compact = false,
+  // Block drag/reorder handles in the left gutter. Worth having on a page you
+  // are structuring; pure obstruction in a short field, where there is nothing
+  // to reorder and the gutter the handle sits in is the text's own margin, so
+  // it lands on top of the writing.
+  dragHandles = true,
   // Read-only rendering: the note shows with all its formatting but can't be
   // typed into, and the editing chrome (bubble menu, slash menu, drag handles)
   // never appears. Used where a note belongs to someone else.
@@ -725,6 +730,9 @@ function NoteEditor({
     // drawn on, it paints right over that thin line, making the indicator
     // look like it vanished rather than just being covered.
     if (dragFromRef.current) return;
+    // Nothing to position when handles are off, and this runs on every mouse
+    // move over the editor — so leave before doing any measuring.
+    if (!dragHandles) return;
     if (!editor || slash) { setDragHandle(null); return; }
     const wrap = wrapRef.current;
     const pmDom = editor.view.dom;
@@ -760,7 +768,7 @@ function NoteEditor({
     } catch {
       setDragHandle(null);
     }
-  }, [editor, slash]);
+  }, [editor, slash, dragHandles]);
 
   // Pointer-based block reorder. Native HTML5 drag over a ProseMirror editable
   // is swallowed by PM's own drop handling and never reorders; a manual pointer
@@ -1010,7 +1018,7 @@ function NoteEditor({
         document.body
       )}
 
-      {editable && dragHandle && createPortal(
+      {editable && dragHandles && dragHandle && createPortal(
         // The whole gutter column for this row is the drag target — not just
         // the visible icon — so starting a drag doesn't require pinpointing a
         // 26px square. The icon is centered inside via flex, so it always

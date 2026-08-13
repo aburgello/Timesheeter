@@ -927,6 +927,10 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
                 // Reading size unless you're actually in the box. The editing
                 // state keeps full-size type; everything else is being scanned.
                 compact={!roomy}
+                // Nothing here is ever reordered — three fixed sections of a
+                // few lines each — and the handle's gutter is this editor's
+                // own text margin, so it sat on top of the writing.
+                dragHandles={false}
                 // No placeholder: the question is displayed above, and
                 // repeating it inside the empty editor just says it twice.
                 placeholder=""
