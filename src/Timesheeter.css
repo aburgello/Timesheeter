@@ -275,7 +275,34 @@ html.dark-theme body {
 .dark-theme .border-purple-100,
 .dark-theme .border-purple-200,
 .dark-theme .border-cyan-200,
-.dark-theme .border-yellow-200 { border-color: #3f4a5f !important; }
+.dark-theme .border-yellow-200,
+/* The rest of the pastel set, found by auditing every border-{colour}-{100,
+   200,300} actually used in JSX against this file rather than by spotting them
+   one at a time. Their absence is what made the grouped lists look
+   inconsistent: Item Categories rings its PRINT group in border-orange-200 and
+   its XYi group in border-violet-200, and only the violet had a rule — so one
+   group sat in a bright pastel outline and its neighbours didn't, which reads
+   as a selected row rather than as a missing override. */
+.dark-theme .border-orange-200,
+.dark-theme .border-indigo-200,
+.dark-theme .border-fuchsia-200,
+.dark-theme .border-pink-200,
+.dark-theme .border-rose-300,
+.dark-theme .border-amber-100,
+.dark-theme .border-blue-100 { border-color: #3f4a5f !important; }
+
+/* Neutral borders that were missed: slate-50 is lighter than slate-100 and
+   slate-300 darker, and neither was listed, so a row using either kept a
+   near-white frame while the row above it didn't. */
+.dark-theme .border-slate-50,
+.dark-theme .border-slate-300 { border-color: #334155 !important; }
+
+/* -100 fills, the step up from the -50 tints already covered above. Used for
+   avatar/initial tiles in the same lists. */
+.dark-theme .bg-cyan-100,
+.dark-theme .bg-orange-100,
+.dark-theme .bg-pink-100 { background-color: #1e293b !important; }
+.dark-theme .bg-slate-300 { background-color: #334155 !important; }
 
 /* Side-scoped borders: the bare `border-[#dce4ec]` was covered, these weren't,
    so rows kept a near-white frame on three sides. */
