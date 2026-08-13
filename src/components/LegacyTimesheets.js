@@ -26,6 +26,7 @@ import {
   ChevronDown,
   Tag,
   Search,
+  Check,
   ChevronRight,
   CheckCircle,
   Lock,
@@ -2796,13 +2797,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         widths, so a new column would have to be threaded
                         through every row's cells and every saved width. */}
                     {idx === 0 && rowsAreEditable && selectableIds.length > 0 && (
-                      <input
-                        type="checkbox"
-                        checked={allSelected}
-                        onChange={toggleSelectAll}
+                      <button
+                        onClick={toggleSelectAll}
+                        aria-pressed={allSelected}
+                        aria-label="Select every row on this day"
                         title={allSelected ? "Clear selection" : "Select every row on this day"}
-                        className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 accent-[#12a0e1] cursor-pointer"
-                      />
+                        className="absolute left-0 top-0 bottom-0 w-6 flex items-center justify-center hover:bg-white/10 transition-colors"
+                      >
+                        <span
+                          className={`w-[13px] h-[13px] rounded-[4px] border flex items-center justify-center transition-colors ${
+                            allSelected ? "bg-[#12a0e1] border-[#12a0e1]" : "border-white/40"
+                          }`}
+                        >
+                          {allSelected && <Check className="w-2.5 h-2.5 text-white" strokeWidth={4} />}
+                        </span>
+                      </button>
                     )}
                     {c.label === "Add. Time" ? (
                       <span className="block leading-tight">
@@ -3009,7 +3018,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   key={row.id}
                   className={`timesheet-row transition-colors group relative ${
                     !rowsAreEditable ? "frozen-row" : ""
-                  } ${isSub ? "bg-white" : ""}`}
+                  } ${isSub ? "bg-white" : ""} ${
+                    // The gutter tick is 13px; on a wide table that is not
+                    // enough to tell at a glance which rows a bulk edit is
+                    // about to hit. Tinting the row itself is.
+                    selectedRowIds.has(row.id) ? "!bg-[#12a0e1]/[0.07]" : ""
+                  }`}
                 >
                   <td className={`p-2 border-r border-[#f0f4f8] align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
                     {/* Save confirmation. Absolute against the row (the <tr> is
@@ -3023,21 +3037,39 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     {justSaved?.[row.id] && (
                       <span key={justSaved[row.id]} className="row-saved-flash" aria-hidden="true" />
                     )}
-                    <div className="flex items-start gap-2 pl-1">
-                      {/* Selection tick. Inside the first cell rather than in a
-                          column of its own, so the resizable colgroup is
-                          untouched. Always visible once the day is unlocked —
-                          a hover-only control is a feature nobody discovers. */}
-                      {rowsAreEditable && (
-                        <input
-                          type="checkbox"
-                          checked={selectedRowIds.has(row.id)}
-                          onChange={() => toggleRowSelected(row.id)}
-                          title="Select for batch edit"
-                          aria-label="Select row for batch edit"
-                          className="mt-2 w-3.5 h-3.5 shrink-0 accent-[#12a0e1] cursor-pointer"
-                        />
-                      )}
+                    {/* Selection gutter. Absolutely positioned against the row
+                        (the <tr> is position:relative) so it reads as a strip
+                        down the left edge of the TABLE rather than as a control
+                        sitting inside the Job Number cell. The cell's own
+                        content is inset by the same amount below, so nothing is
+                        covered and the gutter is the only thing living there.
+                        A styled box, not <input type=checkbox> — the native one
+                        renders as OS chrome that ignores the rest of the grid's
+                        design. */}
+                    {rowsAreEditable && (
+                      <button
+                        onClick={() => toggleRowSelected(row.id)}
+                        aria-pressed={selectedRowIds.has(row.id)}
+                        aria-label="Select row for batch edit"
+                        title="Select for batch edit"
+                        className={`absolute left-0 top-0 bottom-0 w-6 flex items-center justify-center transition-colors z-[1] ${
+                          selectedRowIds.has(row.id) ? "bg-[#12a0e1]/10" : "hover:bg-slate-100"
+                        }`}
+                      >
+                        <span
+                          className={`w-[13px] h-[13px] rounded-[4px] border flex items-center justify-center transition-[background-color,border-color,opacity] duration-150 ${
+                            selectedRowIds.has(row.id)
+                              ? "bg-[#12a0e1] border-[#12a0e1]"
+                              : "border-[#c2d0da] bg-white opacity-0 group-hover:opacity-100"
+                          }`}
+                        >
+                          {selectedRowIds.has(row.id) && (
+                            <Check className="w-2.5 h-2.5 text-white" strokeWidth={4} />
+                          )}
+                        </span>
+                      </button>
+                    )}
+                    <div className={`flex items-start gap-2 ${rowsAreEditable ? "pl-6" : "pl-1"}`}>
                       <button
                         onClick={() => handleDeleteRow(row.id)}
                         disabled={!rowsAreEditable}
