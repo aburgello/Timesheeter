@@ -1,6 +1,7 @@
 import { FILM_MAPPINGS, motionTeamShortName, TERRITORIES, REGION_ALIASES, MAGI_MARKET_CODES, COUNTRY_SUFFIX_EXCEPTIONS } from "../constants.js";
 import { countriesFromFolderNames } from "../utils/countryCodes";
 import { countryFieldIds } from "./countryField";
+import { fetchRetrying } from "./fetchPool";
 
 // Resolve a film-code folder/name (e.g. "ZAL", "ody", "DDA") to its full
 // title via FILM_MAPPINGS; returns the title-cased input untouched when no
@@ -500,7 +501,10 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
     for (let i = 0; i < ids.length; i += 50) {
       const chunk = ids.slice(i, i + 50);
       try {
-        const res = await fetch(`/api/wrike/folders/${chunk.join(",")}`);
+        // Retrying: this silently swallows a failed chunk (the catch below),
+        // so a 429 here doesn't error — it just leaves those folders
+        // unhydrated, and the tree comes out quietly incomplete.
+        const res = await fetchRetrying(`/api/wrike/folders/${chunk.join(",")}`);
         if (res.ok) {
           (await res.json()).data?.forEach((f) => {
             folderDictionary[f.id] = f;

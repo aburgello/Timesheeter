@@ -12,12 +12,20 @@
 // is what makes the feature safe to ship without being able to test the live
 // Wrike auth locally: nothing mutates Wrike until a human approves the plan.
 
+import { fetchRetrying } from "./fetchPool";
+
 const WRIKE = "/api/wrike";
 
 // ── Low-level GET helpers ─────────────────────────────────────────────────────
 
+// fetchRetrying, not bare fetch: Wrike's rate limit is per ACCOUNT, so a scan
+// can be refused because of traffic it had nothing to do with — the board
+// loading attachments for a few hundred tasks, say. Treating that 429 as a
+// hard failure aborted the whole scan and reported it as "Scan failed" with a
+// Wrike URL, which reads like the request was malformed rather than merely
+// early. Waiting the limit out costs a second and usually succeeds.
 async function wrikeGet(path) {
-  const res = await fetch(`${WRIKE}${path}`);
+  const res = await fetchRetrying(`${WRIKE}${path}`);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`Wrike GET ${path} failed (${res.status})${body ? `: ${body}` : ""}`);
@@ -33,7 +41,10 @@ async function wrikeGetAll(path) {
   do {
     const sep = path.includes("?") ? "&" : "?";
     const url = token ? `${WRIKE}${path}${sep}nextPageToken=${token}` : `${WRIKE}${path}`;
-    const res = await fetch(url);
+    // Paged reads are the most exposed of all: a scan that has already fetched
+    // nine pages should not throw the lot away because the tenth arrived while
+    // the account was momentarily over budget.
+    const res = await fetchRetrying(url);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`Wrike GET ${path} failed (${res.status})${body ? `: ${body}` : ""}`);

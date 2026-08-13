@@ -18,6 +18,14 @@ import { useBoardNow, ActiveDot } from "./shared/BoardNow";
 import { fullName as cleanFullName } from "../lib/formatName";
 import { useMotionBoardTasks } from "../hooks/useMotionBoardTasks";
 import PageHeader from "./shared/PageHeader";
+import { mapPool, fetchRetrying } from "../lib/fetchPool";
+
+// How many attachment lookups may be in flight at once. Wrike's limit is per
+// account and shared with everything else the app is doing, so this is set for
+// "leaves room for the rest of the app" rather than for the fastest possible
+// board load — the attachments are a progressive enhancement on a board that
+// has already rendered.
+const ATTACHMENT_FETCH_CONCURRENCY = 4;
 import TaskDetailModal, { FilePreviewLightbox } from "./TaskDetailModal";
 
 gsap.registerPlugin(useGSAP);
@@ -529,9 +537,23 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
     }
   }, [storageKey]);
 
-  // Fetch attachments for all tasks currently on the board.
-  // Scoped to assigned tasks (~30) so we can fire one request per task without
-  // worrying about rate limits — no reliance on unreliable hasAttachments field.
+  // Attachments for every task on the board, one request each — Wrike's
+  // hasAttachments field is unreliable, so there is no way to skip the ones
+  // with none.
+  //
+  // THROTTLED AND CACHED, because neither was true and both had to be. This
+  // used to be Promise.all over the whole board on the grounds that it was
+  // "~30 tasks"; a board with a few hundred assigned tasks fires a few hundred
+  // simultaneous requests, Wrike 429s nearly all of them, and since the rate
+  // limit is per ACCOUNT it takes down whatever else is running at the time —
+  // the Job Book's folder scan failing mid-flood was this, not a bug of its
+  // own. mapPool caps what's in flight; fetchRetrying waits out a 429 rather
+  // than treating it as "no attachments".
+  //
+  // The cache matters as much: this effect re-runs on every assignment change,
+  // so dragging one card re-fetched the entire board. A task's attachments are
+  // keyed by id and kept for the life of the page.
+  const attachmentCacheRef = useRef(new Map());
   useEffect(() => {
     if (!localStorage.getItem("wrike_user_id")) return;
 
@@ -545,24 +567,50 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
 
     if (unique.length === 0) { setTaskAttachments({}); return; }
 
+    const cache = attachmentCacheRef.current;
+    const missing = unique.filter((t) => !cache.has(t.id));
+
+    // Everything already known: publish straight from the cache without
+    // touching the network at all.
+    const publish = () => {
+      const map = {};
+      for (const task of unique) {
+        const atts = cache.get(task.id);
+        if (atts && atts.length > 0) map[task.id] = { task, attachments: atts };
+      }
+      setTaskAttachments(map);
+    };
+
+    if (missing.length === 0) { publish(); return; }
+
+    let cancelled = false;
+    const controller = new AbortController();
     setAttachmentsLoading(true);
-    Promise.all(
-      unique.map(boardTask => {
-        return fetch(`/api/wrike/tasks/${boardTask.id}/attachments`)
-          .then(r => r.json())
+
+    (async () => {
+      await mapPool(missing, ATTACHMENT_FETCH_CONCURRENCY, async (boardTask) => {
+        try {
+          const res = await fetchRetrying(
+            `/api/wrike/tasks/${boardTask.id}/attachments`,
+            { signal: controller.signal }
+          );
+          if (!res.ok) return;
+          const data = await res.json();
           // Only PDFs matter here (delivery specs) — images/docs/etc. are
           // dropped before they ever reach state or render a thumbnail.
-          .then(data => ({ task: boardTask, attachments: (data.data || []).filter(a => attachmentKind(a) === "pdf") }))
-          .catch(() => ({ task: boardTask, attachments: [] }));
-      })
-    ).then(results => {
-      const map = {};
-      results.forEach(({ task, attachments }) => {
-        if (attachments.length > 0) map[task.id] = { task, attachments };
+          cache.set(boardTask.id, (data.data || []).filter((a) => attachmentKind(a) === "pdf"));
+        } catch {
+          // Left OUT of the cache on failure, deliberately: caching [] here
+          // would turn one rate-limited request into a task that permanently
+          // shows no specs until the page is reloaded.
+        }
       });
-      setTaskAttachments(map);
+      if (cancelled) return;
+      publish();
       setAttachmentsLoading(false);
-    });
+    })();
+
+    return () => { cancelled = true; controller.abort(); };
   }, [assignments]);
 
   // Debounced save whenever board state changes
