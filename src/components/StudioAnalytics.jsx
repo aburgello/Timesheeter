@@ -24,9 +24,13 @@ const SERIES = {
   violet: "#4a3aa7",
   orange: "#eb6834",
 };
-const INK = "#122027";
-const MUTED = "#768994";
-const GRID = "#eef1f5";
+// Custom properties, not hexes. These are SVG `fill`/`stroke` ATTRIBUTES, which
+// no class-based dark override can reach — so as literals the axis labels
+// stayed near-black in dark mode and vanished into the card. Defined for both
+// themes in Timesheeter.css.
+const INK = "var(--chart-ink)";
+const MUTED = "var(--chart-muted)";
+const GRID = "var(--chart-grid)";
 
 // ── tiny data helpers ────────────────────────────────────────────────────────
 

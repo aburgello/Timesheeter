@@ -14,6 +14,15 @@
   --rne-surface-hover: #f7f3ec;
   --rne-code-bg: #22201c;
   --rne-code-fg: #f2ece2;
+
+  /* Chart ink, for the same reason as the editor palette above: the analytics
+     charts are SVG, and their labels carry a `fill` ATTRIBUTE. No class-based
+     override can reach an attribute, so the axis labels stayed near-black in
+     dark mode and disappeared into the card. A custom property is the one
+     mechanism that reaches them. */
+  --chart-ink: #122027;
+  --chart-muted: #768994;
+  --chart-grid: #eef1f5;
 }
 html.dark-theme {
   --rne-fg: #e2e8f0;
@@ -24,6 +33,12 @@ html.dark-theme {
   --rne-surface-hover: #334155;
   --rne-code-bg: #0f172a;
   --rne-code-fg: #e2e8f0;
+
+  --chart-ink: #e2e8f0;
+  --chart-muted: #94a3b8;
+  /* Gridlines sit just above the card, not the page — bright enough to read a
+     value against, dim enough not to compete with the bars. */
+  --chart-grid: #2a3550;
 }
 
 html.dark-theme,
@@ -198,7 +213,12 @@ html.dark-theme body {
 
 /* Opacity variants of already-covered backgrounds */
 .dark-theme .bg-slate-100\/70  { background-color: #1b2536 !important; }
-.dark-theme .bg-slate-100\/85  { background-color: #1b2536 !important; }
+/* The Management breadcrumb. Matches the PAGE background (#0f172a), not the
+   card surface — in light mode bg-slate-100 is the page colour, so the bar
+   blends into it and reads as chrome. Given the card grey it read as a
+   detached band floating above the page instead. Kept translucent so the
+   backdrop-blur still has something to do as content scrolls under it. */
+.dark-theme .bg-slate-100\/85  { background-color: rgba(15, 23, 42, 0.85) !important; }
 
 /* 4. VARIANT-PREFIXED UTILITIES. Tailwind emits a variant as part of the class
    NAME, so `supports-[backdrop-filter]:bg-slate-100/70` is the selector
@@ -211,7 +231,7 @@ html.dark-theme body {
    Specificity still works out: the variant sits inside an @supports block,
    which does not affect specificity, so `.dark-theme .x` (two classes,
    !important) wins over Tailwind's single class. */
-.dark-theme .supports-\[backdrop-filter\]\:bg-slate-100\/70 { background-color: #1b2536 !important; }
+.dark-theme .supports-\[backdrop-filter\]\:bg-slate-100\/70 { background-color: rgba(15, 23, 42, 0.7) !important; }
 .dark-theme .bg-slate-50\/40   { background-color: #162032 !important; }
 .dark-theme .bg-rose-50\/60    { background-color: #2a1e24 !important; }
 .dark-theme .bg-emerald-50\/50 { background-color: #16302a !important; }
