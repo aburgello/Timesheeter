@@ -109,7 +109,7 @@ function AutoGrowTextarea({ value, ...rest }) {
 // TableSearchableSelect: that component's menu is built for a table cell and
 // anchored to it, and this one has to open UPWARD out of a floating bar sitting
 // at the foot of the table.
-function BatchCategoryPicker({ onPick }) {
+function BatchCategoryPicker({ onPick, pinned = [] }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const wrapRef = useRef(null);
@@ -159,6 +159,26 @@ function BatchCategoryPicker({ onPick }) {
               </div>
             </div>
             <div className="max-h-56 overflow-y-auto overscroll-contain px-2 pb-2">
+              {/* Same shortlist as the row dropdown, and only while unfiltered
+                  — once you are searching, a shortlist above the matches is
+                  just a duplicate of some of them. */}
+              {!search && pinned.length > 0 && (
+                <>
+                  <p className="px-2.5 pt-1 pb-1 text-[9px] font-black uppercase tracking-widest text-[#12a0e1]">
+                    Most used
+                  </p>
+                  {pinned.map((c) => (
+                    <button
+                      key={`pinned-${c}`}
+                      onClick={() => { onPick(c); setOpen(false); }}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold hover:bg-slate-50 transition-colors truncate"
+                    >
+                      {c}
+                    </button>
+                  ))}
+                  <div className="my-1 border-t border-slate-100" />
+                </>
+              )}
               {filtered.map((c) => (
                 <button
                   key={c}
@@ -1923,6 +1943,50 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
   const clearSelection = useCallback(() => setSelectedRowIds(new Set()), []);
 
+  // ── The categories this person actually uses ────────────────────────────
+  // Needs no new column: `tasks` already holds every row they've logged, with
+  // its category, and RLS scopes the read to them — the same trick recentJobs
+  // below uses for job numbers.
+  //
+  // MOST USED, not most recent. People use a handful of categories over and
+  // over, so frequency is the stable signal; a recency list would be dominated
+  // by whatever one-off they happened to log last. Ties go to the more recent,
+  // which is what makes a newly-adopted category climb instead of sitting
+  // behind years of history at the same count.
+  //
+  // Capped at six. The point is to put the obvious answers within reach, not to
+  // rebuild the list — beyond a handful it stops being a shortcut and becomes a
+  // second list to read.
+  const [topCategories, setTopCategories] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      await whenIdentityReady();
+      if (!alive) return;
+      const logged = await selectAll("tasks", "category, created_at", (q) =>
+        q.not("category", "is", null)
+      );
+      if (!alive) return;
+      const stats = new Map();
+      for (const r of logged) {
+        const c = (r.category || "").trim();
+        // "⚠️ Unassigned" is the Tracker's placeholder for "nobody said", not a
+        // category anyone chose, and it would otherwise top the list.
+        if (!c || !CATEGORIES.includes(c)) continue;
+        const s = stats.get(c) || { count: 0, at: "" };
+        s.count += 1;
+        if ((r.created_at || "") > s.at) s.at = r.created_at || "";
+        stats.set(c, s);
+      }
+      const ranked = [...stats.entries()]
+        .sort((a, b) => b[1].count - a[1].count || (a[1].at < b[1].at ? 1 : -1))
+        .slice(0, 6)
+        .map(([c]) => c);
+      setTopCategories(ranked);
+    })();
+    return () => { alive = false; };
+  }, []);
+
   // ── Job-number dropdown options: jobs we've actually logged, most-recent
   // first, then the static catalogue as a fallback. RLS scopes the tasks query
   // to the caller's own rows, so this is genuinely "jobs I've logged". Dates are
@@ -3195,6 +3259,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       }
                       placeholder="Category"
                       isGrouped={true}
+                      pinnedOptions={topCategories}
                       dropdownId={`category-${row.id}`}
                       activeDropdown={activeDropdown}
                       setActiveDropdown={setActiveDropdown}
@@ -3344,7 +3409,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 {selectedCount} selected
               </span>
               <span className="w-px h-4 bg-white/20 shrink-0" />
-              <BatchCategoryPicker onPick={(val) => applyToSelected("category", val)} />
+              <BatchCategoryPicker
+                pinned={topCategories}
+                onPick={(val) => applyToSelected("category", val)}
+              />
               <button
                 onClick={clearSelection}
                 className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold text-white/60 hover:text-white transition-colors"

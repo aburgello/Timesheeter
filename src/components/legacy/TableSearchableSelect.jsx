@@ -22,6 +22,12 @@ export default function TableSearchableSelect({
   isJob = false,
   disabled = false,
   isDarkModal = false,
+  // Options to surface in their own group at the very top — the caller's
+  // "you keep picking these" shortlist. Only shown while the list is
+  // unfiltered: once you are searching you have said what you want, and a
+  // shortlist above the matches is then just a duplicate of some of them.
+  pinnedOptions = [],
+  pinnedLabel = "Most used",
 }) {
   const isOpen = activeDropdown === dropdownId && !disabled;
   const [searchTerm, setSearchTerm] = useState(value || "");
@@ -79,8 +85,20 @@ export default function TableSearchableSelect({
     return opt.toLowerCase().includes(searchTerm.toLowerCase());
   });
 
+  // Unfiltered = the search box still shows the current value (or nothing), so
+  // the user hasn't started narrowing yet. Same test the filter above uses.
+  const isUnfiltered = !searchTerm || searchTerm === value;
+  const pinned = isUnfiltered
+    ? pinnedOptions.filter((o) => options.includes(o))
+    : [];
+
   const groupedOptions = {};
   if (isGrouped) {
+    // The shortlist keeps its members in their real groups as well as at the
+    // top. Removing them would mean someone scrolling to "Print" not finding
+    // "Print - Proofreading" where they expect it, because they happen to use
+    // it often — the shortcut would have moved the thing it is a shortcut to.
+    if (pinned.length) groupedOptions[pinnedLabel] = pinned;
     filteredOptions.forEach((opt) => {
       let group = "Misc / General";
       if (opt.includes(" : ")) group = opt.split(" : ")[0];
@@ -196,6 +214,11 @@ export default function TableSearchableSelect({
             isGrouped ? (
               Object.entries(groupedOptions)
                 .sort(([groupA], [groupB]) => {
+                  // The shortlist outranks even the active group: it is the
+                  // reason the list was opened, and burying it under whichever
+                  // group the current value belongs to defeats it.
+                  if (groupA === pinnedLabel) return -1;
+                  if (groupB === pinnedLabel) return 1;
                   const aIsMatch = value && value.includes(groupA);
                   const bIsMatch = value && value.includes(groupB);
                   if (aIsMatch && !bIsMatch) return -1;
@@ -263,7 +286,13 @@ export default function TableSearchableSelect({
                                 : "truncate"
                             }
                           >
-                            {getDisplayLabel(opt)}
+                            {/* FULL label in the shortlist. Everywhere else the
+                                group heading supplies the prefix, so items are
+                                shown stripped ("Proofreading" under "Print").
+                                The shortlist mixes families, and stripped
+                                labels would show "Proofreading" twice with no
+                                way to tell the Print one from the Digital. */}
+                            {groupName === pinnedLabel ? opt : getDisplayLabel(opt)}
                           </span>
                         </button>
                       ))}
