@@ -415,6 +415,10 @@ function NoteEditor({
   placeholder = "Type “/” for commands, or just start writing…",
   className = "",
   wide = false,
+  // Fill the container instead of holding a centred reading column. For the
+  // editor used as a short field inside a panel (End of Campaign sections),
+  // where the reading measure would centre a little text in a wide box.
+  fill = false,
   // Read-only rendering: the note shows with all its formatting but can't be
   // typed into, and the editing chrome (bubble menu, slash menu, drag handles)
   // never appears. Used where a note belongs to someone else.
@@ -903,8 +907,17 @@ function NoteEditor({
   return (
     <div
       ref={wrapRef}
-      className={`rne-root ${className}`}
-      style={{ "--rne-accent": accent, "--rne-measure": wide ? "62rem" : "46rem", position: "relative" }}
+      className={`rne-root ${fill ? "rne-fill" : ""} ${className}`}
+      style={{
+        "--rne-accent": accent,
+        // `fill` hands the width back to the container. The measure exists for
+        // a full-page note, where a 46rem column is the readable line length —
+        // but the editor is also used as a short field inside a panel, and
+        // there a centred 46rem column inside a wider box just pushes the text
+        // into the middle with nothing beside it.
+        "--rne-measure": fill ? "100%" : wide ? "62rem" : "46rem",
+        position: "relative",
+      }}
       onMouseMove={handleMouseMove}
       onMouseLeave={() => { if (!dragFromRef.current) setDragHandle(null); }}
       onContextMenu={onEditorContextMenu}
@@ -912,6 +925,11 @@ function NoteEditor({
       <style>{`
         .rne-root .ProseMirror { outline: none; font-size: 16px; line-height: 1.7; color: var(--rne-fg); max-width: var(--rne-measure, 46rem); margin-inline: auto; padding: 4px 14px 48px; transition: max-width 0.2s ease; }
         @media (min-width: 640px) { .rne-root .ProseMirror { padding: 4px 22px 48px; } }
+        /* A field, not a page: flush left, and without the 48px of trailing
+           click-target space that a full-page note wants at its foot — in a
+           short field that reads as a gap rather than as room to write. */
+        .rne-root.rne-fill .ProseMirror { margin-inline: 0; padding: 4px 14px 10px; }
+        @media (min-width: 640px) { .rne-root.rne-fill .ProseMirror { padding: 4px 16px 10px; } }
         .rne-root h2 { font-size: 1.55rem; font-weight: 750; letter-spacing: -0.01em; margin: 0 0 10px; }
         .rne-root h3 { font-size: 1.28rem; font-weight: 750; letter-spacing: -0.01em; margin: 18px 0 8px; }
         .rne-root p { margin: 0 0 12px; }

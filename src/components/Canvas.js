@@ -909,6 +909,10 @@ function EocNoteBox({ label, sublabel, accent, note, parseDoc, onChangeSection, 
                 }
                 editable={!!mine && !!onChangeSection}
                 accent={accent}
+                // A field in a panel, not a page: without this the editor holds
+                // a 46rem reading column and centres it, so a short answer
+                // floats in the middle of a box whose labels are flush left.
+                fill
                 // No placeholder: the question is displayed above, and
                 // repeating it inside the empty editor just says it twice.
                 placeholder=""
