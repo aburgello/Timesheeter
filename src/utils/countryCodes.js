@@ -150,6 +150,12 @@ export const resolveCountryCode = (token) => {
  */
 const ALIAS_SOURCES = [REGION_ALIASES, MAGI_MARKET_CODES, COUNTRY_SUFFIX_EXCEPTIONS];
 
+// What the exceptions resolve TO ("_Multiple_", "_Masters_", "OV") rather than
+// the suffixes people write ("MARKETS", "MASTERS", "OV") — these are compared
+// against resolved output. Derived from the map so adding an exception in
+// constants.js needs no edit here.
+const SUFFIX_EXCEPTION_VALUES = new Set(Object.values(COUNTRY_SUFFIX_EXCEPTIONS));
+
 export const builtInAliasesFor = (territory) => {
   const seen = new Set([codeKey(territory)]);
   const out = [];
@@ -214,7 +220,28 @@ export const countriesFromTaskName = (name) => {
     if (!resolved) break;
     found.unshift(resolved);
   }
-  if (found.length) return [...new Set(found)];
+  // A NAMED MARKET BEATS A SUFFIX EXCEPTION IN THE SAME NAME.
+  //
+  // The exceptions (_Multiple_, _Masters_, OV) are read exactly like country
+  // codes, which is what lets "..._Markets" mean something deliberate. But the
+  // walk collects every consecutive token that resolves, so a name carrying
+  // both — "TAD_Masters_Chile", the masters build for the Chile market — came
+  // back as ["_Masters_", "Chile"] and put two chips on one timesheet row, one
+  // of which exports as "OV Suite Build (Masters)". They are mutually
+  // exclusive by definition: an exception means "this row isn't for one
+  // market", so it cannot be true alongside one.
+  //
+  // Where both appear, the market is the more specific statement and the
+  // exception is describing the work. Order doesn't matter — "TAD_Chile_
+  // Masters" is the same task named the other way round, and used to differ
+  // only in which chip came first.
+  //
+  // An exception ALONE is untouched, which is the case it was added for.
+  if (found.length) {
+    const unique = [...new Set(found)];
+    const markets = unique.filter((c) => !SUFFIX_EXCEPTION_VALUES.has(c));
+    return markets.length ? markets : unique;
+  }
 
   return batchPositionCountry(tokens);
 };
