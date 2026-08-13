@@ -1168,8 +1168,10 @@ async function panelLiveSubtasks(env, ids) {
         headers: { Authorization: `Bearer ${row.access_token}` },
       });
       if (!res.ok) {
+        // Returns what it HAS rather than []. Discarding every earlier chunk
+        // because a later one failed turned a partial result into a total one.
         console.warn("[panel/jobs] live subtask fetch failed", res.status);
-        return [];
+        return out;
       }
       const body = await res.json();
       for (const t of body.data || []) {
@@ -1180,7 +1182,7 @@ async function panelLiveSubtasks(env, ids) {
       }
     } catch (err) {
       console.warn("[panel/jobs] live subtask fetch threw", err);
-      return [];
+      return out;
     }
   }
   return out;
@@ -1341,11 +1343,34 @@ async function handlePanelJobs(request, url, env) {
   // Subtask names live in rows that the filters above deliberately exclude (a
   // subtask can be Completed while its parent is Active, and is usually
   // assigned to nobody). Fetch just the ones referenced, by id.
+  // ONLY THE JOBS THAT SURVIVE. This used to walk every row, which on the
+  // CACHED path meant 18 parents and on a LIVE refresh meant 245 -- so a
+  // refresh asked for hundreds of subtask ids to serve six jobs, and any
+  // shortfall in that lookup landed on whichever jobs happened to be late in
+  // the list. Symptom: DINTH DE and FI came back with their names blank on
+  // refresh and correct on a normal load, while a job whose subtasks Wrike
+  // had also returned as top-level rows was unaffected.
+  //
+  // Filtering first makes both paths ask for the same ~20 ids.
+  const panelKeeps = (t) => {
+    if (!t || !t.title) return false;
+    if (!isBoardTask(t, "Today") && !isBoardTask(t, "Tomorrow")) return false;
+    if (isStale(t.dueDate)) return false;
+    if ((t.superTaskIds || []).length > 0) return false;
+    if (wrikeUserId && !(t.responsibleIds || []).includes(wrikeUserId)) return false;
+    const st = t.status || "";
+    if (st && !PANEL_ACTIVE_STATUSES.includes(st)) return false;
+    return true;
+  };
+  const keptRows = (rows || []).filter((row) => panelKeeps(row?.task_data));
+
   const wantedSubIds = [];
-  for (const row of rows || []) {
+  for (const row of keptRows) {
     for (const id of row?.task_data?.subTaskIds || []) wantedSubIds.push(String(id));
   }
   let subRows = [];
+  let subCacheError = null;
+  let subLiveError = null;
   if (wantedSubIds.length) {
     // CACHE FIRST, ALWAYS -- then overlay live rows on top. The previous
     // version treated these as either/or: a live refresh used Wrike's rows and
@@ -1356,7 +1381,15 @@ async function handlePanelJobs(request, url, env) {
     // Additive means the worst case is cached names, never no names.
     const ids = wantedSubIds.slice(0, 400).map((i) => `"${i}"`).join(",");
     const subRes = await sbFetch(env, `/wrike_tasks_cache?select=id,task_data&id=in.(${ids})`);
-    if (subRes.ok) subRows = await subRes.json();
+    if (subRes.ok) {
+      subRows = await subRes.json();
+    } else {
+      // Was a bare `if (ok)` with no else, so a failed lookup was
+      // indistinguishable from a job that genuinely has no subtasks -- the
+      // panel just showed empty names and blamed the feed.
+      subCacheError = `${subRes.status} ${(await subRes.text().catch(() => "")).slice(0, 120)}`;
+      console.error("[panel/jobs] subtask cache query failed:", subCacheError);
+    }
 
     if (liveUsed) {
       // Fresh subtasks for a parent whose children were never cached. Only
@@ -1365,6 +1398,11 @@ async function handlePanelJobs(request, url, env) {
       const live = await panelLiveSubtasks(env, wantedSubIds);
       for (const row of live) {
         if (row && row.task_data && row.task_data.title) subRows.push(row);
+      }
+      // A short result means Wrike gave back fewer subtasks than were asked
+      // for -- worth surfacing rather than leaving as blank names.
+      if (live.length < wantedSubIds.length) {
+        subLiveError = `live returned ${live.length} of ${wantedSubIds.length}`;
       }
     }
   }
@@ -1412,7 +1450,17 @@ async function handlePanelJobs(request, url, env) {
     return json({
       member, wrikeUserId,
       cacheRows: (rows || []).length,
+      wantedSubIds: wantedSubIds.length,
       subRowsFetched: (subRows || []).length,
+      // Split out, because their SUM told us nothing: a healthy total could
+      // hide either source returning nothing at all.
+      subCacheError,
+      subLiveError,
+      keptRows: keptRows.length,
+      subtaskNamesMissing: keptRows.reduce((n, row) => {
+        const t = row?.task_data || {};
+        return n + (t.subTaskIds || []).filter((id) => !byId.get(String(id))?.title).length;
+      }, 0),
       withTitle, hasResponsibleIds: hasResponsible,
       topLevel, assignedToMember: mine, assignedWithDueDate: withDueDate, passingAllFilters: active,
       statusesSeen: seenStatuses,
@@ -1429,29 +1477,12 @@ async function handlePanelJobs(request, url, env) {
   // earlier version of this route reimplemented them and quietly disagreed.
 
   const jobs = [];
-  for (const row of rows || []) {
-    const t = row?.task_data;
-    if (!t || !t.title) continue;
-    // Status, due-date presence and the window, all in one shared predicate.
-    //
-    // BOTH windows, not one. "Today" runs from the EPOCH to end of today, so
-    // it means due-today-or-overdue; "Tomorrow" is a separate, single-day
-    // window rather than a cumulative one. Swapping to "Tomorrow" would have
-    // dropped today's work entirely, so the panel asks for the union: what is
-    // due or late, plus what lands tomorrow. Still the shared predicate --
-    // jobFilter.js is untouched, so the board is unaffected.
-    if (!isBoardTask(t, "Today") && !isBoardTask(t, "Tomorrow")) continue;
-    // Stale = overdue by more than a week. The board hides these by default
-    // (its "hidden" counter in the header), and the panel is meant to be a
-    // SHORT list of what to build, so a job that has been sitting for months
-    // is noise here too. Same isStale() the board uses.
-    if (isStale(t.dueDate)) continue;
-    // Subtasks are tasks too and would otherwise be listed as jobs in their own
-    // right, duplicating what already appears inside their parent.
-    if ((t.superTaskIds || []).length > 0) continue;
-    if (wrikeUserId && !(t.responsibleIds || []).includes(wrikeUserId)) continue;
-    const status = t.customStatusId ? t.status || "" : t.status || "";
-    if (status && !PANEL_ACTIVE_STATUSES.includes(status)) continue;
+  for (const row of keptRows) {
+    // Already filtered by panelKeeps above -- deliberately NOT repeated here.
+    // The subtask lookup and this loop have to agree on which jobs exist, and
+    // two copies of the rules is precisely how they stop agreeing.
+    const t = row.task_data;
+    const status = t.status || "";
 
     jobs.push({
       id: String(row.id),
@@ -1503,7 +1534,7 @@ async function handlePanelJobs(request, url, env) {
   return json(jobs, {
     headers: panelCors({
       "X-Panel-Live": liveUsed ? "1" : "0",
-      "X-Panel-Build": "2026-08-12-subtasks-additive-5",
+      "X-Panel-Build": "2026-08-13-kept-rows-6",
     }),
   });
 }
