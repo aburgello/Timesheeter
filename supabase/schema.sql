@@ -270,7 +270,11 @@ create table public.profiles (
   -- the pull's keyword guess still applies; see
   -- migrations/20260812120000_timesheet_prefs_per_member.sql.
   default_category text,
-  group_multi_country boolean not null default false
+  group_multi_country boolean not null default false,
+  -- Per-member grant, NOT a preference: guarded by the guard_can_debug_pull
+  -- trigger so a member cannot set it on themselves through profiles_write.
+  -- See migrations/20260814100000_profiles_can_debug_pull.sql.
+  can_debug_pull boolean not null default false
 );
 
 create table public.project_descriptions (

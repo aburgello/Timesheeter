@@ -293,6 +293,34 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     d.setDate(d.getDate() - 1);
     return d.toISOString().split("T")[0];
   });
+  // Debug Pull is granted per person on profiles.can_debug_pull, so a second
+  // pair of hands can recover a missed day without also being handed the
+  // Administration modal, the raw Wrike explorer and the Canvas scan — which is
+  // everything else `isAdmin` opens. Read here rather than in App because this
+  // button is the only thing it gates; there is nothing to lift.
+  //
+  // Starts false and can only turn on: a member who does not have it never sees
+  // the control flicker in and out, and the one who does waits a tick for it.
+  const [canDebugPull, setCanDebugPull] = useState(false);
+  useEffect(() => {
+    const uid = localStorage.getItem("wrike_user_id");
+    if (!uid) return;
+    let alive = true;
+    (async () => {
+      await whenIdentityReady();
+      if (!alive) return;
+      const { data } = await supabase
+        .from("profiles")
+        .select("can_debug_pull")
+        .eq("wrike_user_id", uid)
+        .maybeSingle();
+      if (alive && data?.can_debug_pull) setCanDebugPull(true);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const [jsonCopied, setJsonCopied] = useState(false);
 
   const [wrikeFullName, setWrikeFullName] = useState("");
@@ -3489,12 +3517,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               {isPulling ? "Pulling..." : "Pull Wrike Times"}
             </button>
 
-            {isAdmin && (
+            {/* isAdmin stays in the OR so the admin keeps the button without
+                waiting on (or depending on) the profile read landing. */}
+            {(isAdmin || canDebugPull) && (
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setShowDebugPull(!showDebugPull)}
                   disabled={isPulling}
-                  title="Admin: pull timelogs for a specific date"
+                  title="Pull your Wrike timelogs for a specific date"
                   className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold rounded-xl border transition-[background-color,color,border-color,transform] active:scale-95 ${
                     showDebugPull
                       ? "bg-amber-100 text-amber-800 border-amber-300"
