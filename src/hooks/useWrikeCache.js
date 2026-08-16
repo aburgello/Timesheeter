@@ -14,7 +14,7 @@ import {
   parseWrikeData,
   getStudioName,
   getFilmName,
-  buildChildToParent,
+  buildChildToParents,
   buildFilmCodeMappings,
   keepsDescription,
   PRINT_HUB_RE,
@@ -444,7 +444,7 @@ export function useWrikeCache() {
         // tree-climbing if it predates the childIds fix (childIds absent or empty),
         // so we build the reverse parent map and re-fetch whenever it comes out empty.
         let fd = dictRow?.folder_dictionary || {};
-        let c2p = buildChildToParent(fd);
+        let c2p = buildChildToParents(fd);
         if (Object.keys(fd).length < 500 || Object.keys(c2p).length === 0) {
           console.log("[WrikeCache] folder dict sparse or missing childIds — fetching fresh from Wrike");
           const freshFd = {};
@@ -468,7 +468,7 @@ export function useWrikeCache() {
           }
           if (Object.keys(freshFd).length > 100) {
             fd = freshFd;
-            c2p = buildChildToParent(fd);
+            c2p = buildChildToParents(fd);
             console.log(`[WrikeCache] fresh folder dict: ${Object.keys(fd).length} folders`);
             supabase.from("wrike_sync_meta").upsert({ wrike_user_id: SHARED_META_ID, folder_dictionary: fd });
           }
@@ -615,9 +615,20 @@ export function useWrikeCache() {
       // Fetch tasks changed since last sync
       const rawTasks = await fetchWrikeTasks(sinceIso);
 
-      // Hydrate any missing archive folder IDs
+      // Hydrate any missing archive folder IDs. The dictionary is filled in
+      // place; the return value says whether it actually got filled. A rate
+      // limit here leaves branches missing and the climbs below read a partial
+      // tree as if it were whole, so record it on the sync rather than letting
+      // it pass silently — a cache built from an incomplete tree is the thing
+      // you want named when a film later looks wrong.
       if (rawTasks.length > 0) {
-        await hydrateMissingFolders(rawTasks, folderDictionary);
+        const hydration = await hydrateMissingFolders(rawTasks, folderDictionary);
+        if (!hydration.complete) {
+          console.warn(
+            `[WrikeCache] enriching against an incomplete folder tree ` +
+            `(${hydration.unresolved.length} unresolved after ${hydration.rounds} round(s))`
+          );
+        }
       }
 
       // Filter to the motion-team-relevant subset FIRST (filter only uses base
@@ -681,7 +692,7 @@ export function useWrikeCache() {
       }
 
       // Build reverse childToParent map for upward BFS studio detection
-      const childToParent = buildChildToParent(folderDictionary);
+      const childToParent = buildChildToParents(folderDictionary);
 
       // Derive folder-based campaigns from Warner Bros / Sony root folders
       if (needsMetaRefresh) {
@@ -824,7 +835,7 @@ export function useWrikeCache() {
         folderDictionary: meta?.folder_dictionary || {},
         contactDictionary: meta?.contact_dictionary || {},
         statusDictionary: meta?.status_dictionary || {},
-        childToParent: buildChildToParent(meta?.folder_dictionary || {}),
+        childToParent: buildChildToParents(meta?.folder_dictionary || {}),
         filmCodeMappings: meta?.film_code_mappings || {},
       };
       enrichCtxRef.current = ctx;
@@ -934,7 +945,7 @@ export function useWrikeCache() {
 
       // Build reverse childId→parentId map so getFilmName can climb deep hierarchies
       // even when the flat folder list only returned childIds (not parentIds).
-      const childToParent = buildChildToParent(fd);
+      const childToParent = buildChildToParents(fd);
 
       // Fetch all tasks updated in the last 2 years — minimal fields (parentIds only,
       // no descriptions) so the response is fast and lightweight.

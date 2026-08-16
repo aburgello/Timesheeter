@@ -315,11 +315,17 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // order is live-and-placed > placed > live > whatever we got.
   const ancestryOf = (startId, folderTitle) => {
     const chains = [];
+    // Set when a walk stops because it ran out of budget rather than because it
+    // reached a root. The chain pushed in that case is a PARTIAL one, and a
+    // partial chain yields no film, no client and no region — which reads
+    // downstream exactly like a job that genuinely has none. Recording it is
+    // what lets the scan review say "could not establish" instead of "none".
+    let truncated = false;
     const walk = (id, chain, seen) => {
       // Bounded: shared folders can fan out, and this runs per job code across
       // the whole tree. Depth 40 matches the old climb; 24 paths is plenty to
       // find a live one without letting a pathological tree stall the scan.
-      if (chain.length >= 40 || chains.length >= 24) { chains.push(chain); return; }
+      if (chain.length >= 40 || chains.length >= 24) { truncated = true; chains.push(chain); return; }
       const parents = (parentsOf[id] || []).filter((pid) => byId[pid] && !seen.has(pid));
       if (!parents.length) { chains.push(chain); return; }
       for (const pid of parents) {
@@ -342,7 +348,7 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
       .reverse()
       .map((t) => deUnderscore(t))
       .join(" › ");
-    return { ...best, folderPath };
+    return { ...best, folderPath, truncated };
   };
 
   const CODE = /XY\d{5,6}/i;
@@ -399,7 +405,8 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     }
 
     const { f, title, m } = chosen;
-    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived, folderPath } = chosen;
+    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived, folderPath,
+            truncated: ancestryTruncated } = chosen;
     const region = regionOf(studioTitle, studioKw);
     // "Universal Pictures UK" / "Universal Pictures International" — the client
     // the Job Book and the timesheet site both name, rather than every region's
@@ -434,17 +441,32 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     }
 
     out.push({ code, jobNumber, filmTitle, projectDescription, client, archived,
-               region: region ? region.short : null, folderId: f.id, folderPath });
+               region: region ? region.short : null, folderId: f.id, folderPath,
+               ancestryTruncated });
   });
 
   // Pull each job folder's Wrike createdDate (the flat tree endpoint doesn't
   // carry it; the by-id endpoint returns it by default). Batched 100 at a time.
+  // Never let this discard the scan. By the time we get here the whole tree has
+  // been fetched, inverted, walked and ranked — minutes of work and a large
+  // slice of the account's shared rate-limit budget — and wrikeGet throws on any
+  // non-OK response, so one 429 that outlived its retries used to throw all of
+  // it away for a date shown beside the row. createdDate is already optional
+  // downstream (`createdById[o.folderId] || null` below), which is the same call
+  // fetchFolderItemPrice makes for a permissioned price: never block staging a
+  // job on a lookup the job does not depend on.
   const ids = out.map((o) => o.folderId).filter(Boolean);
   const createdById = {};
+  let createdDateBatchesFailed = 0;
   for (let i = 0; i < ids.length; i += 100) {
     const batch = ids.slice(i, i + 100);
-    const rows = await wrikeGet(`/folders/${batch.join(",")}`);
-    rows.forEach((f) => { if (f.createdDate) createdById[f.id] = f.createdDate.slice(0, 10); });
+    try {
+      const rows = await wrikeGet(`/folders/${batch.join(",")}`);
+      rows.forEach((f) => { if (f.createdDate) createdById[f.id] = f.createdDate.slice(0, 10); });
+    } catch (e) {
+      createdDateBatchesFailed++;
+      console.warn(`[wrikeCampaign] createdDate batch failed; those jobs stage without a date`, e);
+    }
   }
   out.forEach((o) => { o.createdDate = createdById[o.folderId] || null; });
 
@@ -455,6 +477,13 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // code no heuristic can settle it — so hand the ambiguity to the caller
   // rather than resolving it out of sight.
   out.contestedCodes = contestedCodes;
+  // Diagnostics the caller can show beside the scan, in the same spirit as
+  // contestedCodes: say what the scan could not establish rather than letting
+  // it read as established. `truncatedCodes` are jobs whose ancestry walk hit
+  // its own bounds, so their film/client/region reflect a partial climb and are
+  // not distinguishable, from the row alone, from a job that genuinely has none.
+  out.truncatedCodes = out.filter((o) => o.ancestryTruncated).map((o) => o.code);
+  out.createdDateBatchesFailed = createdDateBatchesFailed;
   return out;
 }
 

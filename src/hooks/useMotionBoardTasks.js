@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { enrichTasks, buildChildToParent } from "../lib/wrikeEnrich";
+import { enrichTasks, buildChildToParents } from "../lib/wrikeEnrich";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "./useWrikeCache";
 import { motionTeamShortName, normalizeName } from "../constants";
@@ -153,7 +153,7 @@ export function useMotionBoardTasks(externalTeamIds) {
         ]);
         const teamIds = external ? externalTeamIds : resolveTeamIds(contacts);
         const dueDateEnd = endOfNextWorkWeek();
-        const childToParent = buildChildToParent(folderDictionary);
+        const childToParent = buildChildToParents(folderDictionary);
         ctxRef.current = { folderDictionary, contactDictionary, statusDictionary, childToParent, teamIds, dueDateEnd };
 
         const raw = await fetchBoardTasks(teamIds, dueDateEnd);

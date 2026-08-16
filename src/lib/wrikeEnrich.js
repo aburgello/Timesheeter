@@ -85,12 +85,12 @@ export function parseWrikeData(htmlString) {
 // ---------------------------------------------------------------------------
 // Climb the folder tree to find the film name for a task
 // ---------------------------------------------------------------------------
-export function getFilmName(task, folderDictionary, extractedPath = "", extraMappings = {}, childToParent = {}) {
+export function getFilmName(task, folderDictionary, extractedPath = "", extraMappings = {}, childToParents = {}) {
   if (!task.title) return "Unknown Project";
 
   // 1. Tree-climb: find "DIGITAL" or "PRINT" folder, then take its parent as film name.
   // Folders fetched individually (hydration) carry parentIds; the flat /folders list only
-  // returns childIds. When parentIds is absent we fall back to the reverse childToParent map
+  // returns childIds. When parentIds is absent we fall back to the reverse childToParents map
   // built from childIds, so deep hierarchies (task → Job folder → INTL → PRINT → Film) work
   // even when the folder dictionary came from the lightweight flat-list endpoint.
   if (task.parentIds?.length > 0) {
@@ -103,10 +103,11 @@ export function getFilmName(task, folderDictionary, extractedPath = "", extraMap
       const currentFolder = folderDictionary[currentId];
       if (!currentFolder) continue;
 
-      // Prefer stored parentIds; fall back to reverse childToParent map
+      // Prefer stored parentIds; fall back to the reverse map, which now yields
+      // every parent rather than one arbitrary branch.
       const parentIds = currentFolder.parentIds?.length
         ? currentFolder.parentIds
-        : childToParent[currentId] ? [childToParent[currentId]] : [];
+        : orderedParents(currentId, childToParents, folderDictionary);
 
       if (["DIGITAL", "PRINT"].includes(currentFolder.title?.trim().toUpperCase())) {
         for (const pid of parentIds) {
@@ -188,20 +189,65 @@ const STUDIO_KEYWORDS = [
   { studio: "Amazon",     keywords: ["amazon", "mgm"] },
 ];
 
-// Build a childId→parentId reverse map from a folderDictionary that has childIds.
-// Wrike's /v4/folders returns childIds (downward), not parentIds (upward), so we
-// invert the relationship to enable upward tree climbing.
-export function buildChildToParent(folderDictionary) {
+// Build a childId→parentId[] reverse map from a folderDictionary that has
+// childIds. Wrike's /v4/folders returns childIds (downward), not parentIds
+// (upward), so we invert the relationship to enable upward tree climbing.
+//
+// EVERY parent, not one. This used to assign `map[childId] = folder.id`, so the
+// last folder iterated won and a folder shared into several places kept a single
+// arbitrary parent — arbitrary because the iteration order is just the order
+// Wrike's /folders endpoint happened to page the rows in, which it documents no
+// guarantee about. Every climb below then followed that one branch.
+//
+// It was not theoretical. In the Job Book, thirteen rows carrying codes in the
+// XY0249xx–XY0251xx range — the range Hamnet and Anemone occupy — are filed
+// under the film "Old", whose own campaign ran three years earlier. Every one of
+// them has a generic description ("NM Titles", "Packshots FinalWindow"): jobs
+// whose own folder name says nothing about the film, so the climb has to go
+// upward, and upward it went into a neighbouring campaign's branch.
+//
+// scanStudioJobNumbers reached the same conclusion for the scan side and its
+// `parentsOf` has been an array since; this is that fix carried back to the
+// enrich side, which is the one whose output reaches a timesheet.
+export function buildChildToParents(folderDictionary) {
   const map = {};
   for (const folder of Object.values(folderDictionary)) {
     for (const childId of folder.childIds || []) {
-      map[childId] = folder.id;
+      if (!map[childId]) map[childId] = [];
+      if (!map[childId].includes(folder.id)) map[childId].push(folder.id);
     }
   }
   return map;
 }
 
-export function getStudioName(task, folderDictionary, childToParent = {}) {
+// A folder that exists to hold finished work rather than to describe it. Same
+// test the scanner uses (wrikeCampaign.js isArchiveNode) so a branch treated as
+// archived by one is treated as archived by the other.
+const isArchiveTitle = (title) =>
+  /(^|[\s_])_?archive\b/i.test(title || "") || /master.?template/i.test(title || "");
+
+// The parents of one folder, ordered so a climb is deterministic and prefers a
+// live branch over an archived one.
+//
+// Order matters now that there can be more than one. Two folders at the same
+// distance are genuinely ambiguous, and resolving that by object-iteration order
+// would mean the same task could enrich differently on two runs against an
+// unchanged tree. Sorting by id makes the choice stable; putting non-archive
+// branches first makes it the better of the two rather than merely a repeatable
+// one. Both rules are cheap, and neither can turn a correct answer into a wrong
+// one — they only decide between candidates that were already tied.
+function orderedParents(id, childToParents, folderDictionary) {
+  const raw = childToParents[id];
+  const ids = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return ids.slice().sort((a, b) => {
+    const aArch = isArchiveTitle(folderDictionary[a]?.title);
+    const bArch = isArchiveTitle(folderDictionary[b]?.title);
+    if (aArch !== bArch) return aArch ? 1 : -1;
+    return String(a).localeCompare(String(b));
+  });
+}
+
+export function getStudioName(task, folderDictionary, childToParents = {}) {
   if (!task.parentIds?.length || !folderDictionary) return null;
   const queue = [...task.parentIds];
   const visited = new Set(queue);
@@ -214,11 +260,14 @@ export function getStudioName(task, folderDictionary, childToParent = {}) {
         if (keywords.some((k) => lower.includes(k))) return studio;
       }
     }
-    // Climb to parent via reverse childIds map
-    const parentId = childToParent[id];
-    if (parentId && !visited.has(parentId)) {
-      visited.add(parentId);
-      queue.push(parentId);
+    // Climb to EVERY parent via the reverse childIds map. Breadth-first, so the
+    // nearest studio still wins; what changes is that a nearer studio sitting on
+    // a branch this climb used to not know about can now win at all.
+    for (const parentId of orderedParents(id, childToParents, folderDictionary)) {
+      if (!visited.has(parentId)) {
+        visited.add(parentId);
+        queue.push(parentId);
+      }
     }
   }
   return null;
@@ -236,7 +285,7 @@ export function getStudioName(task, folderDictionary, childToParent = {}) {
 // that nobody labelled.
 const FOLDER_COUNTRY_MAX_DEPTH = 4;
 
-export function getFolderCountries(task, folderDictionary, childToParent = {}) {
+export function getFolderCountries(task, folderDictionary, childToParents = {}) {
   if (!task.parentIds?.length || !folderDictionary) return [];
   let level = [...task.parentIds];
   const visited = new Set(level);
@@ -250,10 +299,11 @@ export function getFolderCountries(task, folderDictionary, childToParent = {}) {
 
     const next = [];
     for (const id of level) {
-      const parentId = childToParent[id];
-      if (parentId && !visited.has(parentId)) {
-        visited.add(parentId);
-        next.push(parentId);
+      for (const parentId of orderedParents(id, childToParents, folderDictionary)) {
+        if (!visited.has(parentId)) {
+          visited.add(parentId);
+          next.push(parentId);
+        }
       }
     }
     level = next;
@@ -286,7 +336,7 @@ export function getFolderCountries(task, folderDictionary, childToParent = {}) {
 // belonging to different work.
 const FOLDER_JOB_MAX_DEPTH = 4;
 
-export function jobFolderDescription(task, code, folderDictionary, childToParent = {}) {
+export function jobFolderDescription(task, code, folderDictionary, childToParents = {}) {
   if (!task || !code || !folderDictionary) return "";
   const bare = (String(code).match(/XY\d{5,6}/i) || [])[0];
   if (!bare) return "";
@@ -316,10 +366,11 @@ export function jobFolderDescription(task, code, folderDictionary, childToParent
     }
     const next = [];
     for (const id of level) {
-      const parentId = childToParent[id];
-      if (parentId && !visited.has(parentId)) {
-        visited.add(parentId);
-        next.push(parentId);
+      for (const parentId of orderedParents(id, childToParents, folderDictionary)) {
+        if (!visited.has(parentId)) {
+          visited.add(parentId);
+          next.push(parentId);
+        }
       }
     }
     level = next;
@@ -389,7 +440,7 @@ export function filterToMotionTeam(tasks, folderDictionary, contactDictionary) {
 // ---------------------------------------------------------------------------
 // Enrich raw Wrike tasks with computed fields (film name, paths, status, etc.)
 // ---------------------------------------------------------------------------
-export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statusDictionary, childToParent = {}, extraMappings = {}) {
+export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statusDictionary, childToParents = {}, extraMappings = {}) {
   // Country codes live at the end of a task name, and production writes them
   // on the parent task — the one people record time against — not always on
   // every subtask. Wrike gives us subTaskIds but not superTaskIds, so invert
@@ -447,12 +498,12 @@ export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statu
       ...task,
       customFields,
       parentTaskTitle: parentTitleById[task.id] || "",
-      folderCountries: getFolderCountries(task, folderDictionary, childToParent),
+      folderCountries: getFolderCountries(task, folderDictionary, childToParents),
       extractedPathData: parsed.extractedPathData,
       tableHtml: parsed.tableHtml,
       notesText: parsed.notesText,
-      projectName: getFilmName(task, folderDictionary, parsed.extractedPathData, extraMappings, childToParent),
-      studioName: getStudioName(task, folderDictionary, childToParent),
+      projectName: getFilmName(task, folderDictionary, parsed.extractedPathData, extraMappings, childToParents),
+      studioName: getStudioName(task, folderDictionary, childToParents),
       assignees: (task.responsibleIds || [])
         .map((id) => contactDictionary[id] || "User")
         .join(", "),
@@ -487,11 +538,29 @@ export function buildFilmCodeMappings(enrichedTasks) {
 // ---------------------------------------------------------------------------
 // Fetch missing parent folder IDs from Wrike API (archives, etc.)
 // ---------------------------------------------------------------------------
+// Returns { folderDictionary, complete, unresolved, rounds, exhausted }.
+//
+// The dictionary is still mutated in place, so a caller that only wants the
+// folders can keep ignoring the return value. What is new is that a caller can
+// now ASK whether the tree it is about to climb is whole.
+//
+// It often is not. A chunk that fails is caught, logged and skipped, and the
+// loop gives up after 8 rounds regardless — both are deliberate, because a
+// rate-limited hydration should not take down an enrichment. The cost was that
+// the incompleteness became invisible: every climber reads a half-built tree
+// exactly as it reads a whole one, and returns a confident wrong answer instead
+// of an error. Reporting it does not make the tree any more complete; it makes
+// the difference *knowable*, which is the part that was missing.
 export async function hydrateMissingFolders(tasks, folderDictionary) {
   let missing = new Set();
   tasks.forEach((t) => t.parentIds?.forEach((pid) => {
     if (!folderDictionary[pid]) missing.add(pid);
   }));
+
+  // Ids we asked for and did not get back — a failed chunk, or a chunk that
+  // returned without them. Cleared per id as soon as one does arrive, since a
+  // later round can still resolve what an earlier one missed.
+  const unresolved = new Set();
 
   let loopCount = 0;
   while (missing.size > 0 && loopCount < 8) {
@@ -501,9 +570,6 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
     for (let i = 0; i < ids.length; i += 50) {
       const chunk = ids.slice(i, i + 50);
       try {
-        // Retrying: this silently swallows a failed chunk (the catch below),
-        // so a 429 here doesn't error — it just leaves those folders
-        // unhydrated, and the tree comes out quietly incomplete.
         const res = await fetchRetrying(`/api/wrike/folders/${chunk.join(",")}`);
         if (res.ok) {
           (await res.json()).data?.forEach((f) => {
@@ -516,8 +582,30 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
       } catch (e) {
         console.error("Folder hydration chunk failed", e);
       }
+      // Whatever this chunk asked for and still isn't in the dictionary is
+      // unresolved, whether the request threw, returned non-OK, or simply came
+      // back without it.
+      chunk.forEach((id) => { if (!folderDictionary[id]) unresolved.add(id); });
     }
   }
 
-  return folderDictionary;
+  // Anything still queued when the round cap hit was never even requested.
+  missing.forEach((id) => unresolved.add(id));
+
+  const exhausted = loopCount >= 8 && missing.size > 0;
+  const stats = {
+    folderDictionary,
+    complete: unresolved.size === 0 && !exhausted,
+    unresolved: [...unresolved],
+    rounds: loopCount,
+    exhausted,
+  };
+  if (!stats.complete) {
+    console.warn(
+      `[wrikeEnrich] folder tree incomplete: ${stats.unresolved.length} folder(s) unresolved ` +
+      `after ${loopCount} round(s)${exhausted ? " (round cap reached)" : ""}. ` +
+      `Climbs through the missing branches may resolve to the wrong film/studio/market.`
+    );
+  }
+  return stats;
 }

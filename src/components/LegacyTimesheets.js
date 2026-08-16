@@ -48,7 +48,7 @@ import {
 } from "../constants.js";
 import { resolveJobNumber } from "../utils/wrikeHelpers";
 import { resolveCountries } from "../utils/countryCodes";
-import { getFolderCountries, buildChildToParent, jobFolderDescription } from "../lib/wrikeEnrich";
+import { getFolderCountries, buildChildToParents, jobFolderDescription } from "../lib/wrikeEnrich";
 import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
 import { countryFieldIds, warmCountryFields } from "../lib/countryField";
 import { secondsToHM } from "../utils/timeHelpers";
@@ -600,7 +600,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     if (seed && Object.keys(seed).length) {
       folderTreeRef.current = {
         folderDictionary: seed,
-        childToParent: buildChildToParent(seed),
+        childToParent: buildChildToParents(seed),
       };
       return;
     }
@@ -609,7 +609,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const { folderDictionary } = await fetchFolderDictionary();
       folderTreeRef.current = {
         folderDictionary,
-        childToParent: buildChildToParent(folderDictionary),
+        childToParent: buildChildToParents(folderDictionary),
       };
     } catch {
       /* no dictionary → countries fall back to the task name / custom field */
@@ -1027,7 +1027,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       let folderDictionary = {}, statusDictionary = {}, childToParent = {};
       try {
         ({ folderDictionary, statusDictionary } = await fetchFolderDictionary());
-        childToParent = buildChildToParent(folderDictionary);
+        childToParent = buildChildToParents(folderDictionary);
         // Share it with guessFieldsFromTask rather than let it read the same
         // cached tree a second time.
         ensureFolderTree(folderDictionary);
