@@ -141,3 +141,37 @@ const F = (id, title, childIds = []) => ({ id, title, childIds, scope: "WsFolder
   check("a house job still names itself rather than coming back empty",
     out.find((r) => r.code === "XY024840")?.filmTitle, "Universal House Keeping");
 }
+
+// ── the medium is not a film either ─────────────────────────────────────────
+//
+// Found by measuring the org-folder skip against the real tree, not by reading
+// the code: "UNIVERSAL › _Universal House Job › Digital › <job>" skipped the
+// container and landed on "Digital", so seven job folders came back with the
+// film "Digital" or "Print" — strictly worse than the "Universal House Job"
+// they had before. Skipping the medium as well sends them to the
+// child-of-studio fallback, which is where they started.
+{
+  stubWrike([
+    F("uni", "UNIVERSAL", ["hj"]),
+    F("hj", "_Universal House Job", ["dig"]),
+    F("dig", "Digital", ["job_d"]),
+    F("job_d", "XY024900_Holding_Slides"),
+  ]);
+  const out = await scanStudioJobNumbers();
+  check("a house job does not acquire the film 'Digital'",
+    out.find((r) => r.code === "XY024900")?.filmTitle, "Universal House Job");
+}
+
+// ...but a medium sitting between a REAL film and the job must not hide it.
+{
+  stubWrike([
+    F("uni", "UNIVERSAL", ["y"]),
+    F("y", "2026", ["film"]),
+    F("film", "Wicked_For_Good", ["dig"]),
+    F("dig", "PRINT", ["job_e"]),
+    F("job_e", "XY024901_1Sheet"),
+  ]);
+  const out = await scanStudioJobNumbers();
+  check("a real film below a year and above a medium still wins",
+    out.find((r) => r.code === "XY024901")?.filmTitle, "Wicked For Good");
+}

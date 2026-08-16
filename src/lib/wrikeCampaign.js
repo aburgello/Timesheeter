@@ -308,6 +308,15 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // between.
   const isOrgFolder = (title) => /^_/.test((title || "").trim());
 
+  // The medium is not a film either. Caught by measuring the org-folder skip
+  // above against the real tree: for "UNIVERSAL › _Universal House Job ›
+  // Digital › <job>", skipping the container landed on "Digital", so seven job
+  // folders came back with the film "Digital" or "Print" — worse than the
+  // "Universal House Job" they had before. Skipping the medium too means those
+  // fall through to the child-of-studio fallback and stay as they were.
+  const isMediumFolder = (title) =>
+    /^(digital|print)$/i.test(deUnderscore(title || ""));
+
   // Climb the full ancestry of a job folder. The film is the folder between the
   // studio and the job — but studios often insert a "2026" year folder in
   // between, so we take the DEEPEST non-year folder on that stretch (closest to
@@ -319,7 +328,8 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     let filmNode = null;
     if (si >= 1) {
       for (let i = si - 1; i >= 0; i--) {
-        if (chain[i] && !isYearFolder(chain[i].title) && !isOrgFolder(chain[i].title)) {
+        if (chain[i] && !isYearFolder(chain[i].title) && !isOrgFolder(chain[i].title)
+            && !isMediumFolder(chain[i].title)) {
           filmNode = chain[i]; break;
         }
       }
