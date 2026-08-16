@@ -84,3 +84,60 @@ const F = (id, title, childIds = []) => ({ id, title, childIds, scope: "WsFolder
   check("the genuine clash is surfaced", out.contestedCodes?.length, 1);
   check("with the rejected path listed", out.contestedCodes?.[0]?.over?.length, 1);
 }
+
+// ── an organisational folder must not become a film ─────────────────────────
+//
+// The real shape under Universal - New Media, from the live tree:
+//
+//   Universal - New Media
+//     └── _Old              ← a container for retired work, not a campaign
+//          ├── 2024
+//          │    ├── Wicked
+//          │    ├── The Brutalist
+//          │    ├── Nosferatu
+//          │    └── Wolf Man
+//          └── 2025
+//
+// describeChain takes the child-of-studio as the film and knew only how to skip
+// YEAR folders, so it stopped at "_Old" — which deUnderscore renders as "Old".
+// 47 Job Book rows, spread across all of these films, collapsed onto one film
+// called "Old". The studio marks containers with a leading underscore (665 such
+// folders in the tree, not one of them a film title), so the film loop skips
+// them the same way it skips years.
+{
+  stubWrike([
+    F("nm", "Universal - New Media", ["old"]),
+    F("old", "_Old", ["y2024"]),
+    F("y2024", "2024", ["wicked", "brutalist"]),
+    F("wicked", "Wicked", ["job_a"]),
+    F("job_a", "XY025042_NM_Packshots_FinalWindow"),
+    F("brutalist", "The_Brutalist", ["job_b"]),
+    F("job_b", "XY025119_Packshots_FinalWindow"),
+  ]);
+  const out = await scanStudioJobNumbers();
+  const a = out.find((r) => r.code === "XY025042");
+  const b = out.find((r) => r.code === "XY025119");
+
+  check("the real film wins, not the _Old container", a?.filmTitle, "Wicked");
+  check("two jobs under one container get their OWN films", b?.filmTitle, "The Brutalist");
+  check("neither is called Old", [a?.filmTitle, b?.filmTitle].includes("Old"), false);
+  // Lowercase "media" is the real region label, in REGION_ALIASES and in the
+  // Job Book's own rows — asserted as-is rather than tidied, so this test keeps
+  // agreeing with production.
+  check("the studio still resolves through the container", a?.client, "Universal Pictures New media");
+}
+
+// ── a job with nothing but a container above it keeps that name ─────────────
+//
+// The house jobs have no film folder to find, so the child-of-studio fallback
+// has to survive the new skip — otherwise they'd come back film-less.
+{
+  stubWrike([
+    F("uni", "Universal", ["hk"]),
+    F("hk", "_Universal_House_Keeping", ["job_c"]),
+    F("job_c", "XY024840_UK_QA_Holding_Slides"),
+  ]);
+  const out = await scanStudioJobNumbers();
+  check("a house job still names itself rather than coming back empty",
+    out.find((r) => r.code === "XY024840")?.filmTitle, "Universal House Keeping");
+}

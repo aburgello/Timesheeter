@@ -282,6 +282,27 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // A bare year / number (e.g. "2026") is an organisational folder, not a film.
   const isYearFolder = (title) => /^\d{2,4}$/.test((title || "").trim());
 
+  // Organisational, not a film. The studio's own convention marks these with a
+  // leading underscore, and it is followed without exception: of 665 such
+  // folders in the tree, every one is a container -- _Market, _Masters,
+  // _Title_Delivery, _Supplied, _House_Keeping, _Media_Approval, _TERRITORY,
+  // _BRIEF_TEMPLATES -- and not one is a film title.
+  //
+  // Skipping them matters because deUnderscore turns a folder name into a film
+  // name, so "_Old" became a film called "Old". Under Universal - New Media,
+  // "_Old" holds year folders which hold the real films (Wicked, The Brutalist,
+  // Nosferatu, Wolf Man), and the film loop below stopped at "_Old" because it
+  // only knew how to skip years. 47 Job Book rows across many different films
+  // collapsed onto the single film "Old" -- 81% of them with a generic
+  // description ("NM Titles", "Packshots FinalWindow"), spanning 15 months,
+  // where a real campaign spans a few. Their descriptions still name the films
+  // they belong to: BLB, WYD, DRP, PHS, HDG, JW4.
+  //
+  // This also picks up _zArchive, which isArchiveNode misses -- its pattern
+  // wants "archive" directly after the boundary, and "_zArchive" has a "z" in
+  // between.
+  const isOrgFolder = (title) => /^_/.test((title || "").trim());
+
   // Climb the full ancestry of a job folder. The film is the folder between the
   // studio and the job — but studios often insert a "2026" year folder in
   // between, so we take the DEEPEST non-year folder on that stretch (closest to
@@ -293,9 +314,16 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     let filmNode = null;
     if (si >= 1) {
       for (let i = si - 1; i >= 0; i--) {
-        if (chain[i] && !isYearFolder(chain[i].title)) { filmNode = chain[i]; break; }
+        if (chain[i] && !isYearFolder(chain[i].title) && !isOrgFolder(chain[i].title)) {
+          filmNode = chain[i]; break;
+        }
       }
-      if (!filmNode) filmNode = chain[si - 1]; // all year folders — fall back
+      // Nothing but year/organisational folders between job and studio — fall
+      // back to the child-of-studio as before. That keeps the house jobs
+      // working: a job filed straight under "_Universal_House_Keeping" has no
+      // real film folder to find, and the fallback still names it rather than
+      // leaving the row film-less.
+      if (!filmNode) filmNode = chain[si - 1];
     }
     return {
       studioKw,
