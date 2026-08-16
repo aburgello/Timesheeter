@@ -8,7 +8,9 @@
     "test": "node tests/run.mjs",
     "build": "vite build",
     "preview": "npm run build && wrangler dev",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "scan:diff": "esbuild tests/scanRegression.mjs --bundle --platform=node --format=esm --outfile=node_modules/.cache/scanRegression.mjs --log-level=error && node node_modules/.cache/scanRegression.mjs",
+    "scan:accept": "npm run scan:diff -- --write"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",

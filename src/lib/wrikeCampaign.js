@@ -13,6 +13,7 @@
 // Wrike auth locally: nothing mutates Wrike until a human approves the plan.
 
 import { fetchRetrying } from "./fetchPool";
+import { STUDIO_KEYWORDS_FLAT, STUDIO_CLIENT } from "./studios";
 
 const WRIKE = "/api/wrike";
 
@@ -180,26 +181,30 @@ export function collectSubtreeIds(byId, rootId, seen = new Set()) {
   return seen;
 }
 
-// Studio keywords used to derive a job's client by climbing its folder ancestry.
-// Same set as Management's STUDIO_GROUPS; kept here so the scanner is self-contained.
-const STUDIO_KEYWORDS = [
-  "Universal", "Paramount", "Sony", "Disney", "Warner",
-  "Netflix", "Apple", "Amazon", "Lionsgate", "XYi",
-];
-
-// Map a studio-folder keyword to the client name the Job Book / Legacy expect.
-const STUDIO_CLIENT = {
-  sony: "Sony Pictures",
-  paramount: "Paramount Pictures",
-  universal: "Universal Pictures",
-  warner: "Warner Bros",
-  disney: "Disney",
-  netflix: "Netflix",
-  apple: "Apple",
-  amazon: "Amazon",
-  lionsgate: "Lionsgate",
-  xyi: "XYi Internal",
-};
+// Studio keywords and the client each maps to now come from studios.js, which
+// the enricher reads too. They used to be two hand-maintained lists that had
+// drifted apart in both directions -- the enricher knew marvel/pixar/lucasfilm/
+// columbia/tristar/mgm/wbros/wb and this one knew none of them; this one knew
+// Lionsgate and XYi and the enricher knew neither -- so the scan could propose
+// a client the enricher would never derive.
+//
+// Note this file still matches with its own rule (word boundaries on the raw
+// title, below) rather than studios.js's separator-aware one. That difference
+// is deliberate and load-bearing, and the reason is bigger than it looks.
+//
+// Measured against the cached tree: adopting the separator-aware rule here
+// would newly treat 63 folders as studio nodes -- _Universal_MASTER,
+// _Paramount_MASTER_TEMPLATES, _Sony_MASTER_TEMPLATES, _Universal House Job,
+// _XYi IN HOUSE DIGITAL and the like. Those 63 have 7,209 descendants between
+// them, of which 2,780 are job-code folders.
+//
+// That matters because describeChain locates the studio node and then takes its
+// CHILD as the film. Moving the studio node down the chain moves the film with
+// it, so this would change the proposed film on the majority of job folders in
+// the account. Not a refactor -- a re-scan of the whole book. The LIST is
+// shared; the matching stays separate until someone runs that scan and reads
+// the review.
+const STUDIO_KEYWORDS = STUDIO_KEYWORDS_FLAT;
 
 const deUnderscore = (s) => (s || "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
 
@@ -282,6 +287,55 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // A bare year / number (e.g. "2026") is an organisational folder, not a film.
   const isYearFolder = (title) => /^\d{2,4}$/.test((title || "").trim());
 
+  // Organisational, not a film. The studio's own convention marks these with a
+  // leading underscore, and it is followed without exception: of 665 such
+  // folders in the tree, every one is a container -- _Market, _Masters,
+  // _Title_Delivery, _Supplied, _House_Keeping, _Media_Approval, _TERRITORY,
+  // _BRIEF_TEMPLATES -- and not one is a film title.
+  //
+  // Skipping them matters because deUnderscore turns a folder name into a film
+  // name, so "_Old" became a film called "Old". Under Universal - New Media,
+  // "_Old" holds year folders which hold the real films (Wicked, The Brutalist,
+  // Nosferatu, Wolf Man), and the film loop below stopped at "_Old" because it
+  // only knew how to skip years. 47 Job Book rows across many different films
+  // collapsed onto the single film "Old" -- 81% of them with a generic
+  // description ("NM Titles", "Packshots FinalWindow"), spanning 15 months,
+  // where a real campaign spans a few. Their descriptions still name the films
+  // they belong to: BLB, WYD, DRP, PHS, HDG, JW4.
+  //
+  // This also picks up _zArchive, which isArchiveNode misses -- its pattern
+  // wants "archive" directly after the boundary, and "_zArchive" has a "z" in
+  // between.
+  const isOrgFolder = (title) => /^_/.test((title || "").trim());
+
+  // The medium is not a film either. Caught by measuring the org-folder skip
+  // above against the real tree: for "UNIVERSAL › _Universal House Job ›
+  // Digital › <job>", skipping the container landed on "Digital", so seven job
+  // folders came back with the film "Digital" or "Print" — worse than the
+  // "Universal House Job" they had before. Skipping the medium too means those
+  // fall through to the child-of-studio fallback and stay as they were.
+  const isMediumFolder = (title) =>
+    /^(digital|print)$/i.test(deUnderscore(title || ""));
+
+  // A house-job container is not something to skip past — it IS the answer.
+  //
+  // The other containers (_Old, _zArchive) hold real films further down, so
+  // skipping them finds one. House-job trees do not: they hold work types.
+  // Under "_Universal House Job > Print > Cards" the skip landed the film on
+  // "Cards", and under "_UK House Jobs > OLS - UK" on "OLS - UK" — three and
+  // one job code respectively, both worse than the container name they had.
+  // A house job has no film by definition, so the container is the best label
+  // available and the descent should stop there.
+  //
+  // Anchored at the END, and never on a job folder, because "Housekeeping For
+  // Beginners" is a real film and "XY018540_Digital_Housekeeping" is a job. A
+  // substring test for "housekeeping" would swallow both.
+  const isHouseJobFolder = (title) => {
+    const t = deUnderscore(title || "");
+    if (/^XY\d{5,6}/i.test(t)) return false;
+    return /\b(house\s*jobs?|house\s*keeping|housekeeping)$/i.test(t);
+  };
+
   // Climb the full ancestry of a job folder. The film is the folder between the
   // studio and the job — but studios often insert a "2026" year folder in
   // between, so we take the DEEPEST non-year folder on that stretch (closest to
@@ -293,9 +347,20 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     let filmNode = null;
     if (si >= 1) {
       for (let i = si - 1; i >= 0; i--) {
-        if (chain[i] && !isYearFolder(chain[i].title)) { filmNode = chain[i]; break; }
+        if (!chain[i]) continue;
+        // Checked before the skips: a house-job container is taken, not passed.
+        if (isHouseJobFolder(chain[i].title)) { filmNode = chain[i]; break; }
+        if (!isYearFolder(chain[i].title) && !isOrgFolder(chain[i].title)
+            && !isMediumFolder(chain[i].title)) {
+          filmNode = chain[i]; break;
+        }
       }
-      if (!filmNode) filmNode = chain[si - 1]; // all year folders — fall back
+      // Nothing but year/organisational folders between job and studio — fall
+      // back to the child-of-studio as before. That keeps the house jobs
+      // working: a job filed straight under "_Universal_House_Keeping" has no
+      // real film folder to find, and the fallback still names it rather than
+      // leaving the row film-less.
+      if (!filmNode) filmNode = chain[si - 1];
     }
     return {
       studioKw,
@@ -315,11 +380,17 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // order is live-and-placed > placed > live > whatever we got.
   const ancestryOf = (startId, folderTitle) => {
     const chains = [];
+    // Set when a walk stops because it ran out of budget rather than because it
+    // reached a root. The chain pushed in that case is a PARTIAL one, and a
+    // partial chain yields no film, no client and no region — which reads
+    // downstream exactly like a job that genuinely has none. Recording it is
+    // what lets the scan review say "could not establish" instead of "none".
+    let truncated = false;
     const walk = (id, chain, seen) => {
       // Bounded: shared folders can fan out, and this runs per job code across
       // the whole tree. Depth 40 matches the old climb; 24 paths is plenty to
       // find a live one without letting a pathological tree stall the scan.
-      if (chain.length >= 40 || chains.length >= 24) { chains.push(chain); return; }
+      if (chain.length >= 40 || chains.length >= 24) { truncated = true; chains.push(chain); return; }
       const parents = (parentsOf[id] || []).filter((pid) => byId[pid] && !seen.has(pid));
       if (!parents.length) { chains.push(chain); return; }
       for (const pid of parents) {
@@ -342,7 +413,7 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
       .reverse()
       .map((t) => deUnderscore(t))
       .join(" › ");
-    return { ...best, folderPath };
+    return { ...best, folderPath, truncated };
   };
 
   const CODE = /XY\d{5,6}/i;
@@ -399,7 +470,8 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     }
 
     const { f, title, m } = chosen;
-    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived, folderPath } = chosen;
+    const { studioKw, studioTitle, filmTitle: ancestorFilm, archived, folderPath,
+            truncated: ancestryTruncated } = chosen;
     const region = regionOf(studioTitle, studioKw);
     // "Universal Pictures UK" / "Universal Pictures International" — the client
     // the Job Book and the timesheet site both name, rather than every region's
@@ -434,17 +506,32 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     }
 
     out.push({ code, jobNumber, filmTitle, projectDescription, client, archived,
-               region: region ? region.short : null, folderId: f.id, folderPath });
+               region: region ? region.short : null, folderId: f.id, folderPath,
+               ancestryTruncated });
   });
 
   // Pull each job folder's Wrike createdDate (the flat tree endpoint doesn't
   // carry it; the by-id endpoint returns it by default). Batched 100 at a time.
+  // Never let this discard the scan. By the time we get here the whole tree has
+  // been fetched, inverted, walked and ranked — minutes of work and a large
+  // slice of the account's shared rate-limit budget — and wrikeGet throws on any
+  // non-OK response, so one 429 that outlived its retries used to throw all of
+  // it away for a date shown beside the row. createdDate is already optional
+  // downstream (`createdById[o.folderId] || null` below), which is the same call
+  // fetchFolderItemPrice makes for a permissioned price: never block staging a
+  // job on a lookup the job does not depend on.
   const ids = out.map((o) => o.folderId).filter(Boolean);
   const createdById = {};
+  let createdDateBatchesFailed = 0;
   for (let i = 0; i < ids.length; i += 100) {
     const batch = ids.slice(i, i + 100);
-    const rows = await wrikeGet(`/folders/${batch.join(",")}`);
-    rows.forEach((f) => { if (f.createdDate) createdById[f.id] = f.createdDate.slice(0, 10); });
+    try {
+      const rows = await wrikeGet(`/folders/${batch.join(",")}`);
+      rows.forEach((f) => { if (f.createdDate) createdById[f.id] = f.createdDate.slice(0, 10); });
+    } catch (e) {
+      createdDateBatchesFailed++;
+      console.warn(`[wrikeCampaign] createdDate batch failed; those jobs stage without a date`, e);
+    }
   }
   out.forEach((o) => { o.createdDate = createdById[o.folderId] || null; });
 
@@ -455,6 +542,13 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // code no heuristic can settle it — so hand the ambiguity to the caller
   // rather than resolving it out of sight.
   out.contestedCodes = contestedCodes;
+  // Diagnostics the caller can show beside the scan, in the same spirit as
+  // contestedCodes: say what the scan could not establish rather than letting
+  // it read as established. `truncatedCodes` are jobs whose ancestry walk hit
+  // its own bounds, so their film/client/region reflect a partial climb and are
+  // not distinguishable, from the row alone, from a job that genuinely has none.
+  out.truncatedCodes = out.filter((o) => o.ancestryTruncated).map((o) => o.code);
+  out.createdDateBatchesFailed = createdDateBatchesFailed;
   return out;
 }
 
