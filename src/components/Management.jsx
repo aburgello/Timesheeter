@@ -3725,7 +3725,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
   return (
     <div className="fixed inset-0 z-[9999] bg-black/40 flex items-center justify-center p-4" onMouseDown={onClose}>
       <div
-        className="bg-white rounded-3xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+        className="bg-white rounded-3xl w-full max-w-6xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -3801,7 +3801,7 @@ function StudioJobScanModal({ onClose, onApplied }) {
                   </button>
                 </div>
                 {showCorrections && (
-                  <div className="max-h-52 overflow-y-auto border-t border-amber-100 px-6 py-2">
+                  <div className="max-h-[50vh] overflow-y-auto border-t border-amber-100 px-6 py-2">
                     <table className="w-full text-[11px]">
                       <tbody>
                         {corrections.map((c) => {
@@ -3809,11 +3809,11 @@ function StudioJobScanModal({ onClose, onApplied }) {
                           return (
                             <tr key={c.code} className={`align-top ${kept ? "opacity-50" : ""}`}>
                               <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">{c.code}</td>
-                              <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[240px]"
+                              <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[420px]"
                                   title={existingByCode[c.code]?.job_number}>
                                 {existingByCode[c.code]?.job_number || "—"}
                               </td>
-                              <td className="py-1 max-w-[240px]">
+                              <td className="py-1 max-w-[420px]">
                                 <div className="text-[#122027] truncate" title={c.jobNumber}>→ {c.jobNumber}</div>
                                 {c.folderPath && (
                                   <div className="text-[10px] text-slate-400 truncate" title={c.folderPath}>
@@ -3850,11 +3850,11 @@ function StudioJobScanModal({ onClose, onApplied }) {
                               <td className="py-1 pr-3 font-mono font-black text-amber-700 whitespace-nowrap">
                                 {rCode}
                               </td>
-                              <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[240px]"
+                              <td className="py-1 pr-2 text-slate-400 line-through truncate max-w-[420px]"
                                   title={r.job_number}>
                                 {r.job_number}
                               </td>
-                              <td className="py-1 max-w-[240px]">
+                              <td className="py-1 max-w-[420px]">
                                 <div className="text-slate-500 italic truncate" title={existingByCode[rCode]?.job_number}>
                                   → duplicate, removed (kept: {existingByCode[rCode]?.job_number})
                                 </div>
@@ -3931,14 +3931,14 @@ function StudioJobScanModal({ onClose, onApplied }) {
                         <tr key={c.code} className="border-b border-slate-50 hover:bg-slate-50/60 cursor-pointer" onClick={() => toggle(c.code)}>
                           <td className="px-4 py-2"><input type="checkbox" checked={!!selected[c.code]} onChange={() => toggle(c.code)} className="accent-[#1cc1a5]" onClick={(e) => e.stopPropagation()} /></td>
                           <td className="px-2 py-2 font-black font-mono text-[#1cc1a5]">{c.code}</td>
-                          <td className="px-2 py-2 font-bold text-[#122027] truncate max-w-[140px]" title={c.jobNumber}>{c.filmTitle || "—"}</td>
+                          <td className="px-2 py-2 font-bold text-[#122027] truncate max-w-[260px]" title={c.jobNumber}>{c.filmTitle || "—"}</td>
                           <td className="px-2 py-2">
                             {c.region
                               ? <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-[#12a0e1]/10 text-[#12a0e1]">{c.region}</span>
                               : <span className="text-slate-300">—</span>}
                           </td>
                           <td className="px-2 py-2 text-slate-600">{c.client || <span className="text-slate-300">—</span>}</td>
-                          <td className="px-2 py-2 text-slate-500 truncate max-w-[180px]" title={c.projectDescription}>{c.projectDescription || "—"}</td>
+                          <td className="px-2 py-2 text-slate-500 truncate max-w-[320px]" title={c.projectDescription}>{c.projectDescription || "—"}</td>
                           <td className="px-2 py-2 text-slate-400 whitespace-nowrap tabular-nums">{c.createdDate || "—"}</td>
                         </tr>
                       ))}
