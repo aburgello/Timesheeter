@@ -13,6 +13,7 @@
 // Wrike auth locally: nothing mutates Wrike until a human approves the plan.
 
 import { fetchRetrying } from "./fetchPool";
+import { STUDIO_KEYWORDS_FLAT, STUDIO_CLIENT } from "./studios";
 
 const WRIKE = "/api/wrike";
 
@@ -180,26 +181,19 @@ export function collectSubtreeIds(byId, rootId, seen = new Set()) {
   return seen;
 }
 
-// Studio keywords used to derive a job's client by climbing its folder ancestry.
-// Same set as Management's STUDIO_GROUPS; kept here so the scanner is self-contained.
-const STUDIO_KEYWORDS = [
-  "Universal", "Paramount", "Sony", "Disney", "Warner",
-  "Netflix", "Apple", "Amazon", "Lionsgate", "XYi",
-];
-
-// Map a studio-folder keyword to the client name the Job Book / Legacy expect.
-const STUDIO_CLIENT = {
-  sony: "Sony Pictures",
-  paramount: "Paramount Pictures",
-  universal: "Universal Pictures",
-  warner: "Warner Bros",
-  disney: "Disney",
-  netflix: "Netflix",
-  apple: "Apple",
-  amazon: "Amazon",
-  lionsgate: "Lionsgate",
-  xyi: "XYi Internal",
-};
+// Studio keywords and the client each maps to now come from studios.js, which
+// the enricher reads too. They used to be two hand-maintained lists that had
+// drifted apart in both directions -- the enricher knew marvel/pixar/lucasfilm/
+// columbia/tristar/mgm/wbros/wb and this one knew none of them; this one knew
+// Lionsgate and XYi and the enricher knew neither -- so the scan could propose
+// a client the enricher would never derive.
+//
+// Note this file still matches with its own rule (word boundaries on the raw
+// title, below) rather than studios.js's separator-aware one. Adopting that
+// here would newly recognise ~22 folders as studio folders, most of them
+// archive and template trees, which changes ancestry ranking -- so it wants a
+// scan review, not a quiet change. The LIST is shared; the matching is not, yet.
+const STUDIO_KEYWORDS = STUDIO_KEYWORDS_FLAT;
 
 const deUnderscore = (s) => (s || "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
 

@@ -2,6 +2,7 @@ import { FILM_MAPPINGS, motionTeamShortName, TERRITORIES, REGION_ALIASES, MAGI_M
 import { countriesFromFolderNames } from "../utils/countryCodes";
 import { countryFieldIds } from "./countryField";
 import { fetchRetrying } from "./fetchPool";
+import { studioNameOf, studioKeywordOf } from "./studios";
 
 // Resolve a film-code folder/name (e.g. "ZAL", "ody", "DDA") to its full
 // title via FILM_MAPPINGS; returns the title-cased input untouched when no
@@ -82,6 +83,27 @@ export function parseWrikeData(htmlString) {
   };
 }
 
+// A folder title that cannot be a film: the studio itself, a year, or one of
+// the org-chart words.
+//
+// The studio half used to be a hardcoded list of three — UNIVERSAL, PARAMOUNT,
+// SONY — while the studio keyword list in this same file named eight. So a task
+// under "Warner Bros / DIGITAL" returned the film name "Warner Bros", and the
+// same for Disney, Netflix, Apple, Amazon and Lionsgate. Deriving it from the
+// shared list means adding a studio can never leave this behind again.
+//
+// studioKeywordOf, not a substring test: it treats underscores as separators,
+// so "Universal_UK_Archive" is recognised as Universal (a plain word-boundary
+// test would miss it, because `_` is a word character) while "Portfolio Mgmt"
+// is not mistaken for MGM.
+const isNotAFilmName = (title) => {
+  const t = String(title || "").trim();
+  if (!t) return true;
+  if (/^20\d{2}/.test(t)) return true;                 // a year folder
+  if (/motion|archive/i.test(t)) return true;          // org-chart words
+  return Boolean(studioKeywordOf(t));
+};
+
 // ---------------------------------------------------------------------------
 // Climb the folder tree to find the film name for a task
 // ---------------------------------------------------------------------------
@@ -112,16 +134,7 @@ export function getFilmName(task, folderDictionary, extractedPath = "", extraMap
       if (["DIGITAL", "PRINT"].includes(currentFolder.title?.trim().toUpperCase())) {
         for (const pid of parentIds) {
           const pName = folderDictionary[pid]?.title || "";
-          const pUpper = pName.toUpperCase();
-          if (
-            pUpper &&
-            !pUpper.includes("UNIVERSAL") &&
-            !pUpper.includes("PARAMOUNT") &&
-            !pUpper.includes("SONY") &&
-            !pUpper.includes("MOTION") &&
-            !pUpper.match(/^20\d{2}/) &&
-            !pUpper.includes("ARCHIVE")
-          ) {
+          if (pName && !isNotAFilmName(pName)) {
             foundFilmName = pName;
             break;
           }
@@ -147,15 +160,10 @@ export function getFilmName(task, folderDictionary, extractedPath = "", extraMap
     const parts = extractedPath.split("/");
     const digIdx = parts.findIndex((p) => ["DIGITAL", "PRINT"].includes(p.toUpperCase()));
     if (digIdx > 0) {
+      // Same test as the tree climb above — a path segment that names the
+      // studio is no more a film than a folder that does.
       let back = digIdx - 1;
-      while (
-        back > 0 &&
-        (parts[back].toUpperCase().includes("UNIVERSAL") ||
-          parts[back].toUpperCase().includes("PARAMOUNT") ||
-          parts[back].toUpperCase().includes("MOTION") ||
-          parts[back].match(/^20\d{2}/) ||
-          parts[back].toUpperCase().includes("ARCHIVE"))
-      ) back--;
+      while (back > 0 && isNotAFilmName(decodeURIComponent(parts[back]))) back--;
       if (back > 0 && parts[back].trim()) {
         return resolveFilmCode(decodeURIComponent(parts[back]));
       }
@@ -178,16 +186,9 @@ export function getFilmName(task, folderDictionary, extractedPath = "", extraMap
 // ---------------------------------------------------------------------------
 // Climb the folder tree to find the studio for a task
 // ---------------------------------------------------------------------------
-const STUDIO_KEYWORDS = [
-  { studio: "Universal",  keywords: ["universal"] },
-  { studio: "Paramount",  keywords: ["paramount"] },
-  { studio: "Warner",     keywords: ["warner", "wbros", "wb"] },
-  { studio: "Disney",     keywords: ["disney", "marvel", "pixar", "lucasfilm"] },
-  { studio: "Sony",       keywords: ["sony", "columbia", "tristar"] },
-  { studio: "Netflix",    keywords: ["netflix"] },
-  { studio: "Apple",      keywords: ["apple"] },
-  { studio: "Amazon",     keywords: ["amazon", "mgm"] },
-];
+// Was a second, divergent copy of the studio list — see studios.js for what the
+// two disagreeing lists cost. Matching moved there too, so the scanner and the
+// enricher can no longer resolve the same folder to different studios.
 
 // Build a childId→parentId[] reverse map from a folderDictionary that has
 // childIds. Wrike's /v4/folders returns childIds (downward), not parentIds
@@ -255,10 +256,8 @@ export function getStudioName(task, folderDictionary, childToParents = {}) {
     const id = queue.shift();
     const title = folderDictionary[id]?.title || "";
     if (title) {
-      const lower = title.toLowerCase();
-      for (const { studio, keywords } of STUDIO_KEYWORDS) {
-        if (keywords.some((k) => lower.includes(k))) return studio;
-      }
+      const studio = studioNameOf(title);
+      if (studio) return studio;
     }
     // Climb to EVERY parent via the reverse childIds map. Breadth-first, so the
     // nearest studio still wins; what changes is that a nearer studio sitting on
@@ -561,6 +560,11 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
   // returned without them. Cleared per id as soon as one does arrive, since a
   // later round can still resolve what an earlier one missed.
   const unresolved = new Set();
+  // Folders we deliberately did NOT hydrate because they sit in the recycle
+  // bin. Excluded is not the same as missing, and conflating them would make
+  // every sync of a workspace with a populated recycle bin report an incomplete
+  // tree forever.
+  const recycled = new Set();
 
   let loopCount = 0;
   while (missing.size > 0 && loopCount < 8) {
@@ -573,6 +577,11 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
         const res = await fetchRetrying(`/api/wrike/folders/${chunk.join(",")}`);
         if (res.ok) {
           (await res.json()).data?.forEach((f) => {
+            // Recycled folders are deliberately not hydrated — same filter
+            // fetchAllFolders applies. Recorded as excluded rather than
+            // unresolved below, so "the tree is incomplete" keeps meaning
+            // "something is missing that should be here".
+            if (/^Rb/i.test(f.scope || "")) { recycled.add(f.id); return; }
             folderDictionary[f.id] = f;
             f.parentIds?.forEach((pid) => {
               if (!folderDictionary[pid]) missing.add(pid);
@@ -585,7 +594,9 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
       // Whatever this chunk asked for and still isn't in the dictionary is
       // unresolved, whether the request threw, returned non-OK, or simply came
       // back without it.
-      chunk.forEach((id) => { if (!folderDictionary[id]) unresolved.add(id); });
+      chunk.forEach((id) => {
+        if (!folderDictionary[id] && !recycled.has(id)) unresolved.add(id);
+      });
     }
   }
 
@@ -599,6 +610,7 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
     unresolved: [...unresolved],
     rounds: loopCount,
     exhausted,
+    recycled: [...recycled],
   };
   if (!stats.complete) {
     console.warn(

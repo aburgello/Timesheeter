@@ -68,7 +68,18 @@ async function fetchWrikeMeta() {
     const fRes = await fetch(folderUrl);
     if (!fRes.ok) { console.warn("[WrikeCache] folders fetch failed", fRes.status); break; }
     const fJson = await fRes.json();
-    fJson.data?.forEach((f) => { folderDictionary[f.id] = { id: f.id, title: f.title, childIds: f.childIds || [] }; });
+    // Drop recycle-bin nodes, exactly as fetchAllFolders does (wrikeCampaign.js).
+    // The FolderTree default returns the workspace AND the recycle bin in one
+    // flat list, so without this the dictionary every climber walks contains
+    // deleted folders — and a recycled film folder can name a live task's film.
+    // It was happening: real ancestry chains in this account read
+    // "XY022391 › Wicked › NM › 2024 › Recycle Bin › _Old".
+    // Scope-less rows are kept, so if Wrike stops returning scope we degrade to
+    // the old behaviour rather than emptying the tree.
+    fJson.data?.forEach((f) => {
+      if (/^Rb/i.test(f.scope || "")) return;
+      folderDictionary[f.id] = { id: f.id, title: f.title, childIds: f.childIds || [] };
+    });
     folderUrl = fJson.nextPageToken
       ? `/api/wrike/folders?fields=${FOLDER_FIELDS}&nextPageToken=${fJson.nextPageToken}`
       : null;
