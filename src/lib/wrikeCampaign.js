@@ -317,6 +317,25 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   const isMediumFolder = (title) =>
     /^(digital|print)$/i.test(deUnderscore(title || ""));
 
+  // A house-job container is not something to skip past — it IS the answer.
+  //
+  // The other containers (_Old, _zArchive) hold real films further down, so
+  // skipping them finds one. House-job trees do not: they hold work types.
+  // Under "_Universal House Job > Print > Cards" the skip landed the film on
+  // "Cards", and under "_UK House Jobs > OLS - UK" on "OLS - UK" — three and
+  // one job code respectively, both worse than the container name they had.
+  // A house job has no film by definition, so the container is the best label
+  // available and the descent should stop there.
+  //
+  // Anchored at the END, and never on a job folder, because "Housekeeping For
+  // Beginners" is a real film and "XY018540_Digital_Housekeeping" is a job. A
+  // substring test for "housekeeping" would swallow both.
+  const isHouseJobFolder = (title) => {
+    const t = deUnderscore(title || "");
+    if (/^XY\d{5,6}/i.test(t)) return false;
+    return /\b(house\s*jobs?|house\s*keeping|housekeeping)$/i.test(t);
+  };
+
   // Climb the full ancestry of a job folder. The film is the folder between the
   // studio and the job — but studios often insert a "2026" year folder in
   // between, so we take the DEEPEST non-year folder on that stretch (closest to
@@ -328,7 +347,10 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     let filmNode = null;
     if (si >= 1) {
       for (let i = si - 1; i >= 0; i--) {
-        if (chain[i] && !isYearFolder(chain[i].title) && !isOrgFolder(chain[i].title)
+        if (!chain[i]) continue;
+        // Checked before the skips: a house-job container is taken, not passed.
+        if (isHouseJobFolder(chain[i].title)) { filmNode = chain[i]; break; }
+        if (!isYearFolder(chain[i].title) && !isOrgFolder(chain[i].title)
             && !isMediumFolder(chain[i].title)) {
           filmNode = chain[i]; break;
         }

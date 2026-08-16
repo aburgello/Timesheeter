@@ -175,3 +175,61 @@ const F = (id, title, childIds = []) => ({ id, title, childIds, scope: "WsFolder
   check("a real film below a year and above a medium still wins",
     out.find((r) => r.code === "XY024901")?.filmTitle, "Wicked For Good");
 }
+
+// ── a house-job container is the answer, not something to skip ──────────────
+//
+// Surfaced by the regression gate on the real tree: skipping the container and
+// the medium landed the film on "Cards" for three job codes under
+// "_Universal House Job > Print > Cards", and on "OLS - UK" for one under
+// "_UK House Jobs". Both are work-type folders, and both were worse than the
+// container name those jobs had before. _Old and _zArchive hold real films
+// further down; house-job trees hold work types, so the descent stops.
+{
+  stubWrike([
+    F("uni", "UNIVERSAL", ["hj"]),
+    F("hj", "_Universal House Job", ["print"]),
+    F("print", "Print", ["cards"]),
+    F("cards", "Cards", ["job_f"]),
+    F("job_f", "XY024902_Business_Cards"),
+  ]);
+  const out = await scanStudioJobNumbers();
+  check("a work-type folder under a house job does not become the film",
+    out.find((r) => r.code === "XY024902")?.filmTitle, "Universal House Job");
+}
+{
+  stubWrike([
+    F("uni", "UNIVERSAL", ["hj"]),
+    F("hj", "_UK House Jobs", ["ols"]),
+    F("ols", "OLS - UK", ["job_g"]),
+    F("job_g", "XY021012_DIGITAL_SCREENS_ODEON"),
+  ]);
+  const out = await scanStudioJobNumbers();
+  check("nor does a client grouping under one",
+    out.find((r) => r.code === "XY021012")?.filmTitle, "UK House Jobs");
+}
+{
+  // The trap: "Housekeeping For Beginners" is a real film, and a substring test
+  // for "housekeeping" would swallow it. The rule is anchored at the end.
+  stubWrike([
+    F("uni", "UNIVERSAL", ["y"]),
+    F("y", "2026", ["film"]),
+    F("film", "Housekeeping For Beginners", ["job_h"]),
+    F("job_h", "XY024903_1Sheet"),
+  ]);
+  const out = await scanStudioJobNumbers();
+  check("a film whose title merely contains 'Housekeeping' still resolves",
+    out.find((r) => r.code === "XY024903")?.filmTitle, "Housekeeping For Beginners");
+}
+{
+  // ...and _Old must still descend to the real film underneath.
+  stubWrike([
+    F("nm", "Universal - New Media", ["old"]),
+    F("old", "_Old", ["y"]),
+    F("y", "2025", ["film"]),
+    F("film", "Nosferatu", ["job_i"]),
+    F("job_i", "XY024904_Packshots"),
+  ]);
+  const out = await scanStudioJobNumbers();
+  check("_Old still descends to the real film",
+    out.find((r) => r.code === "XY024904")?.filmTitle, "Nosferatu");
+}
