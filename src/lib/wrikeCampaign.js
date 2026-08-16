@@ -189,10 +189,21 @@ export function collectSubtreeIds(byId, rootId, seen = new Set()) {
 // a client the enricher would never derive.
 //
 // Note this file still matches with its own rule (word boundaries on the raw
-// title, below) rather than studios.js's separator-aware one. Adopting that
-// here would newly recognise ~22 folders as studio folders, most of them
-// archive and template trees, which changes ancestry ranking -- so it wants a
-// scan review, not a quiet change. The LIST is shared; the matching is not, yet.
+// title, below) rather than studios.js's separator-aware one. That difference
+// is deliberate and load-bearing, and the reason is bigger than it looks.
+//
+// Measured against the cached tree: adopting the separator-aware rule here
+// would newly treat 63 folders as studio nodes -- _Universal_MASTER,
+// _Paramount_MASTER_TEMPLATES, _Sony_MASTER_TEMPLATES, _Universal House Job,
+// _XYi IN HOUSE DIGITAL and the like. Those 63 have 7,209 descendants between
+// them, of which 2,780 are job-code folders.
+//
+// That matters because describeChain locates the studio node and then takes its
+// CHILD as the film. Moving the studio node down the chain moves the film with
+// it, so this would change the proposed film on the majority of job folders in
+// the account. Not a refactor -- a re-scan of the whole book. The LIST is
+// shared; the matching stays separate until someone runs that scan and reads
+// the review.
 const STUDIO_KEYWORDS = STUDIO_KEYWORDS_FLAT;
 
 const deUnderscore = (s) => (s || "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
