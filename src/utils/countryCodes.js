@@ -267,17 +267,109 @@ const FILM_CODES = new Set(Object.keys(FILM_MAPPINGS).map(codeKey));
  * says codes live.
  */
 function batchPositionCountry(tokens) {
+  // Position is counted over the tokens that CARRY something, because the
+  // convention is written both ways: "ODY_CN_EmperorCinema" and
+  // "PP3 - AUS - DOOH - Batch 1". The split above keeps each "-" as a token of
+  // its own, so the market in the hyphenated form sits at index 2 and reading
+  // index 1 found a dash — the batch rule was blind to every name production
+  // spaces out, which is most of the outdoor ones. The suffix walk already
+  // steps over these same tokens (see the loop above); this is that rule
+  // applied to a fixed position instead of a moving one.
+  const real = tokens.filter((t) => codeKey(t));
+
   // Needs film + code + something after it. A bare "ODY_CN" ends on the code,
   // so the walk above has already taken it.
-  if (tokens.length < 3) return [];
-  if (!FILM_CODES.has(codeKey(tokens[0]))) return [];
+  if (real.length < 3) return [];
+  if (!FILM_CODES.has(codeKey(real[0]))) return [];
 
-  const key = codeKey(tokens[1]);
+  const key = codeKey(real[1]);
   if (!key || AMBIGUOUS_WORD_CODES.has(key)) return [];
 
-  const resolved = resolveCountryCode(tokens[1]);
+  const resolved = resolveCountryCode(real[1]);
   return resolved ? [resolved] : [];
 }
+
+/**
+ * The market named in a JOB folder — "XY026036_AUS_DOOH_Campaign".
+ *
+ * The folder rule above was written for the localisation shape, one folder per
+ * market ("Chile 🇨🇱"), and reads it through countriesFromTaskName — which only
+ * looks at the END of a name. Campaign jobs don't have a market folder at all:
+ * the push names one folder per JOB and puts the market in position 2, right
+ * after the code, with the rest of the name describing the work. So
+ * "XY026036_AUS_DOOH_Campaign" ends on "Campaign", the suffix walk stops there,
+ * and rule 3 was silently off for every campaign job in the account:
+ *
+ *     XY026036_AUS_DOOH_Campaign      ->  []
+ *     XY024840_UK_QA_Holding_Slides   ->  []
+ *     XY025716_Germany_Launch_Assets  ->  []
+ *
+ * This is the same anchored read as batchPositionCountry, with the job code in
+ * place of the film code: a closed pattern in slot 0 (XY + 5-6 digits, which
+ * nothing else in a folder name looks like) and one fixed slot after it. It is
+ * still not a scan — nothing in the descriptive tail is ever read.
+ *
+ * Deliberately folder-only. A TASK named "XY026036_AUS_something" is not the
+ * same statement: the job tag on a task says which job the work belongs to, not
+ * which market the work is for, and tasks are where the free-text scan did its
+ * damage. The folder is named once, by the push, to a fixed pattern.
+ *
+ * The refusals matter more than the rule:
+ *   · the ambiguous English words, for the reason batchPositionCountry refuses
+ *     them — "XY026100_IN_Progress_Assets" is not India.
+ *   · the non-markets, so a folder called "XY025832_Masters_Delivery" doesn't
+ *     put "_Masters_" on a row as though it were a market, and a house job
+ *     ("XY022180_XYi_Order_Of_Service") doesn't put "_XYi_" there. Slot 2 means
+ *     a market or it means nothing; "_Markets" at the END still means Multiple,
+ *     which is where that statement actually lives.
+ *   · PAN, below.
+ */
+const JOB_CODE = /^XY\d{5,6}$/i;
+
+// MAGI lists PAN for Panama, and in this account it has never once meant that.
+// Every one of the 59 folders carrying PAN as a token is a "Pan_Regional" job —
+// pan-regional work, no market named — and ZERO folders end in "_PAN". Panama
+// is written PA where it's written at all.
+//
+// Same shape as SUFFIX_BLOCKED and settled the same way, by position: reading
+// slot 2 without this turns 15 pan-regional campaigns into Panama campaigns,
+// which is precisely the invented-market failure this file exists to prevent.
+// Blocked only here — a task deliberately named "..._PAN" is still Panama,
+// because that is someone writing a code where codes go.
+const JOB_SLOT_BLOCKED = new Set(["PAN"]);
+
+// TERRITORIES carries a few entries that are not markets at all — the
+// underscore-wrapped house values ("_XYi_", "_Masters_", "_Multiple_") and the
+// OV pair. They are legitimate answers from a suffix someone wrote on purpose;
+// none of them is a thing slot 2 can be saying.
+const isMarket = (t) => !t.startsWith("_") && !SUFFIX_EXCEPTION_VALUES.has(t);
+
+const jobFolderCountry = (name) => {
+  const real = String(name || "")
+    .trim()
+    .split(/[_\s|]+/)
+    .filter((t) => codeKey(t));
+
+  // Code + market + something after it, matching the batch rule: a folder that
+  // ENDS on its market is already read by the suffix walk.
+  if (real.length < 3) return [];
+  if (!JOB_CODE.test(real[0])) return [];
+
+  // Two-token markets — "Hong_Kong", "New_Zealand", "South_Africa" — are torn
+  // in two by the split, so the pair is tried before the single. Needs a fourth
+  // token, or the pair is the end of the name and the suffix walk has it.
+  const candidates =
+    real.length >= 4 ? [real[1] + real[2], real[1]] : [real[1]];
+
+  for (const candidate of candidates) {
+    const key = codeKey(candidate);
+    if (!key || AMBIGUOUS_WORD_CODES.has(key) || JOB_SLOT_BLOCKED.has(key))
+      continue;
+    const resolved = resolveCountryCode(candidate);
+    if (resolved && isMarket(resolved)) return [resolved];
+  }
+  return [];
+};
 
 /**
  * The country named by the folder a task lives in.
@@ -290,19 +382,32 @@ function batchPositionCountry(tokens) {
  *       │     └── PP3 - CHI - DOOH - Batch 1 - POST
  *       └── Colombia 🇨🇴
  *
- * The task name there carries CHI in the middle and ends in "POST", so the
- * suffix rule alone would leave every one of these rows blank. The folder name
- * is as deliberate a statement as a suffix — it just isn't on the task — so it
- * is read the same way, and the campaign root resolving to "_Multiple_" via
- * its own "_Markets" ending falls out for free.
+ * The folder name is as deliberate a statement as a suffix — it just isn't on
+ * the task — so it is read the same way, and the campaign root resolving to
+ * "_Multiple_" via its own "_Markets" ending falls out for free. (The task in
+ * that sketch now also resolves on its own, from the batch slot; it did not
+ * when this rule was written, which is why the tree was the only way in.)
+ *
+ * Two shapes are read, because production names campaigns two ways: the market
+ * FOLDER above, and the market slot of a JOB folder — see jobFolderCountry.
  *
  * `names` must be ordered nearest folder first; the first that resolves wins,
  * so a market folder always beats the campaign root above it.
  */
 export const countriesFromFolderNames = (names) => {
   for (const name of names || []) {
-    const found = countriesFromTaskName(name);
-    if (found.length) return found;
+    const suffix = countriesFromTaskName(name);
+
+    // A NAMED MARKET BEATS A SUFFIX EXCEPTION, across the two reads of one
+    // folder name as well as within one. "XY026036_AUS_DOOH_Campaign_Markets"
+    // is a market campaign, not an unspecified one — same call the walk makes
+    // for "TAD_Masters_Chile", for the same reason.
+    if (suffix.length && !suffix.every((c) => SUFFIX_EXCEPTION_VALUES.has(c)))
+      return suffix;
+
+    const fromJob = jobFolderCountry(name);
+    if (fromJob.length) return fromJob;
+    if (suffix.length) return suffix;
   }
   return [];
 };
@@ -390,7 +495,9 @@ export const countriesFromCustomFields = (customFields, fieldIds) => {
  *
  *   1. the code ending the task's own name     "..._62s_CN"
  *   2. the code ending its parent TASK's name  (Guillaume's parent-task rule)
- *   3. the market FOLDER the task sits in      (localisation campaigns)
+ *   3. the FOLDER the task sits in             (a market folder in a
+ *                                               localisation campaign, or the
+ *                                               market slot of a job folder)
  *   4. the pinned Country custom field         (launches)
  *
  * Nothing else is consulted — not the /Volumes path, not the notes, not the
