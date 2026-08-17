@@ -34,6 +34,11 @@ export default function MultiCountrySelect({
   // it has to be visible in the row itself — the table variant is otherwise
   // borderless and an empty cell reads as "nothing to do here".
   needsAttention = false,
+  // Appended to the trigger's tooltip, on its own line. The cell's own <td>
+  // can't carry this: an inner element with a title of its own shadows every
+  // ancestor's, and this trigger has always had one, so a title on the wrapper
+  // never showed. See utils/pullSource.js for what gets passed in.
+  hint = "",
 }) {
   const [localOpen, setLocalOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -136,7 +141,7 @@ export default function MultiCountrySelect({
         type="button"
         onClick={() => (isOpen ? close() : open())}
         disabled={disabled}
-        title={selected.join(", ")}
+        title={[selected.join(", "), hint].filter(Boolean).join("\n")}
         className={`relative w-full flex items-start gap-1 border rounded-xl z-50 transition-[border-color,background-color,box-shadow] text-left ${
           isForm ? "py-2.5 px-3 bg-white shadow-sm" : "py-2 px-2.5"
         } ${

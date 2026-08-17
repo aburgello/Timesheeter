@@ -3315,11 +3315,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td
-                    className="p-2 border-r border-[#f0f4f8] align-middle w-[140px]"
-                    title={countryPullSource(row._countrySource)}
-                  >
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[140px]">
                     <MultiCountrySelect
+                      hint={countryPullSource(row._countrySource)}
                       value={row.territory}
                       onChange={(val) =>
                         handleUpdateRow(row.id, "territory", val)
@@ -3333,11 +3331,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td
-                    className="p-2 border-r border-[#f0f4f8] align-middle w-[180px]"
-                    title={categoryPullSource(row._categorySource)}
-                  >
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[180px]">
                     <TableSearchableSelect
+                      hint={categoryPullSource(row._categorySource)}
                       options={CATEGORIES}
                       value={row.category}
                       onChange={(val) =>

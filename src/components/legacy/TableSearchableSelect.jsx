@@ -27,6 +27,9 @@ export default function TableSearchableSelect({
   // unfiltered: once you are searching you have said what you want, and a
   // shortlist above the matches is then just a duplicate of some of them.
   pinnedOptions = [],
+  // Appended to the input's tooltip, on its own line — see MultiCountrySelect's
+  // `hint` for why this can't live on the cell around it.
+  hint = "",
   pinnedLabel = "Most used",
 }) {
   const isOpen = activeDropdown === dropdownId && !disabled;
@@ -176,7 +179,7 @@ export default function TableSearchableSelect({
           }}
           disabled={disabled}
           placeholder={placeholder}
-          title={searchTerm}
+          title={[searchTerm, hint].filter(Boolean).join("\n")}
           className={`w-full py-2 px-2.5 bg-transparent text-[12px] font-semibold outline-none truncate ${
             isDarkModal
               ? "text-slate-100 placeholder:text-slate-600"
