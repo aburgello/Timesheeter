@@ -1,5 +1,6 @@
 import { FILM_MAPPINGS, motionTeamShortName, TERRITORIES, REGION_ALIASES, MAGI_MARKET_CODES, COUNTRY_SUFFIX_EXCEPTIONS } from "../constants.js";
 import { countriesFromFolderNames } from "../utils/countryCodes";
+import { familyFromFolderName } from "../utils/categoryFamily";
 import { countryFieldIds } from "./countryField";
 import { fetchRetrying } from "./fetchPool";
 import { studioNameOf, studioKeywordOf } from "./studios";
@@ -308,6 +309,57 @@ export function getFolderCountries(task, folderDictionary, childToParents = {}) 
     level = next;
   }
   return [];
+}
+
+// The discipline folder a task sits under — "Print" or "Digital", or "" when
+// the tree doesn't say.
+//
+// categoryFamily.js was written around exactly this signal ("print and digital
+// work sit in their own Wrike folders") but read it off a /Volumes path scraped
+// out of the task DESCRIPTION, which most tasks don't carry. The folders it was
+// describing were there the whole time and nothing ever looked at them.
+//
+// Same climb as getFolderCountries and capped the same way, which the tree
+// supports exactly: measured from the job folder, every discipline folder in
+// the account sits 1-3 levels up (2,010 at one, 1,055 at two, 15 at three) and
+// a cap of 4 saturates at 3,080 of 3,741 job folders. Nothing is gained by
+// climbing further and a distant ancestor is all that's up there.
+//
+// A level naming BOTH disciplines returns "" rather than picking one — the same
+// call categoryFamilyFromText makes when a brief says both words, and a real
+// case: XY025018_Odeon_Selfie_Station is filed under Print and Digital at once.
+const FOLDER_FAMILY_MAX_DEPTH = 4;
+
+export function getFolderFamily(task, folderDictionary, childToParents = {}) {
+  if (!task?.parentIds?.length || !folderDictionary) return "";
+  let level = [...task.parentIds];
+  const visited = new Set(level);
+
+  for (let depth = 0; depth < FOLDER_FAMILY_MAX_DEPTH && level.length; depth++) {
+    // The whole level before climbing, so the nearest declaration wins even
+    // when a task sits in several folders at once.
+    const found = [
+      ...new Set(
+        level
+          .map((id) => familyFromFolderName(folderDictionary[id]?.title))
+          .filter(Boolean)
+      ),
+    ];
+    if (found.length === 1) return found[0];
+    if (found.length > 1) return "";
+
+    const next = [];
+    for (const id of level) {
+      for (const parentId of orderedParents(id, childToParents, folderDictionary)) {
+        if (!visited.has(parentId)) {
+          visited.add(parentId);
+          next.push(parentId);
+        }
+      }
+    }
+    level = next;
+  }
+  return "";
 }
 
 // ---------------------------------------------------------------------------

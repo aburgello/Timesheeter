@@ -18,17 +18,43 @@ const PRINT = "Print - ";
 const DIGITAL = "Digital - ";
 
 /**
+ * The discipline a FOLDER declares by being named after one.
+ *
+ * Print and Digital are sibling folders under each film — 304 and 301 of them
+ * across the account — and a job folder filed under one is the studio saying
+ * which discipline the job is, once, in the place the tree reserves for it.
+ * Whole-title equality, not a keyword: "Print" the folder, never "Printworks".
+ */
+export function familyFromFolderName(title) {
+  const t = String(title || "").trim().toUpperCase();
+  if (t === "PRINT") return "Print";
+  if (t === "DIGITAL") return "Digital";
+  return "";
+}
+
+/**
  * Which family a task's own text claims, or "" when it doesn't claim one.
  *
  * Both words present is treated as NO answer rather than as a tie broken by
  * position. A digital task whose brief mentions print-ready files says both
  * things, and guessing between them would be worse than leaving the member's
  * own choice alone.
+ *
+ * WHOLE TOKENS, not substrings. `includes("PRINT")` is the same free-text scan
+ * that countryCodes.js exists to abolish, and it fails the same way: "Sprint 1",
+ * "Sample Blueprints", "Showcase_ICEE_Printed" and "Manchester_Printworks"
+ * (a venue) all read as Print, and "EventDigitalScreens" as Digital. Across the
+ * account's 14,335 folder names, tokenising changes 60 answers and every one of
+ * them goes from a wrong answer to no answer.
+ *
+ * Split on anything that isn't alphanumeric, which is what makes this safe on
+ * the one input that genuinely carries the word: a /Volumes path, where "PRINT"
+ * is delimited by slashes.
  */
 export function categoryFamilyFromText(text) {
-  const t = String(text || "").toUpperCase();
-  const print = t.includes("PRINT");
-  const digital = t.includes("DIGITAL");
+  const tokens = String(text || "").toUpperCase().split(/[^A-Z0-9]+/);
+  const print = tokens.includes("PRINT");
+  const digital = tokens.includes("DIGITAL");
   if (print === digital) return "";
   return print ? "Print" : "Digital";
 }
@@ -50,7 +76,28 @@ export function categoryForFamily(category, family) {
   return CATEGORIES.includes(swapped) ? swapped : category;
 }
 
-/** The two combined: a member's default, resolved against one task's text. */
-export function defaultCategoryForTask(defaultCategory, taskText) {
-  return categoryForFamily(defaultCategory, categoryFamilyFromText(taskText));
+/**
+ * What discipline a task belongs to, most deliberate statement first.
+ *
+ * The FOLDER outranks the text, because it is the anchored statement and the
+ * text is incidental. The account settles it: the tree answers 3,080 of 3,741
+ * job folders, it answers 2,312 that the text leaves blank, and where the two
+ * disagree the tree has been right every time —
+ *
+ *     XY025979_Manchester_Printworks_IMAX   text: Print    tree: Digital
+ *     XY022497_Digital_Hand_Hold            text: Digital  tree: Print
+ *
+ * — because those are venues and asset names, not disciplines. Text remains the
+ * fallback for the 661 job folders filed under neither.
+ */
+export function categoryFamilyForTask(folderFamily, taskText) {
+  return folderFamily || categoryFamilyFromText(taskText);
+}
+
+/** The two combined: a member's default, resolved against one task. */
+export function defaultCategoryForTask(defaultCategory, taskText, folderFamily = "") {
+  return categoryForFamily(
+    defaultCategory,
+    categoryFamilyForTask(folderFamily, taskText)
+  );
 }

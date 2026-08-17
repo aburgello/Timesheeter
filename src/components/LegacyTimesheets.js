@@ -48,7 +48,7 @@ import {
 } from "../constants.js";
 import { resolveJobNumber } from "../utils/wrikeHelpers";
 import { resolveCountries } from "../utils/countryCodes";
-import { getFolderCountries, buildChildToParents, jobFolderDescription } from "../lib/wrikeEnrich";
+import { getFolderCountries, getFolderFamily, buildChildToParents, jobFolderDescription } from "../lib/wrikeEnrich";
 import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
 import { countryFieldIds, warmCountryFields } from "../lib/countryField";
 import { secondsToHM } from "../utils/timeHelpers";
@@ -67,7 +67,7 @@ import {
 } from "../utils/territories";
 import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
 import { mergeMultiCountryRows } from "../utils/mergeMultiCountry";
-import { defaultCategoryForTask } from "../utils/categoryFamily";
+import { defaultCategoryForTask, categoryFamilyForTask } from "../utils/categoryFamily";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
 
 // A grid textarea that grows to fit its text instead of hiding it.
@@ -874,12 +874,32 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     //
     // 3. The keyword rules, for members who have set no default. Unchanged
     //    behaviour, so nobody's pull changes until they opt in.
+    // Which discipline the TREE says this is, resolved once for both branches
+    // below. Same folders and same subtask fallback as the country climb above:
+    // a subtask has no folder membership of its own, so it reads its parent's.
+    const folderFamily = getFolderFamily(
+      linkedTask.parentIds?.length
+        ? linkedTask
+        : { ...linkedTask, parentIds: linkedTask.superTaskParentIds || [] },
+      folderTreeRef.current.folderDictionary,
+      folderTreeRef.current.childToParent
+    );
+
     let guessedCategory =
       linkedTask.customStatusName || linkedTask.status || "";
     if (!CATEGORIES.includes(guessedCategory)) {
+      // The tree first, then the task's text — see categoryFamilyForTask. The
+      // keyword branch used to ask `searchTarget.includes("PRINT")` directly,
+      // which is the substring read that made "Sprint 1" a print job; it now
+      // reads the same resolved answer the default branch does.
+      const family = categoryFamilyForTask(folderFamily, searchTarget);
       if (defaultCategory)
-        guessedCategory = defaultCategoryForTask(defaultCategory, searchTarget);
-      else if (searchTarget.includes("PRINT"))
+        guessedCategory = defaultCategoryForTask(
+          defaultCategory,
+          searchTarget,
+          folderFamily
+        );
+      else if (family === "Print")
         guessedCategory = "Print - Production/Localisation";
       else if (
         searchTarget.includes("REVISION") ||
