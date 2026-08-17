@@ -47,7 +47,7 @@ import {
   normalizeName,
 } from "../constants.js";
 import { resolveJobNumber } from "../utils/wrikeHelpers";
-import { resolveCountries } from "../utils/countryCodes";
+import { resolveCountriesWithSource } from "../utils/countryCodes";
 import { getFolderCountries, getFolderFamily, buildChildToParents, jobFolderDescription } from "../lib/wrikeEnrich";
 import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
 import { countryFieldIds, warmCountryFields } from "../lib/countryField";
@@ -67,7 +67,8 @@ import {
 } from "../utils/territories";
 import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
 import { mergeMultiCountryRows } from "../utils/mergeMultiCountry";
-import { defaultCategoryForTask, categoryFamilyForTask } from "../utils/categoryFamily";
+import { categoryForTaskWithSource } from "../utils/categoryFamily";
+import { countryPullSource, categoryPullSource } from "../utils/pullSource";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
 
 // A grid textarea that grows to fit its text instead of hiding it.
@@ -776,7 +777,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
   const guessFieldsFromTask = (linkedTask) => {
     if (!linkedTask)
-      return { jobNumber: "", territory: "", category: "", notes: "" };
+      return { jobNumber: "", territory: "", category: "", notes: "", countrySource: "", categorySource: "" };
 
     const searchTarget = `${linkedTask.title || ""} ${
       linkedTask.projectName || ""
@@ -805,13 +806,18 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           folderTreeRef.current.folderDictionary,
           folderTreeRef.current.childToParent
         );
-    const guessedTerritory = joinTerritories(
-      resolveCountries(
-        { ...linkedTask, folderCountries },
-        linkedTask.parentTaskTitle || "",
-        { countryFieldIds: countryFieldIds() }
-      )
+    // ...WithSource, so the row can say WHICH of the four rules answered. The
+    // resolver has always reported it; nothing read it until now. "" means the
+    // rules ran and none of them found anything, recorded as "none" so a
+    // deliberately-empty country reads differently from a row that was never
+    // pulled at all. See utils/pullSource.js.
+    const resolved = resolveCountriesWithSource(
+      { ...linkedTask, folderCountries },
+      linkedTask.parentTaskTitle || "",
+      { countryFieldIds: countryFieldIds() }
     );
+    const guessedTerritory = joinTerritories(resolved.countries);
+    const countrySource = resolved.source || "none";
 
     let guessedJob = "";
     let rawPrefix = "";
@@ -887,18 +893,23 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
     let guessedCategory =
       linkedTask.customStatusName || linkedTask.status || "";
+    // Where the Print/Digital half came from, for the same reason as above.
+    let categorySource = "wrike-status";
     if (!CATEGORIES.includes(guessedCategory)) {
-      // The tree first, then the task's text — see categoryFamilyForTask. The
-      // keyword branch used to ask `searchTarget.includes("PRINT")` directly,
-      // which is the substring read that made "Sprint 1" a print job; it now
-      // reads the same resolved answer the default branch does.
-      const family = categoryFamilyForTask(folderFamily, searchTarget);
-      if (defaultCategory)
-        guessedCategory = defaultCategoryForTask(
-          defaultCategory,
-          searchTarget,
-          folderFamily
-        );
+      // The tree first, then the task's text — see categoryFamilyWithSource.
+      // The keyword branch used to ask `searchTarget.includes("PRINT")`
+      // directly, which is the substring read that made "Sprint 1" a print job;
+      // it now reads the same resolved answer the default branch does.
+      const { category, family, source } = categoryForTaskWithSource(
+        defaultCategory,
+        searchTarget,
+        folderFamily
+      );
+      // No family means nothing said Print or Digital, so what stands is
+      // either the member's own default or the keyword fallback — a different
+      // answer to "why does it say this", and named as such.
+      categorySource = source || (defaultCategory ? "default" : "fallback");
+      if (defaultCategory) guessedCategory = category;
       else if (family === "Print")
         guessedCategory = "Print - Production/Localisation";
       else if (
@@ -945,6 +956,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       jobNumber: guessedJob,
       territory: guessedTerritory,
       category: guessedCategory,
+      countrySource,
+      categorySource,
       notes: cleanDescription,
       // Kept separate from `notes` on purpose: callers may only build a Job
       // Book entry from a description Wrike's folder tree vouched for.
@@ -1735,6 +1748,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             is3D: false,
             timeSpent: secondsToHM(totalHours * 3600),
             additionalTime: "none",
+            // Which rule produced the two resolved cells, for the hover. In
+            // memory only: useTasks' toDb is an explicit whitelist, so these
+            // never reach Supabase — see utils/pullSource.js for why they
+            // mustn't.
+            _countrySource: guessed.countrySource,
+            _categorySource: guessed.categorySource,
             // Raw, unrounded hours, carried only so mergeMultiCountryRows can
             // sum before rounding. useTasks maps an explicit column whitelist,
             // so this never reaches Supabase — but it is stripped there anyway
@@ -3204,7 +3223,20 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         {isSub ? (
                           // The job is set once at the group top, never per subrow —
                           // the subrow just carries its own country/category identity.
-                          <div className="flex items-center gap-1.5 pl-3 py-1 min-w-0" title={row.territory}>
+                          // This is the row Daisy screenshotted twice — the
+                          // country and category live here as text, with no
+                          // cell of their own to hang a tooltip on, so both
+                          // explanations join the existing title.
+                          <div
+                            className="flex items-center gap-1.5 pl-3 py-1 min-w-0"
+                            title={[
+                              row.territory,
+                              countryPullSource(row._countrySource),
+                              categoryPullSource(row._categorySource),
+                            ]
+                              .filter(Boolean)
+                              .join("\n")}
+                          >
                             <span className="text-[#768994] text-[11px] shrink-0">↳</span>
                             {/* Capped: this sits on one line next to the category,
                                 so a 20-country row can't be allowed to run away. */}
@@ -3283,7 +3315,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[140px]">
+                  <td
+                    className="p-2 border-r border-[#f0f4f8] align-middle w-[140px]"
+                    title={countryPullSource(row._countrySource)}
+                  >
                     <MultiCountrySelect
                       value={row.territory}
                       onChange={(val) =>
@@ -3298,7 +3333,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[180px]">
+                  <td
+                    className="p-2 border-r border-[#f0f4f8] align-middle w-[180px]"
+                    title={categoryPullSource(row._categorySource)}
+                  >
                     <TableSearchableSelect
                       options={CATEGORIES}
                       value={row.category}

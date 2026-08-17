@@ -1,4 +1,4 @@
-import { resolveCountries } from "./countryCodes";
+import { resolveCountriesWithSource } from "./countryCodes";
 import { countryFieldIds } from "../lib/countryField";
 import { joinTerritories, hasTerritory } from "./territories";
 
@@ -108,7 +108,7 @@ export const resolveJobNumber = (fullCode, jobOptions = []) => {
  */
 export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "", getJob = null) => {
   if (!linkedTask)
-    return { jobNumber: "", territory: "", category: "⚠️ Unassigned", notes: "" };
+    return { jobNumber: "", territory: "", category: "⚠️ Unassigned", notes: "", countrySource: "" };
 
   const titleText = linkedTask.title || "";
 
@@ -176,11 +176,17 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "",
   // searchTarget is deliberately NOT consulted — see countryCodes.js for what
   // scanning it cost and why production chose an empty country over a guessed
   // one.
-  const guessedTerritory = joinTerritories(
-    resolveCountries(linkedTask, linkedTask.parentTaskTitle || "", {
-      countryFieldIds: countryFieldIds(),
-    })
+  // ...WithSource: the rule that answered is carried out with the answer, so a
+  // cell can explain itself on hover. See utils/pullSource.js. There is no
+  // category source to report here — this funnel doesn't guess one, it returns
+  // "⚠️ Unassigned" and leaves the choice to the member.
+  const resolvedCountries = resolveCountriesWithSource(
+    linkedTask,
+    linkedTask.parentTaskTitle || "",
+    { countryFieldIds: countryFieldIds() }
   );
+  const guessedTerritory = joinTerritories(resolvedCountries.countries);
+  const countrySource = resolvedCountries.source || "none";
 
   // --- Job number guess ---
   // A dedicated "Job Number" custom field may carry a suffix beyond the base
@@ -296,5 +302,6 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "",
     notes: linkedTask.title || "",
     filmTitle,
     client,
+    countrySource,
   };
 };

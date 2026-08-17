@@ -91,13 +91,35 @@ export function categoryForFamily(category, family) {
  * fallback for the 661 job folders filed under neither.
  */
 export function categoryFamilyForTask(folderFamily, taskText) {
-  return folderFamily || categoryFamilyFromText(taskText);
+  return categoryFamilyWithSource(folderFamily, taskText).family;
 }
 
-/** The two combined: a member's default, resolved against one task. */
+/**
+ * The same answer, plus which of the two said it — "folder", "task-text", or ""
+ * when neither did. Carried onto the pulled row so a member can hover a cell and
+ * see why it says what it says, instead of it taking a measurement session to
+ * find out. See utils/pullSource.js.
+ */
+export function categoryFamilyWithSource(folderFamily, taskText) {
+  if (folderFamily) return { family: folderFamily, source: "folder" };
+  const fromText = categoryFamilyFromText(taskText);
+  return { family: fromText, source: fromText ? "task-text" : "" };
+}
+
+/**
+ * Everything one task's category decision produces: the resolved category, the
+ * family behind it, and which of the two evidences said so.
+ *
+ * This is what the pull calls, because it needs the source as well as the
+ * answer and must not resolve the family twice to get both. `family` comes back
+ * too so a caller with no stored default can still branch on it.
+ */
+export function categoryForTaskWithSource(defaultCategory, taskText, folderFamily = "") {
+  const { family, source } = categoryFamilyWithSource(folderFamily, taskText);
+  return { category: categoryForFamily(defaultCategory, family), family, source };
+}
+
+/** The category alone, for callers that don't care where it came from. */
 export function defaultCategoryForTask(defaultCategory, taskText, folderFamily = "") {
-  return categoryForFamily(
-    defaultCategory,
-    categoryFamilyForTask(folderFamily, taskText)
-  );
+  return categoryForTaskWithSource(defaultCategory, taskText, folderFamily).category;
 }
