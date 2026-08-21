@@ -172,3 +172,112 @@ check(
   countriesFromFolderNames(["XY022180_XYi_Order_Of_Service_Lou"]),
   []
 );
+
+// ---------------------------------------------------------------------------
+// Market FOLDER names, read whole (MAGI FOLDER NAMINGS, 21 Aug 2026)
+// ---------------------------------------------------------------------------
+// MAGI's sheet gives a folder name as well as a file code for all 94 markets,
+// and qualifies eleven of them in brackets. The suffix walk reads the LAST
+// token of a name, so every one of those died on the bracket: "FLEMISH" isn't
+// a code, so the walk stopped before it ever reached "Belgium".
+check(
+  "a language-qualified market folder is still that market",
+  countriesFromFolderNames(["Belgium (Flemish)"]),
+  ["Belgium"]
+);
+check(
+  "and the other half of the same split",
+  countriesFromFolderNames(["Belgium (French)"]),
+  ["Belgium"]
+);
+check(
+  "all three Swiss folders are Switzerland",
+  [
+    ...countriesFromFolderNames(["Switzerland (French)"]),
+    ...countriesFromFolderNames(["Switzerland (German)"]),
+    ...countriesFromFolderNames(["Switzerland (Italian)"]),
+  ],
+  ["Switzerland", "Switzerland", "Switzerland"]
+);
+check(
+  "Thailand (English) is Thailand",
+  countriesFromFolderNames(["Thailand (English)"]),
+  ["Thailand"]
+);
+
+// The worst of them, because it half-worked: "Arabic" is a territory in its own
+// right, so the walk resolved the bracket and collected it as a SECOND market —
+// a language chip riding along on the row beside the country.
+check(
+  "a language qualifier is not a second market",
+  countriesFromFolderNames(["Middle East (Arabic)"]),
+  ["Middle East"]
+);
+check(
+  "nor on the UAE folder, which used to come back as two",
+  countriesFromFolderNames(["Middle East & SA & UAE (Arabic)"]),
+  ["United Arab Emirates"]
+);
+check(
+  "and the English half resolves at all now",
+  countriesFromFolderNames(["Middle East & SA & UAE (English)"]),
+  ["United Arab Emirates"]
+);
+
+// Names MAGI writes differently from us. Matching the whole name is what makes
+// these one lookup rather than a spelling problem.
+check("Canada - French", countriesFromFolderNames(["Canada - French"]), ["Canadian-French"]);
+check("North Macedonia", countriesFromFolderNames(["North Macedonia"]), ["Macedonia"]);
+check("Lat-Am", countriesFromFolderNames(["Lat-Am"]), ["Latam / Las"]);
+check("International OV", countriesFromFolderNames(["International OV"]), ["OV"]);
+// MAGI spells it Telegu, the timesheet site spells it Telugu.
+check("India Telegu", countriesFromFolderNames(["India Telegu"]), ["India - Telugu"]);
+
+// Multi-word territory names were never readable by the walk either — "Kong"
+// and "Montenegro" are not codes — so these folders resolved to nothing at all,
+// flag or no flag.
+check("Hong Kong", countriesFromFolderNames(["Hong Kong"]), ["Hong Kong"]);
+check("Serbia & Montenegro", countriesFromFolderNames(["Serbia & Montenegro"]), ["Serbia & Montenegro"]);
+check(
+  "a flag emoji on the folder is punctuation, not a failed code",
+  countriesFromFolderNames(["Switzerland (French) 🇨🇭"]),
+  ["Switzerland"]
+);
+// Same bug, opposite outcome: this one resolved, to the wrong thing, because
+// "Domestic" is a territory and it was the last token.
+check(
+  "Puerto Rico is Puerto Rico, not Domestic",
+  countriesFromFolderNames(["Puerto Rico (Domestic)"]),
+  ["Puerto Rico (Domestic)"]
+);
+
+// The whole-name match is whole-string equality against a closed list, so it
+// cannot reach into a job folder and invent a market the way a scan would.
+check(
+  "a job folder is not a market folder",
+  countriesFromFolderNames(["XY025995_INTL_DIGITAL_Outdoor_Campaign"]),
+  []
+);
+check(
+  "and the job-slot rule still runs behind it",
+  countriesFromFolderNames(["XY026036_AUS_DOOH_Campaign"]),
+  ["Australia"]
+);
+
+// ---------------------------------------------------------------------------
+// Markets the sheet lists that we only half-had
+// ---------------------------------------------------------------------------
+// MDV and NPL used to resolve to "Maldives"/"Nepal" via REGION_ALIASES while
+// TERRITORIES held neither — a chip with no flag, absent from the picker, and
+// no checkbox on the timesheet site. Both are real territories now, and the
+// 2-letter halves MAGI lists resolve too.
+check("Maldives, three letters", countriesFromTaskName("TAD_Print_MDV"), ["Maldives"]);
+check("Maldives, two letters", countriesFromTaskName("TAD_Print_MV"), ["Maldives"]);
+check("Nepal, three letters", countriesFromTaskName("TAD_Print_NPL"), ["Nepal"]);
+check("Nepal, two letters", countriesFromTaskName("TAD_Print_NP"), ["Nepal"]);
+check("and as market folders", countriesFromFolderNames(["Nepal"]), ["Nepal"]);
+
+// "CA" is gone from MAGI's sheet — it listed Canada-FR against it, and now
+// lists CAN-FR alone. With the override dropped it falls back to REGION_ALIASES.
+check("CA is plain Canada again", countriesFromTaskName("TAD_Print_CA"), ["Canada"]);
+check("CAN-FR is still Canadian-French", countriesFromTaskName("TAD_Print_CAN-FR"), ["Canadian-French"]);

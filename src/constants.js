@@ -85,11 +85,13 @@ export const TERRITORIES = [
   "Lithuania",
   "Macedonia",
   "Malaysia",
+  "Maldives",
   "Malta",
   "Mexico",
   "Middle East",
   "Moldova",
   "Mongolia",
+  "Nepal",
   "Netherlands",
   "New Zealand",
   "Norway",
@@ -192,7 +194,7 @@ export const TERRITORY_CODES = {
   Brazil: "BR",
   Bulgaria: "BG",
   Cambodia: "KH",
-  "Canadian-French": "CA",
+  "Canadian-French": "CAN-FR",
   Chile: "CL",
   China: "CN",
   CIS: "CIS",
@@ -232,10 +234,12 @@ export const TERRITORY_CODES = {
   Lithuania: "LT",
   Macedonia: "MK",
   Malaysia: "MY",
+  Maldives: "MV",
   Mexico: "MX",
   "Middle East": "ME",
   Moldova: "MD",
   Mongolia: "MN",
+  Nepal: "NP",
   Netherlands: "NL",
   "New Zealand": "NZ",
   Norway: "NO",
@@ -286,8 +290,20 @@ export const TERRITORY_CODES = {
 // Every code on MAGI's sheet, 2- and 3-letter alike, mapped to the territory
 // we store it as. This is what makes a "_BG" or "_BGR" suffix resolve, and it
 // is the authority: where it disagrees with the older hand-grown REGION_ALIASES
-// it wins. One consequence worth knowing — MAGI's "CA" is Canada-FR, not
-// Canada, so a "_CA" suffix now resolves to Canadian-French.
+// it wins.
+//
+// Checked against MAGI FOLDER NAMINGS (21 Aug 2026), which lists 94 markets and
+// 180 codes. All 180 resolve here. Two changes that document forced:
+//
+//   · "CA" is gone from it. It used to be listed for Canada-FR, and this table
+//     carried it as an override of REGION_ALIASES' "CA" -> Canada. The sheet
+//     now lists CAN-FR alone, so the override has no backing and has been
+//     removed — a "_CA" suffix means plain Canada again.
+//   · Maldives (MV/MDV) and Nepal (NP/NPL) were on the sheet and only half
+//     here: the 3-letter forms sat in REGION_ALIASES pointing at territory
+//     names TERRITORIES didn't contain, so they resolved to a value nothing
+//     else in the app recognised — no flag, not in the picker, no checkbox on
+//     the timesheet site. Both markets are now real territories.
 export const MAGI_MARKET_CODES = {
   "AE-AR": "United Arab Emirates",
   "AE-EN": "United Arab Emirates",
@@ -315,7 +331,6 @@ export const MAGI_MARKET_CODES = {
   BOL: "Bolivia",
   BR: "Brazil",
   BRA: "Brazil",
-  CA: "Canadian-French",
   "CAN-FR": "Canadian-French",
   "CH-DE": "Switzerland",
   "CH-FR": "Switzerland",
@@ -393,6 +408,7 @@ export const MAGI_MARKET_CODES = {
   LVA: "Latvia",
   MD: "Moldova",
   MDA: "Moldova",
+  MDV: "Maldives",
   ME_AR: "Middle East",
   ME_EN: "Middle East",
   MENA_AR: "Middle East",
@@ -402,6 +418,7 @@ export const MAGI_MARKET_CODES = {
   MKD: "Macedonia",
   MN: "Mongolia",
   MNG: "Mongolia",
+  MV: "Maldives",
   MX: "Mexico",
   MY: "Malaysia",
   MYS: "Malaysia",
@@ -409,6 +426,8 @@ export const MAGI_MARKET_CODES = {
   NL: "Netherlands",
   NO: "Norway",
   NOR: "Norway",
+  NP: "Nepal",
+  NPL: "Nepal",
   NZ: "New Zealand",
   NZL: "New Zealand",
   OV: "OV",
@@ -465,6 +484,52 @@ export const MAGI_MARKET_CODES = {
   VIE: "Vietnam",
   VN: "Vietnam",
   ZA: "South Africa",
+};
+
+// The other half of MAGI's sheet: the name of the market FOLDER, as opposed to
+// the code that goes in a file name. Their document gives both for all 94
+// markets ("Switzerland (French)" — "CH-FR / SUI-FR"), and until now we only
+// read the codes.
+//
+// Folder names are matched WHOLE, not walked token by token, which is why they
+// need a table of their own. The suffix walk reads the last token of a name and
+// stops at the first one that isn't a code, so every folder MAGI qualifies in
+// brackets died on the bracket:
+//
+//     Belgium (Flemish)     -> []   "FLEMISH" isn't a code, walk stops
+//     Switzerland (French)  -> []
+//     Thailand (English)    -> []
+//     Middle East (Arabic)  -> [Middle East, Arabic]   ← worse: "Arabic" IS a
+//                                                        territory, so the
+//                                                        language rode along
+//                                                        as a second chip
+//
+// Only the 15 that don't already resolve are listed. The other 79 folder names
+// ARE their territory name once punctuation is stripped ("Hong Kong",
+// "Serbia & Montenegro", "India English" -> "India - English"), so the
+// whole-name match finds them in the existing lookup with nothing added here.
+//
+// Several of these collapse a distinction MAGI draws and we don't: they split
+// Belgium and Switzerland by language and we carry one territory for each,
+// exactly as MAGI_MARKET_CODES already maps BE-FL and BE-FR both to Belgium.
+export const MAGI_MARKET_FOLDERS = {
+  "International OV": "OV",
+  "Belgium (Flemish)": "Belgium",
+  "Belgium (French)": "Belgium",
+  "Canada - French": "Canadian-French",
+  // MAGI spells it Telegu; the timesheet site spells it Telugu, and the site
+  // wins for stored values (see TERRITORIES).
+  "India Telegu": "India - Telugu",
+  "Lat-Am": "Latam / Las",
+  "Middle East & SA & UAE (Arabic)": "United Arab Emirates",
+  "Middle East & SA & UAE (English)": "United Arab Emirates",
+  "Middle East (Arabic)": "Middle East",
+  "Middle East (English)": "Middle East",
+  "North Macedonia": "Macedonia",
+  "Switzerland (French)": "Switzerland",
+  "Switzerland (German)": "Switzerland",
+  "Switzerland (Italian)": "Switzerland",
+  "Thailand (English)": "Thailand",
 };
 
 export const TERRITORY_FLAGS = {
@@ -530,11 +595,13 @@ export const TERRITORY_FLAGS = {
   Lithuania: "🇱🇹",
   Macedonia: "🇲🇰",
   Malaysia: "🇲🇾",
+  Maldives: "🇲🇻",
   Malta: "🇲🇹",
   Mexico: "🇲🇽",
   "Middle East": "🌍",
   Moldova: "🇲🇩",
   Mongolia: "🇲🇳",
+  Nepal: "🇳🇵",
   Netherlands: "🇳🇱",
   "New Zealand": "🇳🇿",
   Norway: "🇳🇴",

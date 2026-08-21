@@ -1,4 +1,4 @@
-import { FILM_MAPPINGS, motionTeamShortName, TERRITORIES, REGION_ALIASES, MAGI_MARKET_CODES, COUNTRY_SUFFIX_EXCEPTIONS } from "../constants.js";
+import { FILM_MAPPINGS, motionTeamShortName, TERRITORIES, REGION_ALIASES, MAGI_MARKET_CODES, MAGI_MARKET_FOLDERS, COUNTRY_SUFFIX_EXCEPTIONS } from "../constants.js";
 import { countriesFromFolderNames } from "../utils/countryCodes";
 import { familyFromFolderName } from "../utils/categoryFamily";
 import { countryFieldIds } from "./countryField";
@@ -37,6 +37,7 @@ const TERRITORY_TOKENS = new Set(
     ...TERRITORIES,
     ...Object.keys(REGION_ALIASES),
     ...Object.keys(MAGI_MARKET_CODES),
+    ...Object.keys(MAGI_MARKET_FOLDERS),
     ...Object.keys(COUNTRY_SUFFIX_EXCEPTIONS),
   ].map((t) => String(t).toUpperCase())
 );

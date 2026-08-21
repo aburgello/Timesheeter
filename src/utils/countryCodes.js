@@ -3,6 +3,7 @@ import {
   TERRITORIES,
   REGION_ALIASES,
   MAGI_MARKET_CODES,
+  MAGI_MARKET_FOLDERS,
   COUNTRY_SUFFIX_EXCEPTIONS,
 } from "../constants";
 
@@ -39,7 +40,8 @@ const codeKey = (s) =>
 
 // One lookup, built once. Order matters where keys collide, weakest first:
 //
-//   territory names  <  REGION_ALIASES  <  MAGI_MARKET_CODES  <  exceptions
+//   territory names  <  REGION_ALIASES  <  MAGI_MARKET_CODES
+//                    <  MAGI_MARKET_FOLDERS  <  exceptions
 //
 // MAGI outranks the hand-grown alias table because it's the list production
 // actually writes against — where the two disagree, theirs is the real one.
@@ -49,6 +51,13 @@ const codeKey = (s) =>
 // Note codeKey strips punctuation, so MAGI's "BE-FL" and "ME_AR" are stored as
 // BEFL and MEAR — which is also how they'd arrive off the end of a task name
 // however someone punctuated them.
+//
+// MAGI_MARKET_FOLDERS goes in here too, even though most of its keys have
+// spaces in them and the walk below only ever hands this lookup single tokens.
+// That's deliberate rather than sloppy: a multi-word key is simply unreachable
+// from the walk, so the only thing that can find it is the whole-name match in
+// countriesFromFolderNames — which is exactly the one caller that should.
+
 // Codes this studio's own naming already uses for something else, blocked in
 // the one position where the two collide.
 //
@@ -89,6 +98,7 @@ const CODE_LOOKUP = (() => {
   }
   add(REGION_ALIASES);
   add(MAGI_MARKET_CODES);
+  add(MAGI_MARKET_FOLDERS);
   add(COUNTRY_SUFFIX_EXCEPTIONS);
   return map;
 })();
@@ -148,7 +158,15 @@ export const resolveCountryCode = (token) => {
  * codes DO appear (TT under Trinidad), because they still resolve in the batch
  * slot and the Country field; only the end-of-name position refuses them.
  */
-const ALIAS_SOURCES = [REGION_ALIASES, MAGI_MARKET_CODES, COUNTRY_SUFFIX_EXCEPTIONS];
+const ALIAS_SOURCES = [
+  REGION_ALIASES,
+  MAGI_MARKET_CODES,
+  // The folder names belong here for the same reason the codes do: they're
+  // things that resolve, so the panel should say so. They're also the answer to
+  // "why did this row come out as Switzerland" when the folder said French.
+  MAGI_MARKET_FOLDERS,
+  COUNTRY_SUFFIX_EXCEPTIONS,
+];
 
 // What the exceptions resolve TO ("_Multiple_", "_Masters_", "OV") rather than
 // the suffixes people write ("MARKETS", "MASTERS", "OV") — these are compared
@@ -388,14 +406,38 @@ const jobFolderCountry = (name) => {
  * that sketch now also resolves on its own, from the batch slot; it did not
  * when this rule was written, which is why the tree was the only way in.)
  *
- * Two shapes are read, because production names campaigns two ways: the market
- * FOLDER above, and the market slot of a JOB folder — see jobFolderCountry.
+ * Three shapes are read, because production names campaigns three ways: the
+ * folder named for a market in full (below), the market folder read as a
+ * suffix, and the market slot of a JOB folder — see jobFolderCountry.
  *
  * `names` must be ordered nearest folder first; the first that resolves wins,
  * so a market folder always beats the campaign root above it.
  */
 export const countriesFromFolderNames = (names) => {
   for (const name of names || []) {
+    // THE WHOLE NAME, FIRST.
+    //
+    // MAGI's sheet names a market folder in full — "Switzerland (French)",
+    // "Middle East & SA & UAE (Arabic)", "Hong Kong" — and the suffix walk
+    // below can only ever read the LAST token of that, which is the wrong unit
+    // for a name that was written as one thing. Matching the whole name is
+    // both more accurate and safer than any amount of cleverness inside the
+    // walk: it's whole-string equality against a closed list, so nothing here
+    // can invent a market out of a folder that doesn't name one.
+    //
+    // codeKey strips everything that isn't a letter or digit, which is what
+    // makes this one comparison cover how the name is actually written in the
+    // tree: "Chile 🇨🇱" and "Hong Kong 🇭🇰" lose the flag, and MAGI's
+    // brackets, hyphens and ampersands come out in the wash.
+    //
+    // Ahead of the walk because it is the more specific reading of the same
+    // string. "Middle East (Arabic)" resolves here as Middle East; left to the
+    // walk it came back as [Middle East, Arabic], because "Arabic" is a
+    // territory in its own right and the walk collects every trailing token
+    // that resolves.
+    const whole = resolveCountryCode(name);
+    if (whole) return [whole];
+
     const suffix = countriesFromTaskName(name);
 
     // A NAMED MARKET BEATS A SUFFIX EXCEPTION, across the two reads of one
