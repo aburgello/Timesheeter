@@ -1,6 +1,6 @@
 import React, { useState, useLayoutEffect, useRef } from "react";
 import { ChevronDown, Check } from "lucide-react";
-import { TERRITORIES } from "../../constants";
+import { TERRITORIES, isUnset } from "../../constants";
 import { layoutRect, layoutViewport } from "../../utils/zoom";
 import {
   splitTerritories,
@@ -65,9 +65,15 @@ export default function MultiCountrySelect({
 
   const selected = splitTerritories(value);
   const isForm = variant === "form";
-  // Only flag an empty one — once something is picked the row is fine, whatever
-  // the caller still thinks.
-  const showAttention = needsAttention && selected.length === 0 && !disabled;
+  // Only flag an unanswered one — once something is picked the row is fine,
+  // whatever the caller still thinks.
+  //
+  // `every` rather than a length test, because a pulled row's territory is the
+  // "⚠️ Unassigned" placeholder rather than an empty string (see isUnset). The
+  // length test read that as a country and quietly skipped the highlight on
+  // exactly the rows most likely to be missing one. An empty list still counts
+  // as unanswered: [].every() is true.
+  const showAttention = needsAttention && selected.every(isUnset) && !disabled;
   // How much fits before the trigger has to fall back to flags-only: the form
   // variant is a full-width field, the table variant a ~140px cell.
   const nameLimit = isForm ? 6 : 3;

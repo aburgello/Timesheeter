@@ -136,6 +136,23 @@ export const TERRITORIES = [
 // deliberate suffix, folder name or custom field — so the exclusion list had
 // no readers left.)
 
+// What the Wrike pull writes into a cell nobody has answered yet. It is a real
+// stored value, not an empty string, so every "has this been filled in?" test
+// has to know about it — a check for emptiness alone silently passes every
+// pulled row, which is the only kind of row that is ever missing anything.
+//
+// guessFieldsFromTask returns it for the category always (that funnel doesn't
+// guess a category at all) and for the territory whenever the resolver came
+// back with nothing. HistoryTab has painted it rose for a while; the row
+// pickers do the same now. See utils/wrikeHelpers.js, where it is written.
+export const UNASSIGNED = "⚠️ Unassigned";
+
+/** Empty, whitespace, or the placeholder above: all mean "nobody said". */
+export const isUnset = (v) => {
+  const s = String(v ?? "").trim();
+  return !s || s === UNASSIGNED;
+};
+
 // The suffixes production agreed to write at the end of a task name when the
 // work isn't for one named country (agreed with Guillaume, 4 Aug 2026). They
 // are read exactly like a country code — see countryCodes.js — and exist so a

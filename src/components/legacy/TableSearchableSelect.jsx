@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import { layoutRect, layoutViewport } from "../../utils/zoom";
+import { isUnset } from "../../constants";
 
 // --- MODERN SEARCHABLE SELECT FOR TABLE ROWS ---
 export default function TableSearchableSelect({
@@ -31,6 +32,12 @@ export default function TableSearchableSelect({
   // `hint` for why this can't live on the cell around it.
   hint = "",
   pinnedLabel = "Most used",
+  // Set where this field is required and still empty. Same rule and the same
+  // rose as MultiCountrySelect's prop of the same name, deliberately: country
+  // and category are the two things a row can't go over to the timesheet
+  // without, and a person scanning the table shouldn't have to learn two
+  // different signals for one kind of gap.
+  needsAttention = false,
 }) {
   const isOpen = activeDropdown === dropdownId && !disabled;
   const [searchTerm, setSearchTerm] = useState(value || "");
@@ -126,6 +133,13 @@ export default function TableSearchableSelect({
   if (isCountry) gridClass = "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4";
   else if (isTime) gridClass = "grid-cols-2";
 
+  // Keyed off the committed `value`, never `searchTerm`. searchTerm doubles as
+  // the search box, so it is legitimately empty the moment someone clears it to
+  // type — reading that as "nothing chosen" would flash the cell red while they
+  // were in the middle of choosing. An open dropdown paints blue anyway, so in
+  // practice this only shows on a closed, untouched cell.
+  const showAttention = needsAttention && isUnset(value) && !disabled;
+
   return (
     <div
       ref={wrapperRef}
@@ -149,6 +163,10 @@ export default function TableSearchableSelect({
             : isOpen
             ? `border-[#12a0e1] ring-4 ring-[#12a0e1]/10 ${
                 isDarkModal ? "bg-[#1e2530]" : "bg-white"
+              }`
+            : showAttention
+            ? `border-rose-400 ring-2 ring-rose-400/15 ${
+                isDarkModal ? "bg-rose-500/5" : "bg-rose-50/60"
               }`
             : `border-transparent ${
                 isDarkModal
@@ -184,7 +202,9 @@ export default function TableSearchableSelect({
             isDarkModal
               ? "text-slate-100 placeholder:text-slate-600"
               : "text-slate-800 placeholder:text-slate-400"
-          } ${isCountry && !isDarkModal ? "text-[#3b5998]" : ""} ${
+          } ${showAttention ? "placeholder:text-rose-500" : ""} ${
+            isCountry && !isDarkModal ? "text-[#3b5998]" : ""
+          } ${
             isTime ? "text-center" : ""
           } ${disabled ? "cursor-not-allowed" : ""}`}
         />

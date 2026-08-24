@@ -3353,6 +3353,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       setActiveDropdown={setActiveDropdown}
                       isCategory={true}
                       disabled={!rowsAreEditable}
+                      needsAttention={rowsAreEditable}
                     />
                   </td>
 
