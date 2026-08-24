@@ -72,7 +72,7 @@ export default function ExportModal({
             </h4>
             <p className="text-xs text-[#323b43] mb-4 leading-relaxed">
               Copy your week here, then paste it into the bookmark you saved in
-              your browser's favourites — it fills the rows in for you.
+              your browser's favourites. It fills the rows in for you.
             </p>
             <PasteNextSteps />
             <button
@@ -93,7 +93,7 @@ export default function ExportModal({
               <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> CSV Export
             </h4>
             <p className="text-xs text-[#323b43] mb-4 leading-relaxed">
-              Download all logged tasks as a CSV file — easy to open in Excel or Google Sheets.
+              Download all logged tasks as a CSV file, ready to open in Excel or Google Sheets.
             </p>
             <button
               onClick={() => handleExportCSV(tasks)}

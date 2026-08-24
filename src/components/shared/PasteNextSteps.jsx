@@ -27,34 +27,20 @@ const STEPS = [
   {
     icon: MousePointerClick,
     title: "Open your timesheet website",
-    body: "Go to the day you're filling in — the bookmark adds rows to whichever Day tab is showing.",
+    body: "Go to the day you're filling in. The bookmark fills whichever Day tab is showing.",
   },
   {
     icon: Star,
     title: "Click your bookmark up in the favourites bar",
-    body: "The one you saved when you set this up — whatever you named it.",
+    body: "The one you saved when you set this up.",
     chip: true,
   },
   {
     icon: ClipboardPaste,
     title: "Paste into the box, then hit Populate Rows",
-    body: 'A window called "Automate Timesheet" opens with an empty box. Click it and paste — that\'s what you just copied.',
-    paste: true,
+    body: 'A window called "Automate Timesheet" opens with an empty box. Paste what you just copied there!',
   },
 ];
-
-// Cmd on a Mac, Ctrl everywhere else. Telling a Mac user to press Ctrl+V is a
-// small thing that stops the whole sequence dead, and this is the audience that
-// won't translate it themselves. userAgentData is the non-deprecated source and
-// isn't in Safari, so platform is the fallback; if both are silent we say Ctrl,
-// which is right for the majority of the studio.
-const isMac = () => {
-  const p =
-    (typeof navigator !== "undefined" &&
-      (navigator.userAgentData?.platform || navigator.platform)) ||
-    "";
-  return /mac/i.test(p);
-};
 
 // `popover` draws the card's own floating chrome, hung upward off whatever
 // `relative` wrapper the caller put it in. It lives here rather than at the call
@@ -66,7 +52,6 @@ export default function PasteNextSteps({
   onDismiss,
   popover = false,
 }) {
-  const pasteKey = isMac() ? "⌘V" : "Ctrl+V";
   const ref = useRef(null);
 
   useEffect(() => {
@@ -143,15 +128,6 @@ export default function PasteNextSteps({
                       <span className="h-2.5 w-12 rounded bg-[#dce4ec]" />
                     </div>
                   </div>
-                )}
-
-                {step.paste && (
-                  <p className="text-[11px] text-[#768994] mt-1.5">
-                    Paste with{" "}
-                    <kbd className="px-1.5 py-0.5 rounded border border-[#dce4ec] bg-white font-mono text-[10px] font-bold text-[#122027]">
-                      {pasteKey}
-                    </kbd>
-                  </p>
                 )}
               </div>
             </li>
