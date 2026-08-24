@@ -439,10 +439,10 @@ export function useTaskActions(state) {
       document.execCommand("copy");
       document.body.removeChild(tempTextArea);
       setJsonCopied(true);
-      triggerToast("JSON Copied! Ready to paste into Timesheet Bookmarklet.", "success");
+      triggerToast("Copied! Now click your timesheet bookmark and paste.", "success");
       setTimeout(() => setJsonCopied(false), 3000);
     } catch {
-      triggerToast("Failed to copy JSON.");
+      triggerToast("Nothing was copied. Check your browser's clipboard permissions.");
     }
   };
 

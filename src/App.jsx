@@ -483,7 +483,7 @@ export default function App() {
     }
     if (hasPage("timesheet")) {
       actions.push(
-        { id: "action-copy-ts", title: "Copy JSON", desc: "Copy your Tracker week to the clipboard", type: "Data", icon: Copy },
+        { id: "action-copy-ts", title: "Copy Me!", desc: "Copy your Tracker week, ready to paste into your timesheet bookmark", type: "Data", icon: Copy },
         { id: "action-csv", title: "Download CSV", desc: "Export your Tracker week as a CSV file", type: "Data", icon: FileDown },
       );
     }

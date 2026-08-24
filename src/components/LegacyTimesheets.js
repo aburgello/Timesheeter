@@ -56,6 +56,7 @@ import { COLUMNS, DAYS, TIME_OPTIONS, getDarkTagStyle } from "./legacy/legacyCon
 import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
 import TableSearchableSelect from "./legacy/TableSearchableSelect";
 import MultiCountrySelect from "./shared/MultiCountrySelect";
+import PasteNextSteps from "./shared/PasteNextSteps";
 import { toIsoDate } from "../utils/dates";
 import {
   splitTerritories,
@@ -323,6 +324,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   }, []);
 
   const [jsonCopied, setJsonCopied] = useState(false);
+  // Separate from jsonCopied, which is the 3-second colour flash on the
+  // button. The steps have to be readable at reading speed, so they stay up
+  // until dismissed — see PasteNextSteps.
+  const [showPasteSteps, setShowPasteSteps] = useState(false);
 
   const [wrikeFullName, setWrikeFullName] = useState("");
   const [wrikeUserId, setWrikeUserId] = useState("");
@@ -1942,10 +1947,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       }
 
       setJsonCopied(true);
+      setShowPasteSteps(true);
       setTimeout(() => setJsonCopied(false), 3000);
     } catch (err) {
       console.error("Failed to copy JSON", err);
-      showToast("Failed to copy JSON. Check browser clipboard permissions.");
+      showToast("Nothing was copied. Check your browser's clipboard permissions.");
     }
   };
 
@@ -3612,21 +3618,36 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               </div>
             )}
 
-            <button
-              onClick={handleCopyJSON}
-              className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl shadow-sm transition-[background-color,box-shadow,transform] active:scale-95 ${
-                jsonCopied
-                  ? "bg-[#1cc1a5] text-white shadow-[#1cc1a5]/30"
-                  : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-[#12a0e1]/30"
-              }`}
-            >
-              {jsonCopied ? (
-                <CheckCircle className="w-4 h-4" />
-              ) : (
-                <Copy className="w-4 h-4" />
+            {/* The steps hang off the button that produced them, so the answer
+                to "what do I do with this?" is where the question was asked.
+                Upward and right-aligned: this is the bottom action bar, and the
+                right-hand end of it. */}
+            <div className="relative">
+              <button
+                onClick={handleCopyJSON}
+                title="Copies this week's rows, ready to paste into your timesheet bookmark"
+                className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl shadow-sm transition-[background-color,box-shadow,transform] active:scale-95 ${
+                  jsonCopied
+                    ? "bg-[#1cc1a5] text-white shadow-[#1cc1a5]/30"
+                    : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-[#12a0e1]/30"
+                }`}
+              >
+                {jsonCopied ? (
+                  <CheckCircle className="w-4 h-4" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
+                {jsonCopied ? "Copied!" : "Copy Me!"}
+              </button>
+
+              {showPasteSteps && (
+                <PasteNextSteps
+                  copied
+                  popover
+                  onDismiss={() => setShowPasteSteps(false)}
+                />
               )}
-              {jsonCopied ? "JSON Copied!" : "Copy JSON"}
-            </button>
+            </div>
           </div>
         </div>
       </div>

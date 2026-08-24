@@ -1,5 +1,6 @@
 import React from "react";
 import { X, Play, Copy, Check, Upload, FileSpreadsheet } from "lucide-react";
+import PasteNextSteps from "../shared/PasteNextSteps";
 
 function formatSeconds(totalSeconds) {
   const h = Math.floor(totalSeconds / 3600);
@@ -61,23 +62,29 @@ export default function ExportModal({
         </div>
 
         <div className="space-y-6 overflow-y-auto pr-2 pb-2">
+          {/* Unlike the Legacy button, the steps sit here permanently rather
+              than appearing on copy: this panel is somewhere you go on purpose,
+              with room to read, so it can answer "how does this work?" before
+              the click as well as "what now?" after it. */}
           <div className="bg-[#12a0e1]/5 p-5 rounded-2xl border border-[#12a0e1]/20">
-            <h4 className="text-sm font-bold text-[#122027] mb-2 flex items-center gap-2">
-              <Play className="w-4 h-4 text-[#12a0e1]" /> Bookmarklet Automation Export
+            <h4 className="text-sm font-bold text-[#122027] mb-1 flex items-center gap-2">
+              <Play className="w-4 h-4 text-[#12a0e1]" /> Send this week to your timesheet
             </h4>
             <p className="text-xs text-[#323b43] mb-4 leading-relaxed">
-              Click Copy JSON below to grab your week's data. Go to your timesheet website, click the bookmarklet, and hit paste.
+              Copy your week here, then paste it into the bookmark you saved in
+              your browser's favourites — it fills the rows in for you.
             </p>
+            <PasteNextSteps />
             <button
               onClick={handleCopyJSONToClipboard}
-              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-white rounded-xl font-bold transition-[background-color,box-shadow,transform] shadow-lg w-full ${
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 mt-4 text-white rounded-xl font-bold transition-[background-color,box-shadow,transform] shadow-lg w-full ${
                 jsonCopied
                   ? "bg-[#1cc1a5] shadow-[#1cc1a5]/30"
                   : "bg-[#12a0e1] hover:bg-[#12a0e1]/90 shadow-[#12a0e1]/30 active:scale-[0.98]"
               }`}
             >
               {jsonCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-              {jsonCopied ? "JSON Copied!" : "Copy JSON"}
+              {jsonCopied ? "Copied! Now go and paste it" : "Copy Me!"}
             </button>
           </div>
 
