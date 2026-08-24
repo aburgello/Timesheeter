@@ -3517,7 +3517,14 @@ function StudioJobScanModal({ onClose, onApplied }) {
   // code IS in the book, so the scan skips it as a duplicate, but it's filed
   // under someone else's film and no film search will ever surface it. Wrike's
   // folder tree is the source of truth. Nothing is written without a confirm.
-  const corrections = candidates.filter((c) => {
+  //
+  // "Active only" governs this list too. It used to filter the NEW rows and
+  // nothing else, so ticking it hid 2,532 archived codes from the table while
+  // leaving every archived row's correction sitting in the banner above it —
+  // 59 of them, almost all from _Old, i.e. finished campaigns nobody is going
+  // to refile. The tick means "show me work that's live", and a correction is
+  // work.
+  const allCorrections = candidates.filter((c) => {
     const cur = existingByCode[c.code];
     if (!cur) return false;
     if (!c.filmTitle || scanIsPseudoFilm(c.filmTitle)) return false; // scan has nothing better
@@ -3550,6 +3557,11 @@ function StudioJobScanModal({ onClose, onApplied }) {
       (existingExtras[c.code] || []).some((r) => (r.job_number || "") === c.jobNumber);
     return filmWrong || codeMalformed || descWrong || supersededByTwin;
   });
+
+  const corrections = allCorrections.filter((c) => !activeOnly || !c.archived);
+  const correctionsHidden = activeOnly
+    ? allCorrections.length - corrections.length
+    : 0;
 
   const allNew  = candidates.filter((c) => !existingCodes.has(c.code));
   const newOnes = allNew.filter((c) => !activeOnly || !c.archived);
@@ -3777,7 +3789,16 @@ function StudioJobScanModal({ onClose, onApplied }) {
             <div className="px-6 py-3 border-b border-slate-100 flex flex-wrap items-center gap-3 text-[11px] font-bold">
               <span className="text-emerald-600">{newOnes.length} new</span>
               <span className="text-[#768994]">{dupes.length} already in book</span>
-              {archivedHidden > 0 && <span className="text-slate-400">{archivedHidden} archived hidden</span>}
+              {/* Both hidden counts sit on this line, next to the tick that
+                  controls them — the corrections one as well, so a review that
+                  has gone quiet because everything in it was archived still
+                  says so rather than just showing nothing. */}
+              {archivedHidden + correctionsHidden > 0 && (
+                <span className="text-slate-400">
+                  {archivedHidden + correctionsHidden} archived hidden
+                  {correctionsHidden > 0 && archivedHidden > 0 && ` (${correctionsHidden} of them corrections)`}
+                </span>
+              )}
               <span className="text-[#122027]">{candidates.length} job codes / {totalFolders} folders</span>
               <label className="ml-auto flex items-center gap-1.5 text-[#122027] cursor-pointer">
                 <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} className="accent-[#1cc1a5]" />
@@ -3808,6 +3829,11 @@ function StudioJobScanModal({ onClose, onApplied }) {
                     )}
                     {keptTotal > 0 && (
                       <> · {keptTotal} {keptTotal === 1 ? "entry is" : "entries are"} kept — undo in Review</>
+                    )}
+                    {/* Never silently: hiding a correction is a decision, so
+                        say how many and what turns them back on. */}
+                    {correctionsHidden > 0 && (
+                      <> · {correctionsHidden} more {correctionsHidden === 1 ? "is" : "are"} archived or in _Old — untick Active only to see {correctionsHidden === 1 ? "it" : "them"}</>
                     )}
                   </span>
                   <button onClick={() => setShowCorrections(v => !v)}
@@ -3951,17 +3977,41 @@ function StudioJobScanModal({ onClose, onApplied }) {
                     <tbody>
                       {shown.map((c) => (
                         <tr key={c.code} className="border-b border-slate-50 hover:bg-slate-50/60 cursor-pointer" onClick={() => toggle(c.code)}>
-                          <td className="px-4 py-2"><input type="checkbox" checked={!!selected[c.code]} onChange={() => toggle(c.code)} className="accent-[#1cc1a5]" onClick={(e) => e.stopPropagation()} /></td>
-                          <td className="px-2 py-2 font-black font-mono text-[#1cc1a5]">{c.code}</td>
-                          <td className="px-2 py-2 font-bold text-[#122027] truncate max-w-[260px]" title={c.jobNumber}>{c.filmTitle || "—"}</td>
-                          <td className="px-2 py-2">
+                          <td className="px-4 py-2 align-top"><input type="checkbox" checked={!!selected[c.code]} onChange={() => toggle(c.code)} className="accent-[#1cc1a5]" onClick={(e) => e.stopPropagation()} /></td>
+                          {/* Where in Wrike this came from. The scan has always
+                              computed folderPath — the corrections list shows it
+                              under each row — but a NEW row showed only what was
+                              derived, so a code with no film, region or client
+                              was three dashes and no way to tell whether that
+                              meant "house job", "filed outside any studio" or
+                              "the walk gave up". The breadcrumb answers all
+                              three at a glance. */}
+                          <td className="px-2 py-2 font-black font-mono text-[#1cc1a5] align-top">
+                            {c.code}
+                            {c.folderPath && (
+                              <div className="font-sans font-medium text-[10px] text-slate-400 truncate max-w-[280px]" title={c.folderPath}>
+                                {c.folderPath}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 font-bold text-[#122027] truncate max-w-[260px] align-top" title={c.jobNumber}>
+                            {c.filmTitle || (
+                              // A truncated walk yields no film for a reason
+                              // that isn't "there isn't one", and the two used
+                              // to look identical.
+                              <span className="text-slate-300">
+                                {c.ancestryTruncated ? "couldn't establish" : "—"}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 align-top">
                             {c.region
                               ? <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-[#12a0e1]/10 text-[#12a0e1]">{c.region}</span>
                               : <span className="text-slate-300">—</span>}
                           </td>
-                          <td className="px-2 py-2 text-slate-600">{c.client || <span className="text-slate-300">—</span>}</td>
-                          <td className="px-2 py-2 text-slate-500 truncate max-w-[320px]" title={c.projectDescription}>{c.projectDescription || "—"}</td>
-                          <td className="px-2 py-2 text-slate-400 whitespace-nowrap tabular-nums">{c.createdDate || "—"}</td>
+                          <td className="px-2 py-2 text-slate-600 align-top">{c.client || <span className="text-slate-300">—</span>}</td>
+                          <td className="px-2 py-2 text-slate-500 truncate max-w-[320px] align-top" title={c.projectDescription}>{c.projectDescription || "—"}</td>
+                          <td className="px-2 py-2 text-slate-400 whitespace-nowrap tabular-nums align-top">{c.createdDate || "—"}</td>
                         </tr>
                       ))}
                     </tbody>

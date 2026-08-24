@@ -278,11 +278,27 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
 
   const studioKwOf = (title) =>
     KEYWORDS.find((k) => new RegExp(`\\b${k}\\b`, "i").test(title || ""));
-  // An "archived" job is one filed under the studio's _Archive folder (or a
-  // master-template tree). Cheap, org-native active/inactive signal — no per-job
-  // status fetch, which job folders don't carry anyway (only Projects do).
+  // An "archived" job is one filed under the studio's _Archive folder, a
+  // master-template tree, or _Old. Cheap, org-native active/inactive signal — no
+  // per-job status fetch, which job folders don't carry anyway (only Projects
+  // do). What this flags is hidden by the scan review's "Active only" tick.
+  //
+  // _Old belongs here even though it isn't spelled "archive": under
+  // "Universal - New Media" it is where finished campaigns go, holding year
+  // folders which hold the real films. Those jobs are real and correctly
+  // described — the scan resolves them to Wicked, Nosferatu, The Brutalist and
+  // so on (see isOrgFolder) — they are simply not work anyone is doing now, and
+  // they dominated the review with dozens of corrections nobody wanted to make.
+  //
+  // ANCHORED WHOLE, and on the underscore. "_Old" is the studio's container
+  // convention; "Old" without it is the 2021 M. Night Shyamalan film, a real
+  // campaign folder that must stay live. A substring test for "old" would take
+  // both, along with "Old Guard", "The Old Oak" and anything else.
+  const isOldContainer = (title) => /^_old$/i.test((title || "").trim());
   const isArchiveNode = (title) =>
-    /(^|[\s_])_?archive\b/i.test(title || "") || /master.?template/i.test(title || "");
+    /(^|[\s_])_?archive\b/i.test(title || "") ||
+    /master.?template/i.test(title || "") ||
+    isOldContainer(title);
 
   // A bare year / number (e.g. "2026") is an organisational folder, not a film.
   const isYearFolder = (title) => /^\d{2,4}$/.test((title || "").trim());
