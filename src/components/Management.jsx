@@ -2078,8 +2078,25 @@ function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
         // Fill the slot folder's own Job Number field, then turn on Wrike-native
         // cascading so the value flows down to every current AND future subitem
         // (nested market folders + tasks) — no per-item walk needed.
+        //
+        // THE FIELD CARRIES THE WHOLE FOLDER NAME, NOT THE BARE CODE.
+        //
+        // It used to send s.code, so a folder named
+        // "XY026179_ITM_Print_Custom_Lobby_Display" cascaded a Job Number of
+        // just "XY026179" — the code without the thing it identifies. Several
+        // folders under one film share a code prefix and differ only in the
+        // suffix, so the bare value can't say which job an item belongs to, and
+        // anyone reading the field in Wrike had to go and look at the folder
+        // title to find out.
+        //
+        // newTitle is the name the folder was just renamed to, so the two are
+        // the same string by construction rather than by two rules that agree
+        // today. Nothing downstream has to change: resolveJobNumber already
+        // pulls the bare XY code back out of a suffixed value and returns the
+        // Job Book's registered option where there is one, which is why
+        // wrikeHelpers has read "XY025953_LUG_D6" shaped values all along.
         try {
-          await setFolderJobNumber(folder.id, plan.field.id, s.code);
+          await setFolderJobNumber(folder.id, plan.field.id, newTitle);
           await triggerFieldCascade(folder.id, plan.field.id);
           cascaded += 1;
         } catch {
@@ -2089,8 +2106,13 @@ function PushToWrikeModal({ studio, filmTitle, jobs, mode = "push", onClose }) {
         // Belt-and-braces: also tag existing tasks directly. Redundant once cascade
         // is confirmed live, but harmless (same value) and safe if a field's config
         // limits cascade — remove once the cascade path is verified on the account.
-        const p = await planPropagate(folder.id, plan.field.id, s.code);
-        const r = await applyPropagate(p.willSet, plan.field.id, s.code,
+        //
+        // planPropagate skips a task whose value already equals what we're
+        // sending, so on the first run after this change every task still
+        // holding the bare code is re-stamped with the full name. That is the
+        // migration, and it only happens once.
+        const p = await planPropagate(folder.id, plan.field.id, newTitle);
+        const r = await applyPropagate(p.willSet, plan.field.id, newTitle,
           (d, t) => setProgress({ step: `Tagging ${s.code} tasks…`, done: d, total: t }));
         propagated += r.ok.length;
         failed += r.failed.length;
