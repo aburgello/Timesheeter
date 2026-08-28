@@ -104,6 +104,40 @@ const call = (session, path = "/api/wrike/tasks") => worker.fetch(
   check("...and the retry eventually persists it", patchAttempts >= 2, true);
 }
 
+// 3b. A wedged read must be retried, not surfaced as 503. During the stalls the
+//     median read stayed ~20ms while a few hung for minutes, so asking again is
+//     almost always answered at once.
+{
+  let reads = 0;
+  scenario({
+    tokenRead: () => {
+      reads++;
+      if (reads === 1) throw new Error("connection wedged");
+      return rowFor("s3b", later());
+    },
+    patch: () => new Response("", { status: 200 }),
+    wrikeToken: () => new Response("{}", { status: 200 }),
+    wrikeApi: () => new Response(JSON.stringify({ data: [] }), { status: 200 }),
+  });
+  const res = await call("s3b");
+  check("a wedged read is retried rather than returned as 503", res.status, 200);
+  check("...and it took a second attempt to get there", reads, 2);
+}
+
+// 3c. Persistently unreachable still gives up, rather than retrying forever.
+{
+  let reads = 0;
+  scenario({
+    tokenRead: () => { reads++; throw new Error("still down"); },
+    patch: () => new Response("", { status: 200 }),
+    wrikeToken: () => new Response("{}", { status: 200 }),
+    wrikeApi: () => new Response("{}", { status: 200 }),
+  });
+  const res = await call("s3c");
+  check("a database that stays down is 503", res.status, 503);
+  check("...after a bounded number of attempts", reads, 3);
+}
+
 // 4. Wrike rejecting the refresh token is a real sign-out and must stay one.
 {
   scenario({
@@ -141,4 +175,38 @@ const call = (session, path = "/api/wrike/tasks") => worker.fetch(
   const res = await call("s6");
   check("a healthy session passes through", res.status, 200);
   check("...without refreshing a token that isn't due", refreshCalled, false);
+}
+
+// 7. Signing out is local: clearing the cookie ends the session, so it must not
+//    wait on the database. It used to read the row before deleting it, which
+//    made Disconnect hang for as long as a stalled read took.
+{
+  let reads = 0;
+  let deletes = 0;
+  globalThis.fetch = async (url, opts = {}) => {
+    if (url.includes("/wrike_oauth_tokens")) {
+      if ((opts.method || "GET") === "GET") { reads++; return new Response("[]", { status: 200 }); }
+      if (opts.method === "DELETE") {
+        deletes++;
+        if (deletes === 1) throw new Error("database stalled");
+        return new Response("", { status: 200 });
+      }
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const pending = [];
+  const res = await worker.fetch(
+    new Request("https://x.test/api/wrike/oauth/disconnect", {
+      method: "POST", headers: { Cookie: "wrike_session=s7" },
+    }),
+    env, { waitUntil: (p) => pending.push(p) }
+  );
+
+  check("disconnect answers without waiting on the database", res.status, 200);
+  check("...and never reads the row it doesn't need", reads, 0);
+  check("...and clears the session cookie", /wrike_session=;|wrike_session=\s*;/.test(res.headers.get("Set-Cookie") || ""), true);
+
+  await Promise.all(pending);
+  check("...and still removes the stored token, retrying if needed", deletes >= 2, true);
 }

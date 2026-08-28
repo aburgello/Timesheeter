@@ -33,7 +33,20 @@ const refreshInFlight = new Map();
 // 2026-08-28, individual reads hanging 200s while the median stayed at 20ms —
 // an unbounded read eats the entire Worker request budget and the caller is
 // killed mid-flight. Failing fast turns that into a retryable error instead.
-const SB_AUTH_TIMEOUT_MS = 8000;
+const SB_AUTH_TIMEOUT_MS = 5000;
+
+// ...and retry rather than giving up on the first one.
+//
+// The stalls this defends against wedge individual requests, not the service:
+// through the worst of 2026-08-28 the median read stayed around 20ms while the
+// 95th percentile sat at 150s. So a read that blows the deadline is best
+// abandoned and simply asked again — the retry is overwhelmingly answered at
+// once. Timing out without retrying was half a fix: it correctly stopped the
+// hang, then returned 503 for a database that was, for almost every other
+// caller, responding instantly.
+//
+// Three attempts, worst case ~15.5s, inside Cloudflare's 30s request ceiling.
+const SB_AUTH_RETRY_DELAYS_MS = [100, 400];
 
 // Backoff for re-attempting a token write that failed. See unpersistedTokens.
 const TOKEN_PERSIST_RETRY_DELAYS_MS = [1000, 3000, 8000];
@@ -74,7 +87,7 @@ export default {
       return handleOAuthCallback(request, url, env, isHttps);
     }
     if (url.pathname === "/api/wrike/oauth/disconnect") {
-      return handleDisconnect(request, env);
+      return handleDisconnect(request, env, ctx);
     }
     if (url.pathname === "/api/wrike/oauth/status") {
       return handleStatus(request, env);
@@ -529,18 +542,28 @@ async function sbFetch(env, path, opts = {}) {
 // answered 401 on a session whose token was sitting in the database, valid.
 // Nothing was actually wrong with their account.
 async function getTokenRowBySession(env, sessionToken) {
-  let res;
-  try {
-    res = await sbFetch(
-      env,
-      `/wrike_oauth_tokens?session_token=eq.${encodeURIComponent(sessionToken)}&select=*`,
-      { timeoutMs: SB_AUTH_TIMEOUT_MS }
-    );
-  } catch (err) {
-    throw new SupabaseUnavailable(`token row fetch failed: ${err.message}`);
+  let rows;
+  let lastError;
+  for (let attempt = 0; attempt <= SB_AUTH_RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, SB_AUTH_RETRY_DELAYS_MS[attempt - 1]));
+    }
+    try {
+      const res = await sbFetch(
+        env,
+        `/wrike_oauth_tokens?session_token=eq.${encodeURIComponent(sessionToken)}&select=*`,
+        { timeoutMs: SB_AUTH_TIMEOUT_MS }
+      );
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      rows = await res.json();
+      lastError = null;
+      break;
+    } catch (err) {
+      lastError = err;
+      console.error(`[token] read attempt ${attempt + 1} failed:`, err.message);
+    }
   }
-  if (!res.ok) throw new SupabaseUnavailable(`token row read failed: ${res.status}`);
-  const rows = await res.json();
+  if (lastError) throw new SupabaseUnavailable(`token row read failed: ${lastError.message}`);
   const stored = rows[0] || null;
   // Prefer credentials we minted but couldn't store: the stored row's refresh
   // token is dead once Wrike has rotated it, so the in-memory pair is the only
@@ -577,9 +600,30 @@ async function updateTokenRow(env, sessionToken, patch, timeoutMs) {
 }
 
 async function deleteTokenRow(env, sessionToken) {
-  await sbFetch(env, `/wrike_oauth_tokens?session_token=eq.${encodeURIComponent(sessionToken)}`, {
+  const res = await sbFetch(env, `/wrike_oauth_tokens?session_token=eq.${encodeURIComponent(sessionToken)}`, {
     method: "DELETE",
+    timeoutMs: SB_AUTH_TIMEOUT_MS,
   });
+  if (!res.ok) throw new Error(`row delete failed: ${res.status}`);
+}
+
+// Signing out must not leave a usable token behind: the row is gone from the
+// member's reach the moment the cookie clears, but panelWrikeToken picks up
+// whichever stored token is freshest, so an orphan would still be live. Keep
+// trying, detached from the response.
+async function deleteTokenRowPersistently(env, sessionToken) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await deleteTokenRow(env, sessionToken);
+      return;
+    } catch (err) {
+      if (attempt >= TOKEN_PERSIST_RETRY_DELAYS_MS.length) {
+        console.error("[disconnect] row delete gave up; a stored token may outlive the sign-out:", err.message);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, TOKEN_PERSIST_RETRY_DELAYS_MS[attempt]));
+    }
+  }
 }
 
 // Raised when Supabase itself didn't answer — as opposed to answering "there
@@ -905,22 +949,22 @@ async function handleOAuthCallback(request, url, env, isHttps) {
   return new Response(null, { status: 302, headers });
 }
 
-async function handleDisconnect(request, env) {
+// Signing out is a local act: clearing the cookie is what ends the session, and
+// that needs no database at all. This used to read the row first and then
+// delete it, so a slow database made "Disconnect" hang — with the retrying read
+// added on top, for up to 15s before the delete even started. The read was
+// never needed: the row's primary key IS the session token.
+async function handleDisconnect(request, env, ctx) {
   const cookies = parseCookies(request);
   const session = cookies[SESSION_COOKIE];
-  if (session) {
-    // Best-effort: the cookie is cleared below either way, so a database that
-    // can't be reached must not keep the member signed in.
-    try {
-      const row = await getTokenRowBySession(env, session);
-      if (row) await deleteTokenRow(env, row.session_token);
-    } catch (err) {
-      console.error("[disconnect] token lookup unavailable:", err.message);
-    }
-    unpersistedTokens.delete(session);
-  }
   const res = json({ ok: true });
   res.headers.append("Set-Cookie", clearCookie(SESSION_COOKIE, "/"));
+  if (session) {
+    unpersistedTokens.delete(session);
+    const cleanup = deleteTokenRowPersistently(env, session);
+    if (ctx) ctx.waitUntil(cleanup);
+    else cleanup.catch(() => {});
+  }
   return res;
 }
 

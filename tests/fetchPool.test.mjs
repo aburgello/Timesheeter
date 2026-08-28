@@ -106,4 +106,72 @@ const resp = (status, headers = {}) => ({
   check("a response without a status is passed through", res.ok, true);
 }
 
+// ── timeouts ────────────────────────────────────────────────────────────────
+// The bug behind every "it just spins forever": no request had a deadline, so
+// one that never answered was waited on indefinitely and the UI had no failure
+// path to take.
+
+// A fetch that never settles is abandoned and retried, then reported.
+{
+  let calls = 0;
+  globalThis.fetch = (url, { signal } = {}) => {
+    calls++;
+    return new Promise((_, reject) => {
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  };
+  let thrown = null;
+  try {
+    await fetchRetrying("/hangs", { retries: 1, baseDelay: 1, timeoutMs: 20 });
+  } catch (err) {
+    thrown = err;
+  }
+  check("a request that never answers throws instead of hanging", !!thrown, true);
+  check("...naming the url so the failure is diagnosable", thrown.message.includes("/hangs"), true);
+  check("...after using its retry budget", calls, 2);
+}
+
+// A stall on the first attempt recovers on the second.
+{
+  let calls = 0;
+  globalThis.fetch = (url, { signal } = {}) => {
+    calls++;
+    if (calls === 1) {
+      return new Promise((_, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }
+    return Promise.resolve(resp(200));
+  };
+  const res = await fetchRetrying("/x", { baseDelay: 1, timeoutMs: 20 });
+  check("a stalled attempt is retried rather than fatal", res.status, 200);
+  check("...on the second attempt", calls, 2);
+}
+
+// A caller cancelling deliberately is final — retrying behind them would defeat
+// the cancellation.
+{
+  let calls = 0;
+  globalThis.fetch = (url, { signal } = {}) => {
+    calls++;
+    return new Promise((_, reject) => {
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  };
+  const ac = new AbortController();
+  const p = fetchRetrying("/x", { baseDelay: 1, timeoutMs: 5000, signal: ac.signal });
+  ac.abort(new Error("caller cancelled"));
+  let thrown = null;
+  try { await p; } catch (err) { thrown = err; }
+  check("a caller's cancel propagates", !!thrown, true);
+  check("...and is not retried", calls, 1);
+}
+
+// A successful request must not be delayed or altered by the deadline wiring.
+{
+  globalThis.fetch = async () => resp(200);
+  const res = await fetchRetrying("/x", { baseDelay: 1 });
+  check("the happy path is untouched", res.status, 200);
+}
+
 globalThis.fetch = realFetch;

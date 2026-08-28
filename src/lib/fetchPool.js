@@ -40,6 +40,44 @@ export async function mapPool(items, limit, fn) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// How long one attempt may take before it is abandoned.
+//
+// Nothing in this app used to time out. `signal` existed on fetchRetrying and
+// no caller ever passed one, so a request that simply never answered hung for
+// ever — and every one of those surfaced to the user as a spinner that span
+// until they gave up, with no error and nothing in the console. A stalled
+// database three layers away and a dead Wrike endpoint looked identical, and
+// both looked like the app was broken.
+//
+// Cloudflare cuts a Worker request off at 30s, so anything past that is never
+// coming back regardless.
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+// One attempt's signal: the caller's cancellation and our deadline, combined.
+// Written by hand rather than with AbortSignal.any so this keeps working on
+// runtimes that predate it.
+function withDeadline(signal, timeoutMs) {
+  if (!timeoutMs) return { signal, cleanup: () => {} };
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal?.reason);
+  const timer = setTimeout(() => {
+    const err = new Error(`timed out after ${timeoutMs}ms`);
+    err.name = "TimeoutError";
+    controller.abort(err);
+  }, timeoutMs);
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener?.("abort", onAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+    },
+  };
+}
+
 /**
  * fetch() that waits and retries when the server says it is over budget.
  *
@@ -47,11 +85,39 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * curve we invent — and otherwise backs off exponentially from `baseDelay`.
  * Returns the last Response either way, so callers see the 429 rather than an
  * exception if it never clears.
+ *
+ * An attempt that does not answer within `timeoutMs` is abandoned and retried
+ * like any other transient failure, and once the budget is spent it throws
+ * rather than hanging. A caller that cancels deliberately is final — that is
+ * not a failure to retry.
  */
-export async function fetchRetrying(url, { retries = 3, baseDelay = 600, signal, ...init } = {}) {
+export async function fetchRetrying(
+  url,
+  { retries = 3, baseDelay = 600, signal, timeoutMs = DEFAULT_TIMEOUT_MS, ...init } = {}
+) {
   let res;
   for (let attempt = 0; ; attempt++) {
-    res = await fetch(url, { ...init, signal });
+    const deadline = withDeadline(signal, timeoutMs);
+    let failure = null;
+    try {
+      res = await fetch(url, { ...init, signal: deadline.signal });
+    } catch (err) {
+      failure = err;
+    } finally {
+      deadline.cleanup();
+    }
+
+    if (failure) {
+      // The caller pulled the plug — respect it rather than retrying behind them.
+      if (signal?.aborted) throw failure;
+      if (attempt >= retries) {
+        throw new Error(
+          `Request to ${url} failed after ${attempt + 1} attempt(s): ${failure.message}`
+        );
+      }
+      await sleep(baseDelay * 2 ** attempt);
+      continue;
+    }
 
     // A response with no numeric status isn't something to interpret — a test
     // double, or a fetch replacement returning a bare object. Hand it straight
