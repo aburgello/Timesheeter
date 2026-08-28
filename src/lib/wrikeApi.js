@@ -10,13 +10,21 @@ export async function disconnectWrike() {
   await fetch("/api/wrike/oauth/disconnect", { method: "POST" });
 }
 
+// `connected` is tri-state: true, false, or null for "couldn't find out".
+//
+// null exists because reporting false on a failed check is a lie with teeth —
+// it puts a Connect button in front of someone whose Wrike session is fine, and
+// makes a database blip look like being signed out. The Worker answers 503 for
+// that case specifically (see handleStatus); a request that never completed
+// proves just as little, so it maps to null too.
 export async function fetchWrikeOAuthStatus() {
   try {
     const res = await fetch("/api/wrike/oauth/status");
+    if (res.status === 503) return { connected: null };
     if (!res.ok) return { connected: false };
     return await res.json();
   } catch (_) {
-    return { connected: false };
+    return { connected: null };
   }
 }
 

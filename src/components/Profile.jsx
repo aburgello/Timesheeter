@@ -1719,13 +1719,20 @@ function SettingsSection({ onSave }) {
   const [dark, setDark] = useState(isDarkMode);
   const { defaultCategory, groupMultiCountry, setPrefs } = useTimesheetPrefs();
 
-  useEffect(() => {
+  const checkStatus = useCallback(() => {
+    setStatus({ checked: false, connected: false });
     fetchWrikeOAuthStatus().then((s) =>
       setStatus({ checked: true, connected: s.connected })
     );
   }, []);
 
-  const hasToken = status.connected;
+  useEffect(() => { checkStatus(); }, [checkStatus]);
+
+  // Tri-state — see fetchWrikeOAuthStatus. `unknown` must not fall through to
+  // the disconnected branch: offering "Connect to Wrike" to someone who never
+  // lost their connection is how a database stall reads as a sign-out.
+  const hasToken = status.connected === true;
+  const unknown = status.checked && status.connected === null;
 
   const handleDisconnect = async () => {
     setDisconnecting(true);
@@ -1753,9 +1760,14 @@ function SettingsSection({ onSave }) {
               Connected
             </span>
           )}
-          {status.checked && !hasToken && (
+          {status.checked && !hasToken && !unknown && (
             <span className="ml-auto text-[10px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full uppercase tracking-wider border border-amber-200">
               Not connected
+            </span>
+          )}
+          {unknown && (
+            <span className="ml-auto text-[10px] font-black text-[#768994] bg-slate-100 px-2 py-0.5 rounded-full uppercase tracking-wider border border-[#dce4ec]">
+              Status unavailable
             </span>
           )}
         </div>
@@ -1765,7 +1777,20 @@ function SettingsSection({ onSave }) {
             You'll approve access on Wrike's own site — no token to copy or
             paste, and it can be revoked here any time.
           </p>
-          {hasToken ? (
+          {unknown ? (
+            <div className="space-y-2">
+              <p className="text-xs text-[#768994] leading-relaxed">
+                Couldn't check your Wrike connection just now. This doesn't mean
+                you've been disconnected — try again in a moment.
+              </p>
+              <button
+                onClick={checkStatus}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold text-[#12a0e1] hover:bg-[#12a0e1]/10 border border-[#12a0e1]/30 transition-colors"
+              >
+                <RefreshCw className="w-4 h-4" /> Check again
+              </button>
+            </div>
+          ) : hasToken ? (
             <button
               onClick={handleDisconnect}
               disabled={disconnecting}

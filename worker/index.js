@@ -28,8 +28,39 @@ const STATE_MAX_AGE = 600; // 10 minutes
 // of racing each other; cleared as soon as that refresh settles either way.
 const refreshInFlight = new Map();
 
+// Deadline for the Supabase calls on the auth critical path. Every /api/wrike/*
+// call begins with a token-row read, so when the data API stalls — as it did on
+// 2026-08-28, individual reads hanging 200s while the median stayed at 20ms —
+// an unbounded read eats the entire Worker request budget and the caller is
+// killed mid-flight. Failing fast turns that into a retryable error instead.
+const SB_AUTH_TIMEOUT_MS = 8000;
+
+// Backoff for re-attempting a token write that failed. See unpersistedTokens.
+const TOKEN_PERSIST_RETRY_DELAYS_MS = [1000, 3000, 8000];
+
+// Credentials Wrike has already issued to us but that we have not managed to
+// store yet.
+//
+// Wrike rotates the refresh token on every use: the moment it hands us a new
+// pair, the old refresh token is dead. So a refresh is two steps that must both
+// land — mint at Wrike, then save — and losing the save is unrecoverable. The
+// stored refresh token no longer works, nothing can mint another, and the
+// member is signed out for good until they reconnect by hand. That is exactly
+// what a stalled database caused: the save hung, Cloudflare killed the request
+// at 30s, and the new credentials went with it.
+//
+// Holding them here lets this isolate keep serving the member while the write
+// is retried in the background, so a database blip costs latency rather than
+// their session.
+const unpersistedTokens = new Map();
+
+// Wrike positively rejected our credentials (as opposed to us failing to reach
+// Wrike or Supabase). Only this means the member must genuinely reconnect;
+// everything else is transient and must not present as a sign-out.
+class WrikeAuthInvalid extends Error {}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const isHttps = url.protocol === "https:";
 
@@ -52,10 +83,10 @@ export default {
       return handleWebhookRegister(request, url, env);
     }
     if (url.pathname === "/api/wrike/webhook" && request.method === "POST") {
-      return handleWebhookEvent(request, env);
+      return handleWebhookEvent(request, env, ctx);
     }
     if (url.pathname.startsWith("/api/wrike/")) {
-      return handleProxy(request, url, env);
+      return handleProxy(request, url, env, ctx);
     }
     if (url.pathname === "/api/jobs-feed") {
       return handleJobsFeed(request, env);
@@ -159,7 +190,13 @@ async function handleJobsFeed(request, env) {
   const cookies = parseCookies(request);
   const session = cookies[SESSION_COOKIE];
   if (!session) return json({ error: "not_connected" }, { status: 401 });
-  const row = await getTokenRowBySession(env, session);
+  let row;
+  try {
+    row = await getTokenRowBySession(env, session);
+  } catch (err) {
+    console.error("[jobs-feed] token lookup unavailable:", err.message);
+    return json({ error: "backend_unavailable" }, { status: 503 });
+  }
   if (!row) return json({ error: "not_connected" }, { status: 401 });
 
   // Limit raised alongside the CSV importer: a bulk load of historical time
@@ -254,7 +291,13 @@ async function handleJobsFeedImport(request, env) {
   const cookies = parseCookies(request);
   const session = cookies[SESSION_COOKIE];
   if (!session) return json({ error: "not_connected" }, { status: 401 });
-  const tokenRow = await getTokenRowBySession(env, session);
+  let tokenRow;
+  try {
+    tokenRow = await getTokenRowBySession(env, session);
+  } catch (err) {
+    console.error("[jobs-feed-import] token lookup unavailable:", err.message);
+    return json({ error: "backend_unavailable" }, { status: 503 });
+  }
   if (!tokenRow) return json({ error: "not_connected" }, { status: 401 });
 
   let body;
@@ -461,8 +504,11 @@ async function handleJobsFeedImport(request, env) {
 // ── Supabase (service role) helpers ──────────────────────────────────────────
 
 async function sbFetch(env, path, opts = {}) {
+  // timeoutMs is ours, not fetch's — pull it out before forwarding.
+  const { timeoutMs, ...init } = opts;
   return fetch(`${env.SUPABASE_URL}/rest/v1${path}`, {
-    ...opts,
+    ...init,
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
       Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
@@ -472,14 +518,35 @@ async function sbFetch(env, path, opts = {}) {
   });
 }
 
+// Returns the row, or null when Supabase positively reports there is no such
+// session. Throws SupabaseUnavailable when it couldn't be asked.
+//
+// These two used to collapse into the same null — the identical bug the comment
+// on getWebhookConfig describes, in the place it hurts most. Every caller reads
+// a null as "not connected", so a database stall or timeout presented to the
+// member as being signed out of Wrike: handleStatus answered connected:false,
+// Profile swapped the Connected badge for a Connect button, and the proxy
+// answered 401 on a session whose token was sitting in the database, valid.
+// Nothing was actually wrong with their account.
 async function getTokenRowBySession(env, sessionToken) {
-  const res = await sbFetch(
-    env,
-    `/wrike_oauth_tokens?session_token=eq.${encodeURIComponent(sessionToken)}&select=*`
-  );
-  if (!res.ok) return null;
+  let res;
+  try {
+    res = await sbFetch(
+      env,
+      `/wrike_oauth_tokens?session_token=eq.${encodeURIComponent(sessionToken)}&select=*`,
+      { timeoutMs: SB_AUTH_TIMEOUT_MS }
+    );
+  } catch (err) {
+    throw new SupabaseUnavailable(`token row fetch failed: ${err.message}`);
+  }
+  if (!res.ok) throw new SupabaseUnavailable(`token row read failed: ${res.status}`);
   const rows = await res.json();
-  return rows[0] || null;
+  const stored = rows[0] || null;
+  // Prefer credentials we minted but couldn't store: the stored row's refresh
+  // token is dead once Wrike has rotated it, so the in-memory pair is the only
+  // working one until the background write lands.
+  const pending = unpersistedTokens.get(sessionToken);
+  return pending || stored;
 }
 
 // Keyed by session_token, NOT wrike_user_id — the same Wrike account can be
@@ -498,11 +565,12 @@ async function upsertTokenRow(env, row) {
   return (await res.json())[0];
 }
 
-async function updateTokenRow(env, sessionToken, patch) {
+async function updateTokenRow(env, sessionToken, patch, timeoutMs) {
   const res = await sbFetch(env, `/wrike_oauth_tokens?session_token=eq.${encodeURIComponent(sessionToken)}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify(patch),
+    timeoutMs,
   });
   if (!res.ok) throw new Error(`Supabase update failed: ${res.status} ${await res.text()}`);
   return (await res.json())[0];
@@ -529,7 +597,27 @@ class SupabaseUnavailable extends Error {}
 // an endpoint that no longer exists, and it suspends the webhook account-wide.
 // The outage was transient; the suspension it caused was not, since clearing it
 // needs a manual admin re-register long after Supabase recovered.
-async function getWebhookConfig(env) {
+//
+// The row is cached per isolate because every Wrike delivery needs the secret
+// to verify its signature, and that read sat on Wrike's delivery-timeout clock
+// on every single event. See handleWebhookEvent for why that clock matters.
+// Staleness is bounded two ways: a short TTL, and a forced re-read whenever a
+// signature fails to match (an admin re-register rotates the secret, and a
+// stale cached one would otherwise 401 deliveries — the exact answer that gets
+// the webhook suspended).
+let webhookConfigCache = null;
+let webhookConfigCachedAt = 0;
+let webhookConfigForcedAt = 0;
+const WEBHOOK_CONFIG_TTL_MS = 60_000;
+// Floor between forced re-reads, so a flood of bad signatures can't turn into a
+// flood of Supabase reads.
+const WEBHOOK_CONFIG_FORCE_MIN_GAP_MS = 10_000;
+
+async function getWebhookConfig(env, { force = false } = {}) {
+  const now = Date.now();
+  if (!force && webhookConfigCache && now - webhookConfigCachedAt < WEBHOOK_CONFIG_TTL_MS) {
+    return webhookConfigCache;
+  }
   let res;
   try {
     res = await sbFetch(env, `/wrike_webhook_config?select=*&limit=1`);
@@ -540,7 +628,18 @@ async function getWebhookConfig(env) {
     throw new SupabaseUnavailable(`webhook config read failed: ${res.status}`);
   }
   const rows = await res.json();
-  return rows[0] || null;
+  webhookConfigCache = rows[0] || null;
+  webhookConfigCachedAt = now;
+  return webhookConfigCache;
+}
+
+// Re-read past the cache, but no more often than the floor above. Returns null
+// when the floor says "too soon" so the caller keeps whatever it already had.
+async function refreshWebhookConfig(env) {
+  const now = Date.now();
+  if (now - webhookConfigForcedAt < WEBHOOK_CONFIG_FORCE_MIN_GAP_MS) return null;
+  webhookConfigForcedAt = now;
+  return getWebhookConfig(env, { force: true });
 }
 
 async function upsertWebhookConfig(env, { webhookId, secret }) {
@@ -550,22 +649,36 @@ async function upsertWebhookConfig(env, { webhookId, secret }) {
     body: JSON.stringify({ id: true, webhook_id: webhookId, secret }),
   });
   if (!res.ok) throw new Error(`Supabase upsert failed: ${res.status} ${await res.text()}`);
-  return (await res.json())[0];
+  const row = (await res.json())[0];
+  // This isolate just rotated the secret — adopt it now rather than serving a
+  // secret we know is dead until the TTL lapses.
+  webhookConfigCache = row;
+  webhookConfigCachedAt = Date.now();
+  return row;
 }
 
-async function insertWebhookEvent(env, { taskId, eventType, occurredAt }) {
-  const res = await sbFetch(env, `/wrike_webhook_events`, {
-    method: "POST",
-    // return=minimal: this is a fire-and-forget insert, we don't need the row
-    // echoed back — asking for the representation just adds a SELECT that can
-    // fail on its own.
-    headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ task_id: taskId, event_type: eventType, occurred_at: occurredAt }),
-  });
-  if (!res.ok) {
-    console.error(`[webhook] insert failed ${res.status}:`, await res.text().catch(() => ""));
+// Takes the whole delivery's rows at once. PostgREST inserts an array in a
+// single statement, so a multi-event delivery costs one round trip rather than
+// one per event.
+async function insertWebhookEvents(env, rows) {
+  if (!rows.length) return;
+  try {
+    const res = await sbFetch(env, `/wrike_webhook_events`, {
+      method: "POST",
+      // return=minimal: this is a fire-and-forget insert, we don't need the rows
+      // echoed back — asking for the representation just adds a SELECT that can
+      // fail on its own.
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify(rows),
+    });
+    if (!res.ok) {
+      console.error(`[webhook] insert failed ${res.status}:`, await res.text().catch(() => ""));
+    }
+  } catch (err) {
+    // Runs after the response has already gone back to Wrike, so there is no
+    // status left to influence — log and drop. The periodic sync backfills.
+    console.error("[webhook] insert threw:", err.message);
   }
-  return res;
 }
 
 // ── HMAC helpers (Wrike webhook signature verification) ─────────────────────
@@ -620,7 +733,16 @@ async function refreshAccessToken(env, refreshToken) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  if (!res.ok) throw new Error(`Wrike token refresh failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    // 400/401 is Wrike saying the refresh token itself is no good — the member
+    // really must reconnect. A 5xx or a rate-limit is Wrike having a bad
+    // moment and must not be dressed up as a sign-out.
+    if (res.status === 400 || res.status === 401) {
+      throw new WrikeAuthInvalid(`Wrike rejected the refresh token: ${res.status} ${detail}`);
+    }
+    throw new Error(`Wrike token refresh failed: ${res.status} ${detail}`);
+  }
   return res.json();
 }
 
@@ -639,7 +761,27 @@ async function refreshAccessToken(env, refreshToken) {
 // near-expired token at the same moment raced each other, and the person at the
 // browser could be signed out by an After Effects panel on someone else's
 // machine. One implementation now, so the two cannot drift apart again.
-async function refreshTokenRow(env, row) {
+// Keep trying to store credentials Wrike has already rotated to. Runs detached
+// from the request that triggered it (via waitUntil), because the request is
+// usually the thing that just died.
+async function retryTokenPersist(env, sessionToken, patch) {
+  for (const delay of TOKEN_PERSIST_RETRY_DELAYS_MS) {
+    await new Promise((r) => setTimeout(r, delay));
+    try {
+      const saved = await updateTokenRow(env, sessionToken, patch, SB_AUTH_TIMEOUT_MS);
+      unpersistedTokens.delete(sessionToken);
+      console.log("[token] background persist succeeded");
+      return saved;
+    } catch (err) {
+      console.error("[token] background persist retry failed:", err.message);
+    }
+  }
+  // Out of attempts. The in-memory pair stays put — it is still the only
+  // working one, and this isolate can go on using it until it is recycled.
+  console.error("[token] background persist gave up; session survives only in this isolate");
+}
+
+async function refreshTokenRow(env, row, ctx) {
   const key = row.session_token;
   if (!refreshInFlight.has(key)) {
     refreshInFlight.set(
@@ -647,13 +789,30 @@ async function refreshTokenRow(env, row) {
       (async () => {
         try {
           const refreshed = await refreshAccessToken(env, row.refresh_token);
-          return await updateTokenRow(env, key, {
+          const patch = {
             access_token: refreshed.access_token,
             refresh_token: refreshed.refresh_token || row.refresh_token,
             api_host: refreshed.host || row.api_host,
             expires_at: new Date(Date.now() + Number(refreshed.expires_in || 3600) * 1000).toISOString(),
             updated_at: new Date().toISOString(),
-          });
+          };
+          // Past this line Wrike has already burned the old refresh token, so
+          // failing to store the new one is not a failure we may propagate —
+          // it would sign the member out over a database blip. Hold the new
+          // pair, keep serving from it, and retry the write in the background.
+          try {
+            const saved = await updateTokenRow(env, key, patch, SB_AUTH_TIMEOUT_MS);
+            unpersistedTokens.delete(key);
+            return saved;
+          } catch (err) {
+            console.error("[token] persist failed, holding new credentials in memory:", err.message);
+            const next = { ...row, ...patch };
+            unpersistedTokens.set(key, next);
+            const retry = retryTokenPersist(env, key, patch);
+            if (ctx) ctx.waitUntil(retry);
+            else retry.catch(() => {});
+            return next;
+          }
         } finally {
           refreshInFlight.delete(key);
         }
@@ -750,8 +909,15 @@ async function handleDisconnect(request, env) {
   const cookies = parseCookies(request);
   const session = cookies[SESSION_COOKIE];
   if (session) {
-    const row = await getTokenRowBySession(env, session);
-    if (row) await deleteTokenRow(env, row.session_token);
+    // Best-effort: the cookie is cleared below either way, so a database that
+    // can't be reached must not keep the member signed in.
+    try {
+      const row = await getTokenRowBySession(env, session);
+      if (row) await deleteTokenRow(env, row.session_token);
+    } catch (err) {
+      console.error("[disconnect] token lookup unavailable:", err.message);
+    }
+    unpersistedTokens.delete(session);
   }
   const res = json({ ok: true });
   res.headers.append("Set-Cookie", clearCookie(SESSION_COOKIE, "/"));
@@ -762,7 +928,15 @@ async function handleStatus(request, env) {
   const cookies = parseCookies(request);
   const session = cookies[SESSION_COOKIE];
   if (!session) return json({ connected: false });
-  const row = await getTokenRowBySession(env, session);
+  let row;
+  try {
+    row = await getTokenRowBySession(env, session);
+  } catch (err) {
+    // "I couldn't check" is not "you are not connected". Saying the latter is
+    // what turned a database stall into an apparent Wrike sign-out.
+    console.error("[status] token lookup unavailable:", err.message);
+    return json({ error: "status_unavailable" }, { status: 503 });
+  }
   return json({ connected: !!row, wrikeUserId: row?.wrike_user_id || null });
 }
 
@@ -775,7 +949,13 @@ async function handleWebhookRegister(request, url, env) {
   const session = cookies[SESSION_COOKIE];
   if (!session) return json({ error: "not_connected" }, { status: 401 });
 
-  const row = await getTokenRowBySession(env, session);
+  let row;
+  try {
+    row = await getTokenRowBySession(env, session);
+  } catch (err) {
+    console.error("[webhook-register] token lookup unavailable:", err.message);
+    return json({ error: "backend_unavailable" }, { status: 503 });
+  }
   if (!row) return json({ error: "not_connected" }, { status: 401 });
 
   // Wrike validates hookUrl synchronously by calling back to it during
@@ -804,7 +984,9 @@ async function handleWebhookRegister(request, url, env) {
   // this the run would get as far as that write and surface an opaque 500.
   let previousConfig;
   try {
-    previousConfig = await getWebhookConfig(env);
+    // Forced: this value is the rollback target if the create below fails, so
+    // it has to be what Supabase actually holds, not a cached copy.
+    previousConfig = await getWebhookConfig(env, { force: true });
   } catch (err) {
     console.error("[webhook] register aborted, Supabase unavailable:", err.message);
     return json({
@@ -878,7 +1060,7 @@ async function handleWebhookRegister(request, url, env) {
 // here). The real discriminator is the body: the verification challenge is
 // {"requestType":"WebHook secret verification"}; real deliveries are a JSON
 // array of event objects. Both are signature-verified the same way first.
-async function handleWebhookEvent(request, env) {
+async function handleWebhookEvent(request, env, ctx) {
   let config;
   try {
     config = await getWebhookConfig(env);
@@ -899,11 +1081,29 @@ async function handleWebhookEvent(request, env) {
   const rawBody = await request.text();
   const signatureHeader = request.headers.get("X-Hook-Signature") || "";
 
-  const expectedBodySignature = await hmacSha256Hex(config.secret, rawBody);
+  let expectedBodySignature = await hmacSha256Hex(config.secret, rawBody);
   if (!timingSafeEqual(signatureHeader, expectedBodySignature)) {
-    // Signature mismatch — not from Wrike. Discard per Wrike's docs.
-    console.error("[webhook] invalid signature — dropping delivery");
-    return json({ error: "invalid_signature" }, { status: 401 });
+    // Could be a forgery — or could be our own cached secret going stale
+    // because an admin just re-registered and rotated it. Re-read once before
+    // rejecting: answering a genuine Wrike delivery with a 401 is precisely
+    // what gets the webhook suspended account-wide.
+    let fresh = null;
+    try {
+      fresh = await refreshWebhookConfig(env);
+    } catch (err) {
+      console.error("[webhook] config re-read failed, ACKing to keep hook alive:", err.message);
+      return json({ ok: true, dropped: "config_unavailable" });
+    }
+    if (fresh) {
+      config = fresh;
+      expectedBodySignature = await hmacSha256Hex(config.secret, rawBody);
+    }
+    if (!timingSafeEqual(signatureHeader, expectedBodySignature)) {
+      // Signature mismatch against the current secret — not from Wrike.
+      // Discard per Wrike's docs.
+      console.error("[webhook] invalid signature — dropping delivery");
+      return json({ error: "invalid_signature" }, { status: 401 });
+    }
   }
 
   let parsedBody;
@@ -922,25 +1122,42 @@ async function handleWebhookEvent(request, env) {
     return new Response(null, { status: 200, headers: { "X-Hook-Secret": responseSignature } });
   }
 
-  let events = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
-  for (const evt of events) {
-    if (!evt?.taskId) continue; // ignore folder/comment/attachment-only events
-    await insertWebhookEvent(env, {
-      taskId: evt.taskId,
-      eventType: evt.eventType || null,
-      occurredAt: evt.lastUpdatedDate || new Date().toISOString(),
-    });
-  }
+  const events = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+  const rows = events
+    .filter((evt) => evt?.taskId) // ignore folder/comment/attachment-only events
+    .map((evt) => ({
+      task_id: evt.taskId,
+      event_type: evt.eventType || null,
+      occurred_at: evt.lastUpdatedDate || new Date().toISOString(),
+    }));
+
+  // Acknowledge first, write after. Wrike times a delivery out and counts it as
+  // a failure, and enough consecutive failures suspend the webhook for the
+  // whole account — a state that needs a manual admin re-register to leave. So
+  // nothing that can be slow belongs in front of this response: the write goes
+  // to waitUntil, which keeps the isolate alive to finish it after Wrike has
+  // its 200. The signature is already verified above, so we only defer work we
+  // know was genuinely ours to do.
+  ctx.waitUntil(insertWebhookEvents(env, rows));
 
   return json({ ok: true });
 }
 
-async function handleProxy(request, url, env) {
+async function handleProxy(request, url, env, ctx) {
   const cookies = parseCookies(request);
   const session = cookies[SESSION_COOKIE];
   if (!session) return json({ error: "not_connected" }, { status: 401 });
 
-  let row = await getTokenRowBySession(env, session);
+  let row;
+  try {
+    row = await getTokenRowBySession(env, session);
+  } catch (err) {
+    // Transient: tell the caller to come back, don't tell it the member is
+    // disconnected. A 401 here is what made every stalled read look like a
+    // signed-out session.
+    console.error("[proxy] token lookup unavailable:", err.message);
+    return json({ error: "backend_unavailable" }, { status: 503 });
+  }
   if (!row) return json({ error: "not_connected" }, { status: 401 });
 
   const restPath = url.pathname.replace(/^\/api\/wrike/, "");
@@ -962,7 +1179,7 @@ async function handleProxy(request, url, env) {
   };
 
   const refreshToken = async () => {
-    row = await refreshTokenRow(env, row);
+    row = await refreshTokenRow(env, row, ctx);
   };
 
   // Proactive refresh when the token is about to expire by the clock.
@@ -970,8 +1187,14 @@ async function handleProxy(request, url, env) {
     try {
       await refreshToken();
     } catch (err) {
-      console.error(err);
-      return json({ error: "token_refresh_failed" }, { status: 401 });
+      console.error("[proxy] proactive refresh failed", err);
+      // Only Wrike rejecting the credentials means reconnect. Anything else —
+      // Wrike 5xx, a network blip, a stalled database — is temporary, and
+      // answering 401 for it signs the member out over nothing.
+      if (err instanceof WrikeAuthInvalid) {
+        return json({ error: "token_refresh_failed" }, { status: 401 });
+      }
+      return json({ error: "backend_unavailable" }, { status: 503 });
     }
   }
 
