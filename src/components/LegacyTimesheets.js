@@ -1149,6 +1149,25 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
         if (isDone) return dueStr === todayStr || dueStr === tomorrowStr;
         if (t.status !== "Active") return false;
+
+        // Anything touched today belongs here, whatever it is due.
+        //
+        // The due-date window below asks "is this due about now", which is a
+        // decent guess at what you spent the day on but drops the case that
+        // matters most: work you did today and then pushed out. Rescheduling a
+        // task to next week is itself an edit made today, so the very act of
+        // moving the work you had just done was what hid it from this list —
+        // and because these tasks have no Wrike timelog yet (that being the
+        // point of the reminder), nothing else brought them back.
+        //
+        // Local date, not the raw UTC prefix: updatedDate is a full UTC
+        // timestamp, and split("T")[0] on it would put an evening edit on the
+        // wrong day east of Greenwich.
+        const updatedStr = t.updatedDate
+          ? toLocalDateStr(new Date(t.updatedDate))
+          : null;
+        if (updatedStr === todayStr) return true;
+
         if (dueStr) return dueStr >= yesterdayStr && dueStr <= tomorrowStr;
 
         const createdStr = t.createdDate ? t.createdDate.split("T")[0] : null;
@@ -2302,6 +2321,51 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [selectedRowIds, clearSelection]
   );
+  // Copy each ticked row as a fresh entry on the same day.
+  //
+  // Three things are deliberately NOT carried over:
+  //   • the hours — a copy that arrives pre-filled is one you can forget to
+  //     change, and the cost of that is time billed twice on a timesheet that
+  //     goes out to the client. Blank makes you say what the second entry was.
+  //   • wrikeTimelogId — it is the id of the log the ORIGINAL was pulled from.
+  //     Cloning it would badge the copy "Wrike Synced" when nothing of the sort
+  //     happened, and hand the pull's dedupe (fetchExistingTimelogIds) an id it
+  //     already knows.
+  //   • taskId — renderDayCell matches a Wrike task to a row by taskId and day,
+  //     and takes the first hit, so two rows sharing one would make the modal's
+  //     time cell speak for whichever came first.
+  // Everything that identifies the WORK — job, film, client, description,
+  // territory, category, notes — is what you wanted copied, and is.
+  const duplicateSelected = useCallback(() => {
+    if (frozenDays[activeDay]) return;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const copies = [];
+    for (const id of selectedRowIds) {
+      const src = byId.get(id);
+      if (!src) continue;
+      const { id: _id, wrikeTimelogId: _logId, taskId: _taskId, ...rest } = src;
+      copies.push({
+        ...rest,
+        // + copies.length so a multi-row duplicate can't collide with itself:
+        // Date.now() is the same millisecond for the whole loop.
+        id: Date.now() + Math.floor(Math.random() * 1000) + copies.length,
+        taskId: null,
+        timeSpent: "none",
+        additionalTime: "none",
+      });
+    }
+    if (!copies.length) return;
+    addRows(copies);
+    clearSelection();
+    showToast(
+      copies.length === 1
+        ? "Row duplicated — set the hours on the copy"
+        : `${copies.length} rows duplicated — set the hours on the copies`,
+      "success"
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, selectedRowIds, activeDay, frozenDays, addRows, clearSelection]);
+
   const showConsolidationWarning =
     !consolidatedView &&
     currentDayRows.some(
@@ -2369,7 +2433,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               </button>
             </div>
             {/* Body */}
-            <div className="p-4 space-y-2 overflow-visible">
+            {/* flex-1 + min-h-0 so this scrolls inside the max-h-[80vh] column
+                rather than growing past it — min-h-0 is what lets a flex child
+                shrink below its content. Safe to clip here because
+                TableSearchableSelect positions its dropdown `fixed` on open
+                precisely so it escapes containers like this one. */}
+            <div className="p-4 space-y-2 flex-1 min-h-0 overflow-y-auto">
               {unloggedTasks.length === 0 ? (
                 <div className="text-center py-8">
                   <CheckCircle className="w-8 h-8 text-emerald-400 mx-auto mb-2 opacity-80" />
@@ -3502,6 +3571,20 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 pinned={topCategories}
                 onPick={(val) => applyToSelected("category", val)}
               />
+              <button
+                onClick={duplicateSelected}
+                disabled={!rowsAreEditable}
+                title={
+                  rowsAreEditable
+                    ? "Copy the ticked row(s) — hours left blank"
+                    : `${activeDay} is locked`
+                }
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold text-white/80 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Duplicate
+              </button>
+              <span className="w-px h-4 bg-white/20 shrink-0" />
               <button
                 onClick={clearSelection}
                 className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold text-white/60 hover:text-white transition-colors"
