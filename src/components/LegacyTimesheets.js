@@ -88,22 +88,44 @@ import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
 // Module level, not nested in LegacyTimesheet: a component redefined on every
 // render is a new type each time, which would remount these on every keystroke
 // and take the caret with it.
+//
+// Re-measured on WIDTH changes too, not just on value. The grid fits its
+// columns to the container after mount (useColumnResize's fitTo), so the first
+// measurement ran against a narrower column: a one-line description wrapped to
+// four or five lines there, the height was pinned in px, and nothing measured
+// again once the column widened. Every row stood ~140px tall around one line
+// of text. Height changes are ignored by the observer, so setting the height
+// here can't feed back into itself.
+const fitTextareaHeight = (el) => {
+  el.style.height = "auto";
+  // Add the borders back. scrollHeight covers content + padding but not
+  // border, while Tailwind's preflight puts these on border-box — so
+  // assigning scrollHeight straight across leaves the content box short by
+  // the border and still clips the last line's descenders. Measured: 2px on
+  // these cells, which is precisely the sort of "nearly right" that put a
+  // line of text out of reach in the first place.
+  const cs = getComputedStyle(el);
+  const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  el.style.height = `${el.scrollHeight + border}px`;
+};
+
 function AutoGrowTextarea({ value, ...rest }) {
   const ref = useRef(null);
   useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    // Add the borders back. scrollHeight covers content + padding but not
-    // border, while Tailwind's preflight puts these on border-box — so
-    // assigning scrollHeight straight across leaves the content box short by
-    // the border and still clips the last line's descenders. Measured: 2px on
-    // these cells, which is precisely the sort of "nearly right" that put a
-    // line of text out of reach in the first place.
-    const cs = getComputedStyle(el);
-    const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
-    el.style.height = `${el.scrollHeight + border}px`;
+    if (ref.current) fitTextareaHeight(ref.current);
   }, [value]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let lastWidth = el.offsetWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.offsetWidth === lastWidth) return;
+      lastWidth = el.offsetWidth;
+      fitTextareaHeight(el);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   return <textarea ref={ref} value={value} {...rest} />;
 }
 
