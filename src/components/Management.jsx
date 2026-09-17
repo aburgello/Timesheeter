@@ -11,6 +11,7 @@ import {
   Undo2, UploadCloud, Eye, ListChecks, Banknote,
 } from "lucide-react";
 import { supabase, selectAll } from "../lib/supabaseClient";
+import { jobKey, bookFilmTitle } from "../utils/wrikeHelpers";
 import { parseCsv, mapCsvRows } from "../utils/csv";
 import { parseTimeToSeconds, parseTimeToHours, secondsToHM } from "../utils/timeHelpers";
 import { confirmAction } from "../lib/confirm";
@@ -4566,7 +4567,13 @@ const feedJobNo = (e) => {
   const comma = after.indexOf(",");
   return (comma > 0 ? after.slice(0, comma) : after).trim();
 };
+//
+// The Job Book outranks the label, though. The label is itself a snapshot from
+// when the time was pulled, so a row saved as "Gmf : XY026245, Quotes Quad"
+// went on saying Gmf after the book named the job George Michael The Faith
+// Tour. _bookFilm is looked up by XY code in load() below.
 const feedFilm = (e) => {
+  if (e._bookFilm) return e._bookFilm;
   const colon = (e.job_number || "").indexOf(" : ");
   return colon > 0 ? e.job_number.slice(0, colon).trim() : (e.film_title || "");
 };
@@ -4896,9 +4903,12 @@ export function JobsFeedSection() {
       userIds.length
         ? supabase.from("profiles").select("wrike_user_id, first_name, last_name, department, position_id").in("wrike_user_id", userIds)
         : Promise.resolve({ data: [] }),
+      // The whole book, not just the exact labels in the feed: a row whose label
+      // has drifted from the book's ("Gmf : XY026245, …" vs "George Michael The
+      // Faith Tour : XY026245, …") still has to find its job, by code.
       jobNums.length
-        ? selectAll("jobs", "job_number, office, print_digital, job_work_category, ordered_by, billed_to, fixed_cost",
-                    (q) => q.in("job_number", jobNums)).then((data) => ({ data }))
+        ? selectAll("jobs", "id, job_number, film_title, client, office, print_digital, job_work_category, ordered_by, billed_to, fixed_cost")
+            .then((data) => ({ data }))
         : Promise.resolve({ data: [] }),
       supabase.from("positions").select("*"),
       supabase.from("job_categories").select("*"),
@@ -4906,6 +4916,16 @@ export function JobsFeedSection() {
 
     const profileMap = Object.fromEntries((profiles || []).map(p => [p.wrike_user_id, p]));
     const jobMap = Object.fromEntries((jobs || []).map(j => [j.job_number, j]));
+    // Same tie-break as useJobLookup: when a code has several rows, the one with
+    // a film, a client and the canonical "Film : CODE" form wins, then lowest id.
+    const jobScore = (j) => (j.film_title ? 1 : 0) + (j.client ? 1 : 0) + ((j.job_number || "").includes(" : ") ? 1 : 0);
+    const jobByCode = {};
+    for (const j of jobs || []) {
+      if (!j.job_number) continue;
+      const k = jobKey(j.job_number);
+      const cur = jobByCode[k];
+      if (!cur || jobScore(j) > jobScore(cur) || (jobScore(j) === jobScore(cur) && j.id < cur.id)) jobByCode[k] = j;
+    }
     const rateByPosition = Object.fromEntries(
       (positions || []).map(p => [p.id, p.hourly_rate != null ? Number(p.hourly_rate) : DEFAULT_HOURLY_RATE])
     );
@@ -4927,7 +4947,8 @@ export function JobsFeedSection() {
         _dept: p?.department || "",
         _unbilled: unbilled,
         _rate: unbilled ? 0 : (rateByPosition[positionId] ?? DEFAULT_HOURLY_RATE),
-        _job: jobMap[t.job_number] || {},
+        _job: jobMap[t.job_number] || (t.job_number && jobByCode[jobKey(t.job_number)]) || {},
+        _bookFilm: t.job_number ? bookFilmTitle(jobByCode[jobKey(t.job_number)]) : "",
       };
     }));
     setLoading(false);
@@ -5002,7 +5023,7 @@ export function JobsFeedSection() {
       if (q && !(
         (e.job_number || "").toLowerCase().includes(q) ||
         (e.client || "").toLowerCase().includes(q) ||
-        (e.film_title || "").toLowerCase().includes(q) ||
+        feedFilm(e).toLowerCase().includes(q) ||
         (e._name || "").toLowerCase().includes(q) ||
         (e.project_description || "").toLowerCase().includes(q)
       )) return false;

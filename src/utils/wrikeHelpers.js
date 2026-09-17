@@ -1,6 +1,7 @@
 import { resolveCountriesWithSource } from "./countryCodes";
 import { countryFieldIds } from "../lib/countryField";
 import { joinTerritories, hasTerritory } from "./territories";
+import { filmFromTask } from "../lib/wrikeEnrich";
 
 /**
  * Turns a job code found on a task (possibly suffixed, e.g. "XY025953_LUG_D6")
@@ -57,6 +58,24 @@ export const jobKey = (jobNumber) => {
   if (!jobNumber) return "";
   const m = String(jobNumber).match(/XY\d{5,6}/i);
   return m ? m[0].toUpperCase() : String(jobNumber).trim();
+};
+
+/**
+ * The Job Book's film for a job, or "" when the book has nothing trustworthy.
+ *
+ * Screens read the film from here rather than from the row, because a row keeps
+ * whatever was guessed when the time was logged and nothing revisits it — a row
+ * saved as "Gmf : XY026245, …" kept saying Gmf after the book learned the job
+ * is George Michael The Faith Tour.
+ *
+ * Two shapes are refused because the book holds them by mistake, not as films:
+ * "Old", which the scan took from an _Old archive folder (47 rows, Sep 2026),
+ * and a bare all-caps code like "ZAL". The row's own film is kept for those.
+ */
+export const bookFilmTitle = (job) => {
+  const f = String(job?.film_title || "").trim();
+  if (!f || /^old$/i.test(f) || /^[A-Z][A-Z0-9]{1,4}$/.test(f)) return "";
+  return f;
 };
 
 /**
@@ -132,7 +151,11 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "",
   // NOTE: job-number-derived title (below, after guessedJob is computed) takes priority over this —
   // projectName comes from fragile Wrike folder tree-climbing and can misfire on shared/multi-parent
   // folder structures (e.g. picking up a sibling campaign's folder instead of the real one).
-  let filmTitle = linkedTask.projectName || "";
+  // filmFromTask, not projectName: when the folder climb found nothing,
+  // projectName is the task name's first token title-cased ("GMF_…" → "Gmf"),
+  // and a fake film that looks filled in is never corrected. Blank is — by the
+  // Job Book override below, or by ensureJob filling the book in later.
+  let filmTitle = filmFromTask(linkedTask);
   if (!filmTitle && pathText) {
     const pathSegments = pathText.match(/\/Volumes\/[^\s]+/gi) || [];
     const filmFreq = {};
@@ -155,7 +178,6 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "",
       }
     }
   }
-  if (!filmTitle) filmTitle = titleText.split(/[_|-]/)[0]?.trim() || "";
 
   let customFieldsText = "";
   if (linkedTask.customFields) {
@@ -227,7 +249,6 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "",
   if (guessedJob && guessedJob !== "⚠️ Unassigned" && guessedJob.includes(" : ")) {
     filmTitle = guessedJob.split(" : ")[0].trim();
   }
-  if (!filmTitle) filmTitle = titleText.split(/[_|-]/)[0]?.trim() || "";
   // Normalize all-caps titles (e.g. server folder names "THE ODYSSEY" → "The Odyssey")
   if (filmTitle && filmTitle === filmTitle.toUpperCase() && filmTitle !== filmTitle.toLowerCase()) {
     filmTitle = filmTitle.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
@@ -251,7 +272,10 @@ export const guessFieldsFromTask = (linkedTask, jobOptions = [], extraText = "",
     client = "Sony Pictures";
   }
 
-  if (!filmTitle || titleUpper.includes("SHOWREEL") || titleUpper.includes("INTERNAL") || titleUpper.includes("PITCH")) {
+  // "No film" means internal only when there is no job either. A real job code
+  // with an unresolved film is a billable job we haven't named yet — calling it
+  // "XYi Unbilled" filed XY026258 (Mr Irrelevant) as internal time.
+  if ((!filmTitle && !guessedJob) || titleUpper.includes("SHOWREEL") || titleUpper.includes("INTERNAL") || titleUpper.includes("PITCH")) {
     filmTitle = filmTitle || "XYi Unbilled";
     if (!client) client = "Internal";
   }

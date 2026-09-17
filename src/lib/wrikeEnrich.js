@@ -110,7 +110,20 @@ const isNotAFilmName = (title) => {
 // Climb the folder tree to find the film name for a task
 // ---------------------------------------------------------------------------
 export function getFilmName(task, folderDictionary, extractedPath = "", extraMappings = {}, childToParents = {}) {
-  if (!task.title) return "Unknown Project";
+  return resolveFilmName(task, folderDictionary, extractedPath, extraMappings, childToParents).name;
+}
+
+// getFilmName, plus which rule answered: "folder", "path", "code" or "prefix"
+// (or "none" for a task with no title).
+//
+// "prefix" is the last resort — the task name's first token, title-cased — and
+// is not a film at all: "GMF_Quotes_Quad" came back as the film "Gmf". Callers
+// that WRITE a film somewhere (a timesheet row, the Job Book) need to tell that
+// apart from a real answer, because a fake name that looks filled in is never
+// replaced, while a blank one is filled from the Job Book. Canvas and the
+// other display callers keep the prefix, where a label beats an empty header.
+export function resolveFilmName(task, folderDictionary, extractedPath = "", extraMappings = {}, childToParents = {}) {
+  if (!task.title) return { name: "Unknown Project", source: "none" };
 
   // 1. Tree-climb: find "DIGITAL" or "PRINT" folder, then take its parent as film name.
   // Folders fetched individually (hydration) carry parentIds; the flat /folders list only
@@ -153,7 +166,7 @@ export function getFilmName(task, folderDictionary, extractedPath = "", extraMap
     }
 
     if (foundFilmName) {
-      return resolveFilmCode(foundFilmName);
+      return { name: resolveFilmCode(foundFilmName), source: "folder" };
     }
   }
 
@@ -167,7 +180,7 @@ export function getFilmName(task, folderDictionary, extractedPath = "", extraMap
       let back = digIdx - 1;
       while (back > 0 && isNotAFilmName(decodeURIComponent(parts[back]))) back--;
       if (back > 0 && parts[back].trim()) {
-        return resolveFilmCode(decodeURIComponent(parts[back]));
+        return { name: resolveFilmCode(decodeURIComponent(parts[back])), source: "path" };
       }
     }
   }
@@ -175,14 +188,23 @@ export function getFilmName(task, folderDictionary, extractedPath = "", extraMap
   // 3. Dictionary / prefix fallback
   const rawPrefix = task.title.split(/[_|-]/)[0].trim();
   const lookupKey = rawPrefix.toUpperCase();
-  if (FILM_MAPPINGS?.[lookupKey]) return FILM_MAPPINGS[lookupKey];
-  if (extraMappings?.[lookupKey]) return extraMappings[lookupKey];
+  if (FILM_MAPPINGS?.[lookupKey]) return { name: FILM_MAPPINGS[lookupKey], source: "code" };
+  if (extraMappings?.[lookupKey]) return { name: extraMappings[lookupKey], source: "code" };
 
-  return rawPrefix
-    .toLowerCase()
-    .split(" ")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  return { name: titleCase(rawPrefix), source: "prefix" };
+}
+
+// The film a task can vouch for, or "" when all it has is the name-prefix
+// guess. Tasks enriched before projectNameSource existed (the Supabase cache
+// holds them until their next sync) are judged the way buildFilmCodeMappings
+// already judges them: a projectName that is just the prefix is the fallback.
+export function filmFromTask(task) {
+  const name = task?.projectName || "";
+  if (!name || name === "Unknown Project") return "";
+  if (task.projectNameSource) return ["prefix", "none"].includes(task.projectNameSource) ? "" : name;
+  const prefix = String(task.title || "").split(/[_|-]/)[0].trim();
+  if (prefix && (name === prefix || name === titleCase(prefix))) return "";
+  return name;
 }
 
 // ---------------------------------------------------------------------------
@@ -554,7 +576,9 @@ export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statu
       extractedPathData: parsed.extractedPathData,
       tableHtml: parsed.tableHtml,
       notesText: parsed.notesText,
-      projectName: getFilmName(task, folderDictionary, parsed.extractedPathData, extraMappings, childToParents),
+      ...(({ name, source }) => ({ projectName: name, projectNameSource: source }))(
+        resolveFilmName(task, folderDictionary, parsed.extractedPathData, extraMappings, childToParents)
+      ),
       studioName: getStudioName(task, folderDictionary, childToParents),
       assignees: (task.responsibleIds || [])
         .map((id) => contactDictionary[id] || "User")

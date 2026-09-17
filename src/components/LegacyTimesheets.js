@@ -46,9 +46,9 @@ import {
   FILM_MAPPINGS,
   normalizeName,
 } from "../constants.js";
-import { resolveJobNumber } from "../utils/wrikeHelpers";
+import { resolveJobNumber, bookFilmTitle } from "../utils/wrikeHelpers";
 import { resolveCountriesWithSource } from "../utils/countryCodes";
-import { getFolderCountries, getFolderFamily, buildChildToParents, jobFolderDescription } from "../lib/wrikeEnrich";
+import { getFolderCountries, getFolderFamily, buildChildToParents, jobFolderDescription, resolveFilmName, filmFromTask } from "../lib/wrikeEnrich";
 import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
 import { countryFieldIds, warmCountryFields } from "../lib/countryField";
 import { secondsToHM } from "../utils/timeHelpers";
@@ -202,6 +202,18 @@ function BatchCategoryPicker({ onPick, pinned = [] }) {
     </div>
   );
 }
+
+// Shown where a job code has no film anywhere — neither the Wrike folders nor
+// the Job Book could name it. A visible gap instead of the name-prefix guess
+// ("Gmf") the pull used to save, which read as filled in and was never fixed.
+const FilmMissing = () => (
+  <span
+    className="font-semibold text-[#c2410d]"
+    title="No film found for this job code. Set it in Management › Job Book and it will show here."
+  >
+    Film not found
+  </span>
+);
 
 export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Drag-resizable column configs (persisted per table).
@@ -546,27 +558,39 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     return have;
   }, []);
 
+  // The film for a task, from the Wrike folder tree first — the same climb the
+  // Motion board and the Job Book scan use.
+  //
+  // Both enrich helpers below used to skip the tree entirely: a /Volumes path
+  // in the description, else the task name's first token. So every task whose
+  // description carries no server path got its film from its name — "GMF_…"
+  // became "Gmf", "FIL_…" became "Fil" — even though Wrike files it under
+  // George Michael The Faith Tour › Print. The name-prefix guess is now
+  // reported as a blank (projectNameSource "prefix"), which the pull fills from
+  // the Job Book instead of saving a fake film.
+  //
+  // folderTreeRef is read at call time, so a function declared above it is fine;
+  // the pull awaits ensureFolderTree before enriching anything.
+  const legacyFilmName = (task, extractedPathData) => {
+    const { folderDictionary, childToParent } = folderTreeRef.current;
+    const { name, source } = resolveFilmName(task, folderDictionary, extractedPathData || "", {}, childToParent);
+    if (source === "prefix" || source === "none") return { projectName: "", projectNameSource: source };
+    return { projectName: name, projectNameSource: source };
+  };
+
   const enrichLegacyTask = useCallback(
     (task, statusDict, parentById) => {
       const parent = (task.superTaskIds || [])
         .map((id) => parentById?.get(id))
         .find(Boolean);
       const parsed = parseWrikeDescription(task.description);
-      let projectName = task.title.split(/[_|-]/)[0].trim();
-      if (parsed.extractedPathData) {
-        const parts = parsed.extractedPathData.split("/");
-        const digIdx = parts.findIndex((p) => p === "DIGITAL");
-        if (digIdx > 0 && parts[digIdx - 1]) {
-          projectName = decodeURIComponent(parts[digIdx - 1])
-            .replace(/[_|-]/g, " ")
-            .trim();
-        }
-      }
+      const { projectName, projectNameSource } = legacyFilmName(task, parsed.extractedPathData);
       return {
         ...task,
         extractedPathData: parsed.extractedPathData,
         notesText: parsed.notesText,
         projectName,
+        projectNameSource,
         // Rule 2: the code ending the parent task's name.
         parentTaskTitle: parent?.title || task.parentTaskTitle || "",
         // Rule 3, for subtasks: the folders the PARENT sits in, used only when
@@ -1200,7 +1224,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         if ((fields.jobNumber || "").includes(" : ")) {
           filmTitle = fields.jobNumber.split(" : ")[0].trim();
         }
-        if (!filmTitle) filmTitle = task?.projectName || "";
+        if (!filmTitle) filmTitle = filmFromTask(task);
         const searchTitle = (task?.title || "").toUpperCase();
         // Check FILM_MAPPINGS — match by value against jobNumber or filmTitle
         const _filmMatch2 = Object.entries(FILM_MAPPINGS).find(
@@ -1225,9 +1249,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           client = "Paramount Pictures";
         else if (pathUpper.includes("SONY")) client = "Sony Pictures";
 
+        // Blank film on a real job code stays blank for the Job Book to fill —
+        // see the same rule in guessFieldsFromTask.
         if (
-          !filmTitle ||
-          filmTitle === "Unknown Project" ||
+          ((!filmTitle || filmTitle === "Unknown Project") &&
+            !/XY\d{5,6}/i.test(fields.jobNumber || "")) ||
           searchTitle.includes("SHOWREEL") ||
           searchTitle.includes("INTERNAL") ||
           searchTitle.includes("PITCH")
@@ -1463,20 +1489,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       .map((id) => parentById?.get(id))
       .find(Boolean);
     const parsed = parseWrikeDescription(task.description);
-    let projectName = task.title.split(/[_|-]/)[0].trim();
-    if (parsed.extractedPathData) {
-      const parts = parsed.extractedPathData.split("/");
-      const digIdx = parts.findIndex((p) => p === "DIGITAL");
-      if (digIdx > 0 && parts[digIdx - 1])
-        projectName = decodeURIComponent(parts[digIdx - 1])
-          .replace(/[_|-]/g, " ")
-          .trim();
-    }
+    const { projectName, projectNameSource } = legacyFilmName(task, parsed.extractedPathData);
     return {
       ...task,
       extractedPathData: parsed.extractedPathData,
       notesText: parsed.notesText,
       projectName,
+      projectNameSource,
       // Rules 2 and 3 for subtasks — see fetchParentTasks.
       parentTaskTitle: parent?.title || task.parentTaskTitle || "",
       superTaskParentIds: task.parentIds?.length ? [] : parent?.parentIds || [],
@@ -1659,7 +1678,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           if ((guessed.jobNumber || "").includes(" : ")) {
             filmTitle = guessed.jobNumber.split(" : ")[0].trim();
           }
-          if (!filmTitle) filmTitle = task?.projectName || "";
+          if (!filmTitle) filmTitle = filmFromTask(task);
           if (
             filmTitle &&
             filmTitle === filmTitle.toUpperCase() &&
@@ -1695,9 +1714,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             else if (pathUpper.includes("SONY")) client = "Sony Pictures";
           }
 
+          // Blank film on a real job code stays blank for the Job Book to fill —
+          // see the same rule in guessFieldsFromTask.
           if (
-            !filmTitle ||
-            filmTitle === "Unknown Project" ||
+            ((!filmTitle || filmTitle === "Unknown Project") &&
+              !/XY\d{5,6}/i.test(guessed.jobNumber || "")) ||
             searchTitle.includes("SHOWREEL") ||
             searchTitle.includes("INTERNAL") ||
             searchTitle.includes("PITCH")
@@ -2217,6 +2238,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // category / session logged against it that day; those individual entries are
   // the group's editable subrows. (Previously grouped by the whole
   // job+territory+category triple, which fragmented one job across many rows.)
+  // The film a row shows: the Job Book's for its code, else what the row saved.
+  // A saved film is a snapshot of the pull's best guess and is never revisited,
+  // so a job the book has since named properly would keep showing the guess.
+  const getJob = jobLookup?.getJob;
+  const displayFilm = useCallback(
+    (row) => bookFilmTitle(getJob?.(row.jobNumber)) || row.filmTitle || "",
+    [getJob]
+  );
+
   const consolidatedRows = useMemo(() => {
     const groups = {};
     currentDayRows.forEach((row) => {
@@ -2227,7 +2257,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           isGroup: true,
           jobNumber: row.jobNumber,
           client: row.client,
-          filmTitle: row.filmTitle,
+          filmTitle: displayFilm(row),
           projectDescription: row.projectDescription,
           _rawSeconds: 0,
           _additionalSeconds: 0,
@@ -2245,7 +2275,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       // First non-empty client/film wins, so the header isn't blank when only
       // some sessions carry them.
       if (!g.client && row.client) g.client = row.client;
-      if (!g.filmTitle && row.filmTitle) g.filmTitle = row.filmTitle;
+      if (!g.filmTitle) g.filmTitle = displayFilm(row);
       g._subRows.push(row);
     });
     return Object.values(groups).map((g) => ({
@@ -2257,7 +2287,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       territories: [...g._territories],
       categories: [...g._categories],
     }));
-  }, [currentDayRows]);
+  }, [currentDayRows, displayFilm]);
 
   // Flat list of what the tbody renders. Consolidated view emits a group-header
   // row followed by its editable subrows (unless the group is collapsed); flat
@@ -3194,7 +3224,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         </div>
                       </td>
                       <td className="p-2 border-r border-[#dce4ec] align-middle text-[12px] font-semibold text-[#768994] truncate px-3">{g.client}</td>
-                      <td className="p-2 border-r border-[#dce4ec] align-middle text-[12px] font-black text-[#122027] truncate px-3">{g.filmTitle}</td>
+                      <td className="p-2 border-r border-[#dce4ec] align-middle text-[12px] font-black text-[#122027] truncate px-3">{g.filmTitle || (/XY\d{5,6}/i.test(g.jobNumber || "") && <FilmMissing />)}</td>
                       <td className="p-2 border-r border-[#dce4ec] align-middle text-[11px] text-[#768994] truncate px-3">{g.projectDescription}</td>
                       <td className="p-2 border-r border-[#dce4ec] align-middle text-[11px] text-[#768994] px-3">
                         {g.territories.length ? (
@@ -3369,7 +3399,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         !rowsAreEditable ? "text-[#768994]" : "text-[#122027]"
                       }`}
                     >
-                      {row.filmTitle}
+                      {displayFilm(row) || (/XY\d{5,6}/i.test(row.jobNumber || "") && (
+                        <FilmMissing />
+                      ))}
                     </div>
                   </td>
 
