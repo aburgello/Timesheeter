@@ -3,10 +3,12 @@ import { createPortal } from "react-dom";
 import { supabase } from "../../lib/supabaseClient";
 import { Pencil, Check, Square } from "lucide-react";
 
-// The board sits under the app-wide `html { zoom: 1.1 }`. getBoundingClientRect
-// returns already-zoomed visual pixels, but an inline style.top/left is a
-// layout length the browser zooms AGAIN — so a fixed popover placed at a raw
-// rect value lands ~10% off. Dividing by the zoom factor cancels it.
+// Under a CSS `zoom` on <html>, getBoundingClientRect returns already-zoomed
+// visual pixels, but an inline style.top/left is a layout length the browser
+// zooms AGAIN — so a fixed popover placed at a raw rect value lands off by the
+// zoom factor. The app-wide `zoom: 1.1` this compensated for has been removed,
+// leaving the factor at 1; the division is kept so the popover stays correct if
+// a zoom ever comes back.
 const zoomFactor = () => parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
 
 // "Working now" for the board, as a per-task dot instead of a bar.

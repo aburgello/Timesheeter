@@ -297,7 +297,8 @@ function CountryAliasEditor({ territory, aliases, onChanged, open, onToggle, onC
 
   // A centred modal rather than a popover anchored to its row. Anchoring was
   // tried twice — nested (clipped by the list) and portaled with computed
-  // coordinates (landed rows above its own row under html{zoom:1.1}) — and it
+  // coordinates (landed rows above its own row under the html{zoom:1.1} the
+  // app ran at then) — and it
   // was never buying much: the panel names the country in its heading, so it
   // doesn't need to touch the row to say what it belongs to. This drops the
   // whole coordinate problem, can't clip, and reuses the modal shell the rest
@@ -1257,8 +1258,10 @@ function StrictSelect({ value, onChange, options, placeholder, loading, classNam
   }, [hits, groupBy, groupOrder]);
 
   // layoutRect, not getBoundingClientRect: the panel below is position:fixed
-  // and styled from this rect, so under html{zoom:1.1} a raw (visual) rect
+  // and styled from this rect, so under a non-1 html{zoom} a raw (visual) rect
   // would be zoomed a second time on paint and land offset from the button.
+  // The app's own zoom: 1.1 has since been removed, so this is currently a
+  // pass-through, kept correct in case a zoom returns.
   // The viewport height rides along so the panel can decide which way to open.
   const measure = () => {
     const r = layoutRect(btnRef.current);
@@ -5311,9 +5314,10 @@ function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
           // Once any group is open, every other top-level row shrinks and
           // drops its description. Supporting Content alone has seven
           // children, and at full height the siblings above/below it pushed
-          // those off the bottom of the viewport — the html{zoom:1.1} in
-          // tailwind.css makes the effective viewport ~10% shorter again, so
-          // there was less room than a 1080p screen suggests.
+          // those off the bottom of the viewport. This was written when
+          // tailwind.css also applied html{zoom:1.1}, which made the effective
+          // viewport ~10% shorter again; that zoom is gone, so there is now
+          // more room than when the condensing was tuned.
           const isCondensed = !!expandedGroup && !isOpen;
           return (
             <div key={group.id} className="bg-white rounded-3xl border border-[#dce4ec] shadow-sm overflow-hidden">

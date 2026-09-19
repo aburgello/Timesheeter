@@ -472,8 +472,9 @@ function NoteEditor({
   // paints above the rest of the page, regardless of how this editor ends up
   // nested.
   //
-  // The app applies `html { zoom: 1.1 }` globally (src/tailwind.css). Under a
-  // non-1 CSS `zoom`, getBoundingClientRect()/coordsAtPos()/clientX/Y all
+  // Under a non-1 CSS `zoom` on <html> — which the app applied globally until
+  // `zoom: 1.1` was removed from src/tailwind.css, and which the factor below
+  // now reads as 1 — getBoundingClientRect()/coordsAtPos()/clientX/Y all
   // report already-zoomed VISUAL pixels, but an inline `style.top`/`left`
   // value is a LAYOUT length that the browser zooms AGAIN before painting —
   // and that applies equally whether the element is fixed-and-portaled or

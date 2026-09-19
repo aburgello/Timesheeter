@@ -18,29 +18,6 @@
   html {
     scrollbar-gutter: stable;
   }
-
-  /* App-wide 110% zoom — everything (icons, type, padding, the rail)
-     scaled up together, matching what a real 110% browser zoom looked
-     like when compared side by side against 100%. `zoom` (not
-     `transform: scale`) so layout actually reflows at the new effective
-     size — breakpoints, fixed positioning (the rail), and hover targets
-     all behave as if the viewport were genuinely 10% smaller, rather
-     than a blurry visual scale bolted on top of an unchanged layout.
-     Supported in Chrome/Edge/Safari and Firefox 126+; degrades to no-op
-     (100%, unchanged) on anything older rather than breaking. */
-  html {
-    zoom: 1.1;
-  }
-
-  /* Home opts out — it's deliberately built to own exactly one viewport
-     with no scroll (h-dvh + overflow-hidden, see Home.jsx's own comments),
-     and the 110% zoom shrinks the effective CSS-pixel viewport enough that
-     Home's fixed-px rows no longer fit inside it, producing a scrollbar on
-     a page that's specifically designed to never have one. Toggled by
-     App.jsx whenever activePage === "home". */
-  html.home-page {
-    zoom: 1;
-  }
 }
 
 /* ── Analytics chart reveal ──────────────────────────────────────────────────

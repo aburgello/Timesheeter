@@ -2238,7 +2238,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const [countryQuery, setCountryQuery] = useState("");
   // Position the popover as position:fixed anchored to the "+" button so it
   // escapes the table's scroll container (which would otherwise clip it at the
-  // table's bottom edge). layoutRect corrects for the app's html{zoom:1.1}.
+  // table's bottom edge). layoutRect corrects for any html{zoom} (the app's
+  // own 1.1 has since been removed).
   const openAddPopover = (jobNumber, e) => {
     if (addEntryFor === jobNumber) { setAddEntryFor(null); return; }
     const rect = layoutRect(e.currentTarget);

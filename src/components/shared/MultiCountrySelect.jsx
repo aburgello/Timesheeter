@@ -15,8 +15,8 @@ import {
 // same shape, so it drops in wherever a single-country select used to sit.
 //
 // Positioning mirrors TableSearchableSelect: position:fixed off layoutRect so
-// the panel escapes the table's scroll container and stays aligned under the
-// app's html{zoom:1.1}.
+// the panel escapes the table's scroll container and stays aligned under any
+// html{zoom} (the app's own 1.1 has since been removed).
 export default function MultiCountrySelect({
   value,
   onChange,

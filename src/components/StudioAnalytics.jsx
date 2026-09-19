@@ -148,10 +148,11 @@ function useTooltip() {
 
   const show = (e, text) => {
     const box = e.currentTarget.closest("[data-chart]").getBoundingClientRect();
-    // clientX and box.left are both visual pixels under html{zoom:1.1}; their
-    // difference is a visual delta, but the tooltip is an absolute child of the
-    // (zoomed) chart, so its left/top are re-zoomed on paint. Divide back to
-    // layout space or the pill drifts ~10% off the cursor.
+    // Under a CSS `zoom` on <html>, clientX and box.left are both visual pixels;
+    // their difference is a visual delta, but the tooltip is an absolute child
+    // of the (zoomed) chart, so its left/top are re-zoomed on paint. Dividing
+    // back to layout space keeps the pill on the cursor. The app-wide zoom has
+    // been removed, so the factor is currently 1.
     const z = zoomFactor();
     setTip({
       x: (e.clientX - box.left) / z,
@@ -213,7 +214,7 @@ function vBarPath(x, y, w, h, r = 4) {
 // which stretched every glyph and rounded corner horizontally on any card
 // wider than 560px (worst on the full-width "Hours logged by client" card).
 // With viewBox width == the rendered width, 1 unit = 1 px: text is crisp, and
-// the page's html { zoom } scales the whole chart uniformly (no distortion).
+// any html { zoom } would scale the whole chart uniformly (no distortion).
 // contentRect.width is the layout (pre-zoom) width — exactly what we want.
 function useElementWidth() {
   const ref = useRef(null);
@@ -334,7 +335,7 @@ function BarsMonthly({ rows, color, valueFmt = fmtInt, tipSuffix = "completed" }
 }
 
 // ── campaign progress: completed vs backlog, per film ────────────────────────
-// Pure HTML/flex (no SVG) so labels never distort under the app's zoom. Each
+// Pure HTML/flex (no SVG) so labels never distort under a page zoom. Each
 // row's track length is the campaign's total task count relative to the busiest;
 // the green fill is the completed share, the muted remainder is the live backlog.
 function BarsProgress({ rows }) {
