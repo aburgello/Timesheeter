@@ -2953,7 +2953,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       {/* --- STANDARD UI --- */}
       <div className="max-w-[1800px] mx-auto bg-white shadow-sm rounded-2xl relative flex flex-col border border-[#dce4ec]">
         {/* --- MODERN TABS --- */}
-        <div className="flex px-4 pt-4 bg-slate-50 gap-2 rounded-t-2xl">
+        <div className="flex px-2 sm:px-4 pt-4 bg-slate-50 gap-1 sm:gap-2 rounded-t-2xl">
           {DAYS.map((day) => {
             const isWeekend = day === "Saturday" || day === "Sunday";
             const isActive = activeDay === day;
@@ -2976,17 +2976,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               <button
                 key={day}
                 onClick={() => setActiveDay(day)}
-                className={`flex-1 py-3 text-[13px] font-bold text-center rounded-t-xl transition-[background-color,color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 ${tabColors} ${
+                className={`flex-1 min-w-0 py-3 text-[11px] sm:text-[13px] font-bold text-center rounded-t-xl transition-[background-color,color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 ${tabColors} ${
                   isActive ? "relative z-10 top-[1px]" : ""
                 }`}
               >
                 <div className="flex flex-col items-center gap-0.5">
                   <div className="flex items-center justify-center gap-1.5">
-                    {frozenDays[day] && <Lock className="w-3 h-3 opacity-60" />}
-                    {day}
+                    {frozenDays[day] && <Lock className="w-3 h-3 opacity-60 shrink-0" />}
+                    {/* Seven full day names can't fit a phone's width, and a
+                        flex row that can't shrink pushed the whole document
+                        wider than the screen — hence the three-letter form. */}
+                    <span className="sm:hidden">{day.slice(0, 3)}</span>
+                    <span className="hidden sm:inline">{day}</span>
                     {rows.filter((r) => r.dayOfWeek === day).length > 0 && (
                       <span
-                        className={`ml-1.5 text-[10px] px-2 py-0.5 rounded-full ${
+                        className={`hidden sm:inline-block ml-1.5 text-[10px] px-2 py-0.5 rounded-full ${
                           isActive
                             ? isWeekend
                               ? "bg-rose-100 text-rose-600"
@@ -3600,7 +3604,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
         {/* Day totals — visible in the table, not only on the tab */}
         {currentDayRows.length > 0 && (
-          <div className="px-4 py-2.5 border-t border-[#dce4ec] bg-white flex items-center justify-end gap-6 text-[11px] font-bold text-[#768994]">
+          <div className="px-4 py-2.5 border-t border-[#dce4ec] bg-white flex flex-wrap items-center justify-end gap-x-6 gap-y-1 text-[11px] font-bold text-[#768994]">
             <span className="uppercase tracking-widest text-[10px] font-black text-slate-400">{activeDay} total</span>
             <span className="tabular-nums">
               {currentDayRows.length} {currentDayRows.length === 1 ? "entry" : "entries"}
@@ -3617,7 +3621,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             what it offers. */}
         {selectedCount > 0 && (
           <div className="relative z-20 -mb-4 flex justify-center pointer-events-none">
-            <div className="pointer-events-auto flex items-center gap-2 bg-[#122027] text-white rounded-full shadow-lg px-2 py-1.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="pointer-events-auto flex flex-wrap justify-center items-center gap-2 max-w-full bg-[#122027] text-white rounded-3xl sm:rounded-full shadow-lg px-2 py-1.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
               <span className="text-[11px] font-black uppercase tracking-widest pl-2">
                 {selectedCount} selected
               </span>
@@ -3654,7 +3658,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         {/* Bottom-centre "tongue" — Consolidated + Lock floating above the
             action bar, so the table's view controls cost no vertical space. */}
         <div className={`relative z-10 -mb-4 flex justify-center pointer-events-none ${selectedCount > 0 ? "hidden" : ""}`}>
-          <div className="pointer-events-auto flex items-center gap-1 bg-white border border-[#dce4ec] rounded-full shadow-md px-1.5 py-1">
+          <div className="pointer-events-auto flex flex-wrap justify-center items-center gap-1 max-w-full bg-white border border-[#dce4ec] rounded-3xl sm:rounded-full shadow-md px-1.5 py-1">
             <button
               onClick={() => setConsolidatedView((v) => !v)}
               title="Merge rows with the same job number — territories & categories become subrows, raw time summed before rounding"
