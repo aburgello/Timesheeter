@@ -96,7 +96,7 @@ export default function CommentTrailModal({
   // Per day: { status: "loading"|"ready"|"error", comments, truncated, activity,
   // tasks, hasHistory, since, error }
   const [byDay, setByDay] = useState({});
-  // Per "iso:taskId": what the member changed — { on, hours, notes }.
+  // Per "iso:taskId": what the member changed — { on, hours, extra }.
   const [edits, setEdits] = useState({});
   const [added, setAdded] = useState(null);
   // The row a timeline mark was clicked for: { key, itemId, n }. n makes a
@@ -303,7 +303,8 @@ export default function CommentTrailModal({
         on: !locked && (e.on ?? (est !== null && gap > 0)),
         hours: e.hours ?? gapRegular,
         extra: e.extra ?? gapExtra,
-        notes: e.notes ?? (task?.title || ""),
+        // Not shown or edited here: rows carry the task's title as their note.
+        notes: task?.title || "",
       };
     });
 
@@ -831,20 +832,6 @@ function Suggestion({ s, frozen, edit, jump }) {
           {s.fields.guessed.territory && <span>{s.fields.guessed.territory}</span>}
           {s.fields.guessed.category && <span>{s.fields.guessed.category}</span>}
         </div>
-        {!s.locked && (
-          <div className="mt-2.5 flex items-center gap-2">
-            <label htmlFor={`ctn-${s.key}`} className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Notes
-            </label>
-            <input
-              id={`ctn-${s.key}`}
-              value={s.notes}
-              disabled={frozen}
-              onChange={(e) => edit(s.key, { notes: e.target.value })}
-              className="flex-1 min-w-0 text-xs bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-[#12a0e1]/60"
-            />
-          </div>
-        )}
         <button
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
