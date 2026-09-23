@@ -1,3 +1,5 @@
+import { splitTerritories } from "./territories";
+
 // ── Estimating what you worked on, from your Wrike activity ──────────────────
 // People often don't comment on a task until they have something to send for
 // review, so a comment marks the END of a stretch of work, not the start. The
@@ -18,20 +20,35 @@
 // the task that day is most likely the review step ("Client Review"), not a
 // new start, so it's dropped rather than handed the rest of the day.
 //
+// The working day (09:30–18:00) bounds the stretches nobody closed: a hand-off
+// you never acted on, or one someone else closed. A stretch YOU close proves
+// you were working, so it isn't cut at 18:00: a comment at 20:15 counts to
+// 20:15. Its start is still held to 09:30 (an overnight automated status
+// change isn't a night's work), unless your action came before 09:30 too, in
+// which case the early start is real, floored at 07:00.
+//
+// Time after 18:00 is overtime and is reported separately, so it can go in
+// the timesheet's Add. Time column.
+//
 // When stretches overlap, each minute is split evenly between the tasks open
 // in it, so a day never adds up to more hours than it had.
 //
 // Everything here is in minutes since local midnight; the caller converts.
 
 export const DAY_START_MIN = 9 * 60 + 30;
-export const DAY_END_MIN = 18 * 60;
+export const DAY_END_MIN = 18 * 60; // also where overtime begins
+export const EARLIEST_MIN = 7 * 60;
 
 /**
  * events: [{ taskId, minute, kind: "start"|"mine"|"stop", cue?: "assigned"|"status" }]
- * Returns { byTask: { [taskId]: minutes }, intervals: [{ taskId, from, to }] },
- * where intervals are each task's stretches (before splitting), for drawing.
+ * dayEnd: where unclosed stretches stop — 18:00, or now if that's earlier today.
+ * Returns {
+ *   byTask:         { [taskId]: minutes }, all of it
+ *   overtimeByTask: { [taskId]: minutes }, the part after 18:00
+ *   intervals:      [{ taskId, from, to }], each stretch before splitting, for drawing
+ * }
  */
-export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd = DAY_END_MIN } = {}) {
+export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd = DAY_END_MIN, overtimeFrom = DAY_END_MIN } = {}) {
   const perTask = new Map();
   for (const e of events) {
     if (!e.taskId || !Number.isFinite(e.minute)) continue;
@@ -40,11 +57,14 @@ export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd 
   }
 
   const intervals = [];
-  const push = (taskId, from, to) => {
-    const f = Math.max(from, dayStart);
-    const t = Math.min(to, dayEnd);
+  const add = (taskId, f, t) => {
     if (t > f) intervals.push({ taskId, from: f, to: t });
   };
+  // Nobody closed it: hold it to the working day.
+  const unclosed = (taskId, from, to) => add(taskId, Math.max(from, dayStart), Math.min(to, dayEnd));
+  // You closed it: runs to your action, however late.
+  const closedByYou = (taskId, from, to) =>
+    add(taskId, to <= dayStart ? Math.max(from, EARLIEST_MIN) : Math.max(from, dayStart), to);
 
   for (const [taskId, list] of perTask) {
     list.sort((a, b) => a.minute - b.minute);
@@ -54,27 +74,32 @@ export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd 
       if (e.kind === "start") {
         if (!open) open = { minute: e.minute, cue: e.cue };
       } else if (e.kind === "mine") {
-        push(taskId, open ? open.minute : lastMine ?? dayStart, e.minute);
+        closedByYou(taskId, open ? open.minute : lastMine ?? dayStart, e.minute);
         lastMine = e.minute;
         open = null;
       } else if (e.kind === "stop" && open) {
-        push(taskId, open.minute, e.minute);
+        unclosed(taskId, open.minute, e.minute);
         open = null;
       }
     }
-    if (open && !(open.cue === "status" && lastMine !== null)) push(taskId, open.minute, dayEnd);
+    if (open && !(open.cue === "status" && lastMine !== null)) unclosed(taskId, open.minute, dayEnd);
   }
 
-  // Split each stretch of the day between the tasks open in it.
+  // Split each stretch of the day between the tasks open in it. 18:00 is a cut
+  // too, so no piece straddles it and each is wholly overtime or not.
   const byTask = {};
-  for (const taskId of perTask.keys()) byTask[taskId] = 0;
-  const cuts = [...new Set(intervals.flatMap((i) => [i.from, i.to]))].sort((a, b) => a - b);
+  const overtimeByTask = {};
+  for (const taskId of perTask.keys()) byTask[taskId] = overtimeByTask[taskId] = 0;
+  const cuts = [...new Set([...intervals.flatMap((i) => [i.from, i.to]), overtimeFrom])].sort((a, b) => a - b);
   for (let k = 0; k < cuts.length - 1; k++) {
     const [a, b] = [cuts[k], cuts[k + 1]];
     const open = [...new Set(intervals.filter((i) => i.from <= a && i.to >= b).map((i) => i.taskId))];
-    for (const taskId of open) byTask[taskId] += (b - a) / open.length;
+    for (const taskId of open) {
+      byTask[taskId] += (b - a) / open.length;
+      if (a >= overtimeFrom) overtimeByTask[taskId] += (b - a) / open.length;
+    }
   }
-  return { byTask, intervals };
+  return { byTask, overtimeByTask, intervals };
 }
 
 /**
@@ -120,20 +145,32 @@ export const jobCode = (jobNumber) =>
   ((jobNumber || "").match(/XY\d{5,6}/i) || [""])[0].toUpperCase();
 
 /**
- * Hours already on Legacy for this task on this day. Rows pulled from Wrike
- * carry the taskId; rows typed in by hand only carry the job number, so those
- * are matched on its XY code — but only when no row matches by task, or two
- * tasks on one job would each be credited with the other's time.
+ * Hours already on the timesheet for this task on this day, in total and per
+ * column (Time Spent as regular, Add. Time as extra).
+ *
+ * Rows pulled from Wrike carry the taskId, and match exactly. Rows typed in by
+ * hand only carry the job number, so they're matched on its XY code — only
+ * when no row matches by task, and narrowed to the task's markets. A job
+ * usually has one task per market ("SF Motion Outdoor ID" is Indonesia), so
+ * without that every task on the job was credited with the whole job's time.
+ * A row covering several markets counts in full for each of them: that time
+ * was spent on all of them together. A task with no market falls back to the
+ * whole job.
  */
-export function hoursLoggedFor(dayRows, { taskId, jobNumber }, parseHours) {
-  const sum = (list) =>
-    list.reduce((s, r) => s + parseHours(r.timeSpent) + parseHours(r.additionalTime), 0);
+export function hoursLoggedFor(dayRows, { taskId, jobNumber, territory }, parseHours) {
+  const sum = (list, match) => {
+    const regular = list.reduce((s, r) => s + parseHours(r.timeSpent), 0);
+    const extra = list.reduce((s, r) => s + parseHours(r.additionalTime), 0);
+    return { hours: regular + extra, regular, extra, match };
+  };
   const byTask = dayRows.filter((r) => taskId && r.taskId === taskId);
-  if (byTask.length) return { hours: sum(byTask), match: "task" };
+  if (byTask.length) return sum(byTask, "task");
   const code = jobCode(jobNumber);
-  if (!code) return { hours: 0, match: "" };
-  const byJob = dayRows.filter((r) => !r.taskId && jobCode(r.jobNumber) === code);
-  return byJob.length ? { hours: sum(byJob), match: "job" } : { hours: 0, match: "" };
+  const byJob = code ? dayRows.filter((r) => !r.taskId && jobCode(r.jobNumber) === code) : [];
+  const markets = new Set(splitTerritories(territory).map((t) => t.toLowerCase()));
+  if (!markets.size) return byJob.length ? sum(byJob, "job") : { hours: 0, regular: 0, extra: 0, match: "" };
+  const byMarket = byJob.filter((r) => splitTerritories(r.territory).some((t) => markets.has(t.toLowerCase())));
+  return byMarket.length ? sum(byMarket, "market") : { hours: 0, regular: 0, extra: 0, match: "" };
 }
 
 // A local calendar day as the UTC range Wrike's createdDate filter takes

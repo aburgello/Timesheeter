@@ -44,6 +44,26 @@ check("the day never adds up to more than it had", Object.values(busy).reduce((s
 
 check("a task whose only event is before 09:30 is still listed", est([mine("08:40", "a")]), { a: 0 });
 
+// Past 18:00. Your own action proves you were working, so it isn't cut off,
+// and whatever falls after 18:00 is reported as overtime.
+const ot = (events, opts) => estimateFromActivity(events, opts).overtimeByTask;
+const late = [start("17:00", "a"), mine("20:15", "a")];
+check("late: a stretch you close runs to your action", est(late).a, 195);
+check("late: the part after 18:00 is overtime", ot(late).a, 135);
+check("late: comment-only day runs from 09:30 to it", [est([mine("19:30", "a")]).a, ot([mine("19:30", "a")]).a], [600, 90]);
+check("late: overtime is split like the rest", ot([start("17:00", "a"), start("17:00", "b"), mine("19:00", "a"), mine("19:00", "b")]), { a: 30, b: 30 });
+check("late: nothing before 18:00 is overtime", ot([start("10:00", "a"), mine("12:00", "a")]).a, 0);
+
+// A stretch nobody closed still stops at 18:00, so a late hand-off isn't
+// read as a night's work.
+check("unclosed: a hand-off after 18:00 claims nothing", est([start("18:30", "a", "assigned")]).a, 0);
+check("unclosed: closed by someone else after 18:00 stops at 18:00", est([start("17:00", "a"), stop("19:00", "a")]).a, 60);
+
+// Before 09:30: only when your action is early too, and never before 07:00.
+check("early: hand-off and comment both before 09:30 count as they happened", est([start("08:00", "a", "assigned"), mine("08:50", "a")]).a, 50);
+check("early: an overnight hand-off is floored at 07:00", est([start("05:00", "a"), mine("08:00", "a")]).a, 60);
+check("early: a hand-off before 09:30 closed later still counts from 09:30", est([start("07:00", "a"), mine("10:00", "a")]).a, 30);
+
 // Raw activity → events.
 const iso = (hhmm) => {
   const [h, m] = hhmm.split(":").map(Number);
@@ -86,9 +106,24 @@ const dayRows = [
   { taskId: null, jobNumber: "XY026041", timeSpent: "0.5", additionalTime: "0:15" },
   { taskId: "z", jobNumber: "XY026041", timeSpent: "2:00", additionalTime: "none" },
 ];
-check("logged: matched by task first", hoursLoggedFor(dayRows, { taskId: "a", jobNumber: "XY026041" }, parseTimeToHours), { hours: 1, match: "task" });
-check("logged: hand-typed rows match on the job code", hoursLoggedFor(dayRows, { taskId: "b", jobNumber: "Other : XY026041, x" }, parseTimeToHours), { hours: 0.75, match: "job" });
-check("logged: nothing on Legacy", hoursLoggedFor(dayRows, { taskId: "q", jobNumber: "XY099999" }, parseTimeToHours), { hours: 0, match: "" });
+check("logged: matched by task first", hoursLoggedFor(dayRows, { taskId: "a", jobNumber: "XY026041" }, parseTimeToHours), { hours: 1, regular: 1, extra: 0, match: "task" });
+check("logged: hand-typed rows match on the job code, per column", hoursLoggedFor(dayRows, { taskId: "b", jobNumber: "Other : XY026041, x" }, parseTimeToHours), { hours: 0.75, regular: 0.5, extra: 0.25, match: "job" });
+// The case from the screenshot: four tasks on XY026205, one per market, and
+// hand-typed rows per market. Each task gets its own market's time, not 3:00.
+const sf = [
+  { taskId: null, jobNumber: "XY026205", territory: "Czech", timeSpent: "0:30", additionalTime: "none" },
+  { taskId: null, jobNumber: "XY026205", territory: "Austria", timeSpent: "1:00", additionalTime: "none" },
+  { taskId: null, jobNumber: "XY026205", territory: "Indonesia", timeSpent: "1:00", additionalTime: "none" },
+  { taskId: null, jobNumber: "XY026205", territory: "Cyprus, Croatia, Sweden, Czech", timeSpent: "0:30", additionalTime: "none" },
+];
+const forMarket = (territory) => hoursLoggedFor(sf, { taskId: "t", jobNumber: "Street Fighter : XY026205, INT", territory }, parseTimeToHours);
+check("logged: only this task's market", forMarket("Indonesia"), { hours: 1, regular: 1, extra: 0, match: "market" });
+check("logged: a multi-market row counts for each of its markets", forMarket("Sweden").hours, 0.5);
+check("logged: a market in two rows gets both", forMarket("Czech").hours, 1);
+check("logged: a market with nothing logged is nothing", forMarket("Brazil"), { hours: 0, regular: 0, extra: 0, match: "" });
+check("logged: markets match regardless of case", forMarket("indonesia").hours, 1);
+check("logged: a task with no market falls back to the whole job", forMarket("").hours, 3);
+check("logged: nothing on the timesheets", hoursLoggedFor(dayRows, { taskId: "q", jobNumber: "XY099999" }, parseTimeToHours), { hours: 0, regular: 0, extra: 0, match: "" });
 
 const range = dayRangeUtc(new Date(2026, 8, 23, 15, 12));
 check("day range has no milliseconds", /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(range.start), true);

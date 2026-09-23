@@ -46,6 +46,14 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
 const hm = (hours) => secondsToHM(hours * 3600, "0:00");
 const clock = (minute) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 const plural = (n, word) => `${n} ${word}${n !== 1 ? "s" : ""}`;
+// Minutes → hours on the 0.25 grid, zero allowed (roundToQuarterHours has a floor).
+const quarters = (minutes) => Math.round((minutes || 0) / 15) / 4;
+// How much of an estimate isn't on the sheet yet, on the 0.25 grid. Under
+// half a step short counts as covered.
+const shortfall = (estimate, logged) => {
+  const short = estimate - logged;
+  return short >= 0.125 ? Math.round(short * 4) / 4 : 0;
+};
 
 // Monday of this week through today — the days the timesheet grid can hold.
 function daysSoFar() {
@@ -208,6 +216,7 @@ export default function CommentTrailModal({
         : DAY_END_MIN;
 
     let byTask = {};
+    let overtimeByTask = {};
     let intervals = [];
     let taskOrder;
     if (state.hasHistory) {
@@ -218,7 +227,7 @@ export default function CommentTrailModal({
         isMyTask,
         statusGroup: groupOf,
       });
-      ({ byTask, intervals } = estimateFromActivity(events, { dayEnd }));
+      ({ byTask, overtimeByTask, intervals } = estimateFromActivity(events, { dayEnd }));
       // A task whose only event is someone closing it wasn't worked on.
       taskOrder = [
         ...new Set(
@@ -238,13 +247,29 @@ export default function CommentTrailModal({
     const suggestions = taskOrder.map((taskId, i) => {
       const task = state.tasks.get(taskId);
       const { guessed, client, filmTitle } = rowFieldsFromTask(task);
-      const logged = hoursLoggedFor(dayRows, { taskId, jobNumber: guessed.jobNumber }, hmToHours);
-      const est = state.hasHistory ? roundToQuarterHours(byTask[taskId]) : null;
+      const logged = hoursLoggedFor(dayRows, { taskId, jobNumber: guessed.jobNumber, territory: guessed.territory }, hmToHours);
+      // Time before 18:00 goes in Time Spent; after it is overtime, for the
+      // Add. Time column. Each is compared with its own column on the sheet.
+      let est = null;
+      let estRegular = 0;
+      let estExtra = 0;
+      let gapRegular = 0;
+      let gapExtra = 0;
       let gap = null;
       let standing;
-      if (est !== null) {
-        const short = est - logged.hours;
-        gap = short >= 0.125 ? roundToQuarterHours(short * 60) : 0;
+      if (state.hasHistory) {
+        estExtra = quarters(overtimeByTask[taskId]);
+        estRegular = quarters(byTask[taskId] - overtimeByTask[taskId]);
+        // Something happened on it, so never nothing — the same one-step floor
+        // roundToQuarterHours gives.
+        if (estRegular + estExtra === 0) estRegular = roundToQuarterHours(0);
+        est = estRegular + estExtra;
+        // The total decides whether anything is missing; the columns only
+        // decide where a real shortfall goes. Otherwise overtime already
+        // logged as regular time would be suggested again as add. time.
+        gap = shortfall(est, logged.hours);
+        gapExtra = Math.min(shortfall(estExtra, logged.extra), gap);
+        gapRegular = gap - gapExtra;
         standing = gap === 0 ? "covered" : logged.hours > 0 ? "short" : "missing";
       } else {
         standing = logged.hours > 0 ? "covered" : "missing";
@@ -270,12 +295,14 @@ export default function CommentTrailModal({
         items,
         commentCount: items.filter((x) => x.type === "comment").length,
         est,
+        estExtra,
         logged,
         gap,
         standing,
         locked,
         on: !locked && (e.on ?? (est !== null && gap > 0)),
-        hours: e.hours ?? (est === null ? 0 : gap || est),
+        hours: e.hours ?? gapRegular,
+        extra: e.extra ?? gapExtra,
         notes: e.notes ?? (task?.title || ""),
       };
     });
@@ -299,8 +326,8 @@ export default function CommentTrailModal({
 
   const edit = (key, patch) => setEdits((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
 
-  const picked = view ? view.suggestions.filter((s) => s.on && s.hours > 0) : [];
-  const pickedTotal = picked.reduce((s, x) => s + x.hours, 0);
+  const picked = view ? view.suggestions.filter((s) => s.on && s.hours + s.extra > 0) : [];
+  const pickedTotal = picked.reduce((s, x) => s + x.hours + x.extra, 0);
 
   const handleAdd = () => {
     if (!picked.length || isFrozen) return;
@@ -320,7 +347,7 @@ export default function CommentTrailModal({
       notes: s.notes,
       is3D: false,
       timeSpent: secondsToHM(s.hours * 3600),
-      additionalTime: "none",
+      additionalTime: secondsToHM(s.extra * 3600),
       _countrySource: s.fields.guessed.countrySource,
       _categorySource: s.fields.guessed.categorySource,
     }));
@@ -596,6 +623,8 @@ function Timeline({ view, activeItemId, onPick }) {
   const pct = (m) => `${(((m - start) / (end - start)) * 100).toFixed(2)}%`;
   const hours = [];
   for (let h = start; h <= end; h += 60) hours.push(h);
+  // Past 18:00 is overtime; shade it so the Add. Time suggestion reads at a glance.
+  const hasOvertime = end > DAY_END_MIN;
 
   const show = (s, item) => (e) => setHover({ s, item, rect: e.currentTarget.getBoundingClientRect() });
   const hide = () => setHover(null);
@@ -620,6 +649,9 @@ function Timeline({ view, activeItemId, onPick }) {
               <span className="truncate">{s.title}</span>
             </div>
             <div className="relative h-full">
+              {hasOvertime && (
+                <div className="absolute inset-y-0 right-0 bg-amber-400/[0.06]" style={{ left: pct(DAY_END_MIN) }} />
+              )}
               {hours.map((h) => (
                 <div key={h} className="absolute inset-y-0 w-px bg-white/5" style={{ left: pct(h) }} />
               ))}
@@ -676,6 +708,11 @@ function Timeline({ view, activeItemId, onPick }) {
               </span>
             </>
           )}
+          {hasOvertime && (
+            <span className="flex items-center gap-1.5">
+              <span className="w-4 h-2 rounded bg-amber-400/25" /> After 18:00, suggested as add. time
+            </span>
+          )}
           <span>Hover a mark to read it, click it to set that task's time.</span>
         </div>
       </div>
@@ -731,17 +768,26 @@ function Suggestion({ s, frozen, edit, jump }) {
     ) : (
       <Pill cls="text-[#38bdf8] bg-[#38bdf8]/10">Not on the timesheets</Pill>
     );
-  const onJob = s.logged.match === "job" ? " on this job" : "";
+  // Where the logged figure came from, when it isn't this exact task.
+  const where =
+    s.logged.match === "market"
+      ? ` for ${s.fields.guessed.territory}`
+      : s.logged.match === "job"
+      ? " on this job"
+      : "";
   const hint =
     s.est === null
       ? s.logged.hours > 0
-        ? `${hm(s.logged.hours)} logged${onJob}. Add more if needed`
+        ? `${hm(s.logged.hours)} logged${where}. Add more if needed`
         : "Set the time you spent"
       : s.standing === "covered"
       ? `Your activity suggests ${hm(s.est)}`
       : s.standing === "short"
-      ? `${hm(s.est)} suggested, ${hm(s.logged.hours)} logged${onJob}`
+      ? `${hm(s.est)} suggested, ${hm(s.logged.hours)} logged${where}`
       : `${hm(s.est)} suggested`;
+  // Show the Add. Time control when overtime is suggested or already set;
+  // otherwise it's one click away.
+  const showExtra = s.estExtra > 0 || s.extra > 0;
 
   return (
     <li
@@ -814,32 +860,72 @@ function Suggestion({ s, frozen, edit, jump }) {
         {s.locked ? (
           <span className="font-mono text-sm font-bold text-slate-300">{hm(s.logged.hours)}</span>
         ) : (
-          <div className="flex items-center rounded-lg border border-white/10 bg-black/20 overflow-hidden">
-            <button
-              onClick={() => edit(s.key, { hours: Math.max(0, s.hours - 0.25), on: s.hours - 0.25 > 0 })}
-              disabled={frozen || s.hours <= 0}
-              aria-label="Less time"
-              className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-40"
-            >
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-            <output className={`min-w-[3.25rem] text-center font-mono text-sm font-bold ${s.hours > 0 ? "text-white" : "text-slate-500"}`}>
-              {s.hours > 0 ? hm(s.hours) : "—"}
-            </output>
-            <button
-              ref={plusRef}
-              onClick={() => edit(s.key, { hours: Math.min(12, s.hours + 0.25), on: true })}
-              disabled={frozen}
-              aria-label="More time"
-              className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-40"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          <>
+            <Stepper
+              label={showExtra ? "Time" : null}
+              value={s.hours}
+              frozen={frozen}
+              plusRef={plusRef}
+              onChange={(hours) => edit(s.key, { hours, on: hours + s.extra > 0 })}
+            />
+            {showExtra ? (
+              <Stepper
+                label="Add. time"
+                value={s.extra}
+                frozen={frozen}
+                onChange={(extra) => edit(s.key, { extra, on: s.hours + extra > 0 })}
+              />
+            ) : (
+              <button
+                onClick={() => edit(s.key, { extra: 0.25, on: true })}
+                disabled={frozen}
+                className="text-[10px] font-bold text-slate-500 hover:text-[#38bdf8] disabled:opacity-40"
+              >
+                + Add. time
+              </button>
+            )}
+          </>
         )}
-        <span className="text-[10px] text-slate-500 whitespace-nowrap">{hint}</span>
+        <span className="max-w-[15rem] text-[10px] text-slate-500 text-right max-sm:text-left">{hint}</span>
+        {s.estExtra > 0 && (
+          <span className="max-w-[15rem] text-[10px] text-amber-400/80 text-right max-sm:text-left">
+            {hm(s.estExtra)} of it after 18:00, as add. time
+          </span>
+        )}
       </div>
     </li>
+  );
+}
+
+// A time in 0:15 steps. The empty value reads 0:00, greyed: a dash next to
+// the minus button looked like a second minus.
+function Stepper({ label, value, frozen, onChange, plusRef }) {
+  return (
+    <div className="flex items-center gap-2">
+      {label && <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>}
+      <div className="flex items-center rounded-lg border border-white/10 bg-black/20 overflow-hidden">
+        <button
+          onClick={() => onChange(Math.max(0, value - 0.25))}
+          disabled={frozen || value <= 0}
+          aria-label={`Less ${(label || "time").toLowerCase()}`}
+          className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-40"
+        >
+          <Minus className="w-3.5 h-3.5" />
+        </button>
+        <output className={`min-w-[3.25rem] text-center font-mono text-sm font-bold ${value > 0 ? "text-white" : "text-slate-500"}`}>
+          {hm(value)}
+        </output>
+        <button
+          ref={plusRef}
+          onClick={() => onChange(Math.min(12, value + 0.25))}
+          disabled={frozen}
+          aria-label={`More ${(label || "time").toLowerCase()}`}
+          className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-40"
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
   );
 }
 
