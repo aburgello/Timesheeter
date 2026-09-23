@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   MessagesSquare,
@@ -9,33 +10,44 @@ import {
   ChevronRight,
   CheckCircle,
   AlertCircle,
+  Info,
 } from "lucide-react";
 import { fetchMyCommentsForDay } from "../../lib/wrikeComments";
+import { fetchActivityForDay, historyStart } from "../../lib/taskActivity";
 import {
-  estimateCommentTime,
+  estimateFromActivity,
+  activityToEvents,
   roundToQuarterHours,
   hoursLoggedFor,
   localMinuteOf,
+  DAY_START_MIN,
+  DAY_END_MIN,
 } from "../../utils/commentActivity";
 import { hmToHours, getCurrentWeekStart } from "../../hooks/useLegacyRows";
 import { secondsToHM } from "../../utils/timeHelpers";
 import { isoToday, toIsoDate } from "../../utils/dates";
 
-// "What did I work on?" — suggests Legacy rows from the comments you posted in
-// Wrike that day. See utils/commentActivity.js for how comments become time.
+// "What did I work on?" — suggests timesheet rows from your Wrike activity:
+// the tasks you were handed (assigned, or moved into a new status by someone
+// else) and the comments you posted. See utils/commentActivity.js for how that
+// becomes time.
+//
+// Status history only exists from when the webhook started recording it
+// (wrike_task_activity). For a day before that, the modal lists what you
+// commented on and leaves the time for you to fill in.
 //
 // Reads only. Nothing is written — not a row, not a Job Book entry — until
 // "Add rows" is pressed, and then only through the parent's onAddRows, which
 // is the same addRows path Wrike Pull uses.
 
-const METHOD_KEY = "xyi_comment_trail_method";
 const LANE_COLOURS = ["#38bdf8", "#f59e0b", "#a78bfa", "#34d399", "#fb7185", "#facc15", "#2dd4bf", "#f472b6"];
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 const hm = (hours) => secondsToHM(hours * 3600, "0:00");
 const clock = (minute) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+const plural = (n, word) => `${n} ${word}${n !== 1 ? "s" : ""}`;
 
-// Monday of this week through today — the days the Legacy grid can hold.
+// Monday of this week through today — the days the timesheet grid can hold.
 function daysSoFar() {
   const [y, m, d] = getCurrentWeekStart().split("-").map(Number);
   const today = isoToday();
@@ -49,17 +61,6 @@ function daysSoFar() {
   return out;
 }
 
-const METHODS = {
-  lead: {
-    label: "Since last comment",
-    help: "Each comment covers the time since your previous one on any task, up to 90 min. The first of the day counts back to 09:30. Best if you comment when you finish something.",
-  },
-  span: {
-    label: "First to last",
-    help: "From your first to your last comment on a task, plus 20 min before the first. A gap of more than 75 min counts as a separate stretch. Best if you comment when you start and when you finish.",
-  },
-};
-
 export default function CommentTrailModal({
   onClose,
   wrikeUserId,
@@ -69,6 +70,9 @@ export default function CommentTrailModal({
   resolveTasks,
   rowFieldsFromTask,
   onAddRows,
+  myTaskIds,
+  statusName,
+  statusGroup,
 }) {
   const days = useMemo(daysSoFar, []);
   const [dayIso, setDayIso] = useState(
@@ -76,20 +80,13 @@ export default function CommentTrailModal({
   );
   const day = days.find((d) => d.iso === dayIso);
 
-  const [method, setMethod] = useState(() => {
-    try {
-      const m = localStorage.getItem(METHOD_KEY);
-      if (METHODS[m]) return m;
-    } catch {}
-    return "lead";
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(METHOD_KEY, method);
-    } catch {}
-  }, [method]);
+  // Read through a ref so a re-render of the grid behind (new arrays, new
+  // callbacks) doesn't make a loaded day look stale and fetch it again.
+  const live = useRef();
+  live.current = { resolveTasks, myTaskIds, statusName, statusGroup };
 
-  // Per day: { status: "loading"|"ready"|"error", comments, tasks, truncated, error }
+  // Per day: { status: "loading"|"ready"|"error", comments, truncated, activity,
+  // tasks, hasHistory, since, error }
   const [byDay, setByDay] = useState({});
   // Per "iso:taskId": what the member changed — { on, hours, notes }.
   const [edits, setEdits] = useState({});
@@ -99,15 +96,45 @@ export default function CommentTrailModal({
     async (d) => {
       setByDay((p) => ({ ...p, [d.iso]: { status: "loading" } }));
       try {
-        const { comments, truncated } = await fetchMyCommentsForDay(d.date, wrikeUserId);
-        const taskIds = [...new Set(comments.map((c) => c.taskId).filter(Boolean))];
-        const tasks = taskIds.length ? await resolveTasks(taskIds) : [];
+        const [{ comments, truncated }, since] = await Promise.all([
+          fetchMyCommentsForDay(d.date, wrikeUserId),
+          // History is a bonus: if it can't be read, fall back to comments
+          // only rather than showing nothing.
+          historyStart().catch((err) => {
+            console.warn("[what did I work on] status history unavailable:", err.message);
+            return null;
+          }),
+        ]);
+        const hasHistory = !!since && since <= d.date;
+        const mine = new Set(live.current.myTaskIds);
+        const commented = [...new Set(comments.map((c) => c.taskId).filter(Boolean))];
+
+        const activity = hasHistory
+          ? await fetchActivityForDay(d.date, wrikeUserId, [...new Set([...commented, ...mine])])
+          : [];
+        // Only tasks something happened on that concerns you: ones you
+        // commented on, were handed, or changed yourself.
+        const involved = new Set(commented);
+        for (const a of activity) {
+          if (a.event_type === "TaskResponsiblesAdded" || a.author_id === wrikeUserId || mine.has(a.task_id)) {
+            involved.add(a.task_id);
+          }
+        }
+        const tasks = involved.size ? await live.current.resolveTasks([...involved]) : [];
         setByDay((p) => ({
           ...p,
-          [d.iso]: { status: "ready", comments, truncated, tasks: new Map(tasks.map((t) => [t.id, t])) },
+          [d.iso]: {
+            status: "ready",
+            comments,
+            truncated,
+            activity,
+            hasHistory,
+            since,
+            tasks: new Map(tasks.map((t) => [t.id, t])),
+          },
         }));
       } catch (err) {
-        console.error("[comment trail]", err);
+        console.error("[what did I work on]", err);
         setByDay((p) => ({
           ...p,
           [d.iso]: {
@@ -115,12 +142,12 @@ export default function CommentTrailModal({
             error:
               err.status === 401
                 ? "Your Wrike connection has expired. Reconnect Wrike in Profile → Settings, then try again."
-                : `Couldn't read your Wrike comments (${err.message}).`,
+                : `Couldn't read your Wrike activity (${err.message}).`,
           },
         }));
       }
     },
-    [wrikeUserId, resolveTasks]
+    [wrikeUserId]
   );
 
   useEffect(() => {
@@ -140,24 +167,96 @@ export default function CommentTrailModal({
   // render so a row added (or deleted in the grid behind) is reflected at once.
   const view = useMemo(() => {
     if (state?.status !== "ready") return null;
+    const { statusName: nameOf, statusGroup: groupOf, myTaskIds: myIds } = live.current;
+    const me = wrikeUserId;
     const taskComments = state.comments.filter((c) => c.taskId);
-    const { byTask, blocks } = estimateCommentTime(
-      taskComments.map((c) => ({ taskId: c.taskId, minute: localMinuteOf(c.createdDate) })),
-      method
+    const assignedToday = new Set(
+      state.activity
+        .filter((a) => a.event_type === "TaskResponsiblesAdded" && a.user_ids?.includes(me))
+        .map((a) => a.task_id)
     );
+    const mineSet = new Set(myIds);
+    const isMyTask = (id) =>
+      mineSet.has(id) || assignedToday.has(id) || !!state.tasks.get(id)?.responsibleIds?.includes(me);
+
+    // What each task's lane and thread show: your comments, plus the changes
+    // that count as hand-offs or closes.
+    const describe = (a) => {
+      const minute = localMinuteOf(a.occurred_at);
+      const id = `${a.task_id}:${a.event_type}:${a.occurred_at}`;
+      const name = nameOf(a.custom_status_id) || a.status || "a new status";
+      if (a.event_type === "TaskResponsiblesAdded" && a.user_ids?.includes(me))
+        return { id, minute, type: "cue", text: "You were assigned" };
+      if (a.event_type === "TaskResponsiblesRemoved" && a.user_ids?.includes(me))
+        return { id, minute, type: "closed", text: "You were taken off it" };
+      if (a.event_type !== "TaskStatusChanged") return null;
+      if (a.author_id === me) return { id, minute, type: "mine", text: `You moved it to ${name}` };
+      if (!isMyTask(a.task_id)) return null;
+      const group = groupOf(a.custom_status_id);
+      return group && group !== "Active"
+        ? { id, minute, type: "closed", text: `Moved to ${name}` }
+        : { id, minute, type: "cue", text: `Moved to ${name}` };
+    };
+
+    const now = new Date();
+    const dayEnd =
+      day.iso === isoToday()
+        ? Math.max(DAY_START_MIN, Math.min(DAY_END_MIN, now.getHours() * 60 + now.getMinutes()))
+        : DAY_END_MIN;
+
+    let byTask = {};
+    let intervals = [];
+    let taskOrder;
+    if (state.hasHistory) {
+      const events = activityToEvents({
+        comments: taskComments,
+        activity: state.activity,
+        me,
+        isMyTask,
+        statusGroup: groupOf,
+      });
+      ({ byTask, intervals } = estimateFromActivity(events, { dayEnd }));
+      // A task whose only event is someone closing it wasn't worked on.
+      taskOrder = [
+        ...new Set(
+          events
+            .filter((e) => e.kind !== "stop")
+            .sort((a, b) => a.minute - b.minute)
+            .map((e) => e.taskId)
+        ),
+      ];
+    } else {
+      taskOrder = [...new Set(taskComments.map((c) => c.taskId))];
+    }
+
     const dayRows = (rows || []).filter(
       (r) => r.dayOfWeek === day.name && (!r.date || toIsoDate(r.date) === day.iso)
     );
-    const order = [...new Set(taskComments.map((c) => c.taskId))];
-    const suggestions = order.map((taskId, i) => {
+    const suggestions = taskOrder.map((taskId, i) => {
       const task = state.tasks.get(taskId);
       const { guessed, client, filmTitle } = rowFieldsFromTask(task);
-      const est = roundToQuarterHours(byTask[taskId]);
       const logged = hoursLoggedFor(dayRows, { taskId, jobNumber: guessed.jobNumber }, hmToHours);
-      const short = est - logged.hours;
-      const gap = short >= 0.125 ? roundToQuarterHours(short * 60) : 0;
+      const est = state.hasHistory ? roundToQuarterHours(byTask[taskId]) : null;
+      let gap = null;
+      let standing;
+      if (est !== null) {
+        const short = est - logged.hours;
+        gap = short >= 0.125 ? roundToQuarterHours(short * 60) : 0;
+        standing = gap === 0 ? "covered" : logged.hours > 0 ? "short" : "missing";
+      } else {
+        standing = logged.hours > 0 ? "covered" : "missing";
+      }
+      const items = [
+        ...taskComments
+          .filter((c) => c.taskId === taskId)
+          .map((c) => ({ id: c.id, minute: localMinuteOf(c.createdDate), type: "comment", text: c.text })),
+        ...state.activity.filter((a) => a.task_id === taskId).map(describe).filter(Boolean),
+      ].sort((a, b) => a.minute - b.minute);
       const key = `${day.iso}:${taskId}`;
       const e = edits[key] || {};
+      // With an estimate, a covered task can't be ticked. Without one, nothing
+      // says the logged time is enough, so everything stays tickable.
+      const locked = est !== null && standing === "covered";
       return {
         key,
         taskId,
@@ -165,33 +264,39 @@ export default function CommentTrailModal({
         colour: LANE_COLOURS[i % LANE_COLOURS.length],
         title: task?.title || "A task you can no longer open",
         fields: { guessed, client, filmTitle },
-        comments: taskComments.filter((c) => c.taskId === taskId),
+        items,
+        commentCount: items.filter((x) => x.type === "comment").length,
         est,
         logged,
         gap,
-        on: gap > 0 && (e.on ?? true),
-        hours: e.hours ?? (gap || est),
+        standing,
+        locked,
+        on: !locked && (e.on ?? (est !== null && gap > 0)),
+        hours: e.hours ?? (est === null ? 0 : gap || est),
         notes: e.notes ?? (task?.title || ""),
       };
     });
+
     const loggedTotal = dayRows.reduce(
       (s, r) => s + hmToHours(r.timeSpent) + hmToHours(r.additionalTime),
       0
     );
     return {
       suggestions,
-      blocks,
-      taskComments,
+      intervals,
+      hasHistory: state.hasHistory,
+      since: state.since,
+      commentCount: taskComments.length,
       folderOnly: state.comments.length - taskComments.length,
-      estTotal: suggestions.reduce((s, x) => s + x.est, 0),
+      estTotal: suggestions.reduce((s, x) => s + (x.est || 0), 0),
       loggedTotal,
-      missing: suggestions.filter((s) => s.gap > 0),
+      missing: suggestions.filter((s) => s.standing !== "covered"),
     };
-  }, [state, method, rows, day, edits, rowFieldsFromTask]);
+  }, [state, rows, day, edits, rowFieldsFromTask, wrikeUserId]);
 
   const edit = (key, patch) => setEdits((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
 
-  const picked = view ? view.suggestions.filter((s) => s.on) : [];
+  const picked = view ? view.suggestions.filter((s) => s.on && s.hours > 0) : [];
   const pickedTotal = picked.reduce((s, x) => s + x.hours, 0);
 
   const handleAdd = () => {
@@ -233,6 +338,10 @@ export default function CommentTrailModal({
     return () => clearTimeout(t);
   }, [added]);
 
+  const sinceText = view?.since
+    ? view.since.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })
+    : null;
+
   return (
     <div className="fixed inset-0 z-[100001] flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
@@ -255,8 +364,8 @@ export default function CommentTrailModal({
               <h2 id="comment-trail-title" className="text-base font-bold text-white">
                 What did I work on?
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Suggestions from the comments you posted in Wrike. Tick what's right, adjust the time, add it to Legacy.
+              <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
+                Suggestions from your Wrike activity: the tasks you were handed and the comments you posted. Tick the ones that are right, adjust the time and add them to your timesheet.
               </p>
             </div>
           </div>
@@ -291,7 +400,7 @@ export default function CommentTrailModal({
           {(!state || state.status === "loading") && (
             <div className="py-20 flex flex-col items-center gap-3 text-sm text-slate-400">
               <RefreshCw className="w-5 h-5 animate-spin text-[#38bdf8]" />
-              Reading your Wrike comments for {day.name}…
+              Reading your Wrike activity for {day.name}…
             </div>
           )}
 
@@ -310,10 +419,12 @@ export default function CommentTrailModal({
 
           {view && view.suggestions.length === 0 && (
             <div className="py-20 px-6 text-center text-sm text-slate-400">
-              You didn't comment on any Wrike tasks on {day.name}.
+              {view.hasHistory
+                ? `No Wrike activity from you on ${day.name}: no tasks handed to you and no comments.`
+                : `You didn't comment on any Wrike tasks on ${day.name}.`}
               {view.folderOnly > 0 && (
                 <div className="text-xs text-slate-500 mt-1">
-                  {view.folderOnly} comment{view.folderOnly !== 1 ? "s" : ""} on folders or projects, which don't map to a job.
+                  {plural(view.folderOnly, "comment")} on folders or projects, which don't map to a job.
                 </div>
               )}
             </div>
@@ -323,38 +434,48 @@ export default function CommentTrailModal({
             <>
               {/* Summary */}
               <div className="grid grid-cols-2 md:grid-cols-4 border-b border-white/5">
-                <Stat value={view.taskComments.length} label="comments on tasks" />
-                <Stat value={hm(view.estTotal)} label="estimated from comments" />
-                <Stat value={hm(view.loggedTotal)} label={`on Legacy for ${day.name}`} />
-                <Stat
-                  value={view.missing.length ? hm(view.missing.reduce((s, x) => s + x.gap, 0)) : "—"}
-                  label={
-                    view.missing.length
-                      ? `${view.missing.length} job${view.missing.length !== 1 ? "s" : ""} short or missing`
-                      : "nothing missing"
-                  }
-                  warn={view.missing.length > 0}
-                />
+                {view.hasHistory ? (
+                  <>
+                    <Stat value={view.suggestions.length} label="tasks you worked on" />
+                    <Stat value={hm(view.estTotal)} label="estimated from your activity" />
+                  </>
+                ) : (
+                  <>
+                    <Stat value={view.commentCount} label="comments on tasks" />
+                    <Stat value={view.suggestions.length} label="tasks you commented on" />
+                  </>
+                )}
+                <Stat value={hm(view.loggedTotal)} label={`on the timesheets for ${day.name}`} />
+                {view.hasHistory ? (
+                  <Stat
+                    value={view.missing.length ? hm(view.missing.reduce((s, x) => s + x.gap, 0)) : "—"}
+                    label={view.missing.length ? `${plural(view.missing.length, "task")} short or missing` : "nothing missing"}
+                    warn={view.missing.length > 0}
+                  />
+                ) : (
+                  <Stat
+                    value={view.missing.length || "—"}
+                    label={view.missing.length ? "not on the timesheets yet" : "all on the timesheets"}
+                    warn={view.missing.length > 0}
+                  />
+                )}
               </div>
 
-              {/* Method */}
-              <div className="px-6 py-3 border-b border-white/5 bg-black/10 flex flex-wrap items-center gap-x-4 gap-y-2">
-                <div className="flex rounded-lg border border-white/10 overflow-hidden" role="group" aria-label="Estimate method">
-                  {Object.entries(METHODS).map(([k, m]) => (
-                    <button
-                      key={k}
-                      onClick={() => setMethod(k)}
-                      aria-pressed={method === k}
-                      className={`px-3 py-1.5 text-xs font-bold transition-colors ${
-                        method === k ? "bg-[#12a0e1]/20 text-[#38bdf8]" : "text-slate-500 hover:text-slate-200"
-                      }`}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
+              {/* How the times were worked out, or why there are none */}
+              {view.hasHistory ? (
+                <p className="px-6 py-3 border-b border-white/5 bg-black/10 text-xs text-slate-400">
+                  Work on a task starts when you're assigned or someone moves it into a new status, and ends when you comment or change its status yourself. Where tasks overlap, the time is split between them.
+                </p>
+              ) : (
+                <div className="px-6 py-3 border-b border-white/5 bg-[#38bdf8]/[0.06] text-xs text-slate-300 flex items-start gap-2.5">
+                  <Info className="w-4 h-4 mt-px shrink-0 text-[#38bdf8]" />
+                  <p>
+                    {sinceText
+                      ? `Times are worked out from status changes, which TimeHub has recorded since ${sinceText}. For ${day.name}, here's what you commented on; add the time yourself.`
+                      : `Times are worked out from status changes, which TimeHub has only just started recording, so suggested times will appear from tomorrow. For now, here's what you commented on; add the time yourself.`}
+                  </p>
                 </div>
-                <p className="text-xs text-slate-400 flex-1 min-w-[16rem]">{METHODS[method].help}</p>
-              </div>
+              )}
 
               <Timeline view={view} />
 
@@ -367,7 +488,7 @@ export default function CommentTrailModal({
                   )}
                   {view.folderOnly > 0 && (
                     <span>
-                      {view.folderOnly} comment{view.folderOnly !== 1 ? "s" : ""} on folders or projects aren't listed, because they don't map to a job.
+                      {plural(view.folderOnly, "comment")} on folders or projects aren't listed, because they don't map to a job.
                     </span>
                   )}
                 </div>
@@ -389,20 +510,22 @@ export default function CommentTrailModal({
             {added ? (
               <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
                 <CheckCircle className="w-4 h-4" />
-                Added {added.n} row{added.n !== 1 ? "s" : ""} ({hm(added.hours)}) to {added.day}
+                Added {plural(added.n, "row")} ({hm(added.hours)}) to {added.day}
               </span>
             ) : isFrozen ? (
               <span className="flex items-center gap-1.5 text-amber-400">
                 <Lock className="w-3.5 h-3.5" />
-                {day.name} is locked. Unlock it in Legacy to add rows.
+                {day.name} is locked. Unlock the day to add rows.
               </span>
             ) : view && picked.length ? (
               <span>
-                <b className="text-white">{picked.length} row{picked.length !== 1 ? "s" : ""}</b> ·{" "}
+                <b className="text-white">{plural(picked.length, "row")}</b> ·{" "}
                 <b className="text-white font-mono">{hm(pickedTotal)}</b> to add to {day.name}
               </span>
             ) : view && view.suggestions.length && !view.missing.length ? (
-              <span>Everything you commented on is already on Legacy for {day.name}.</span>
+              <span>Everything you worked on is already on the timesheets for {day.name}.</span>
+            ) : view && !view.hasHistory && view.suggestions.length ? (
+              <span>Set a time on a task to add it.</span>
             ) : null}
           </div>
           <div className="flex gap-2">
@@ -417,7 +540,7 @@ export default function CommentTrailModal({
               disabled={!picked.length || isFrozen}
               className="px-4 py-2 text-xs font-bold rounded-lg bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-md shadow-[#12a0e1]/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#12a0e1]"
             >
-              {picked.length ? `Add ${picked.length} row${picked.length !== 1 ? "s" : ""} to ${day.name}` : "Add rows"}
+              {picked.length ? `Add ${plural(picked.length, "row")} to ${day.name}` : "Add rows"}
             </button>
           </div>
         </div>
@@ -435,18 +558,60 @@ function Stat({ value, label, warn }) {
   );
 }
 
-// One lane per task: a dot per comment, and a faint bar for the stretch of the
-// day each estimate covers.
+// A timeline mark: a ring for your comment, a filled diamond for a hand-off, a
+// small square for anything closing the task, a filled ring for your own
+// status change.
+function Mark({ item, colour, active, className = "", style, ...rest }) {
+  const shape =
+    item.type === "cue"
+      ? "w-2.5 h-2.5 -ml-[5px] rotate-45 rounded-[2px]"
+      : item.type === "closed"
+      ? "w-2.5 h-2.5 -ml-[5px] rounded-[2px] border-2"
+      : "w-3 h-3 -ml-1.5 rounded-full border-[2.5px]";
+  const fill =
+    item.type === "cue" || item.type === "mine" || active
+      ? colour
+      : item.type === "closed"
+      ? "transparent"
+      : "#141b28";
+  return (
+    <button
+      {...rest}
+      className={`${shape} ${className}`}
+      style={{
+        ...style,
+        background: fill,
+        borderColor: item.type === "closed" ? "#64748b" : colour,
+      }}
+    />
+  );
+}
+
+// One lane per task. Hovering a mark previews it; clicking opens everything
+// that happened on the task that day, the clicked one highlighted.
 function Timeline({ view }) {
+  // { s, item, rect } — the mark (or lane name, with item null) being previewed.
+  const [hover, setHover] = useState(null);
+  const [pinned, setPinned] = useState(null);
+
   const minutes = [
-    ...view.blocks.flatMap((b) => [b.from, b.to]),
-    ...view.taskComments.map((c) => localMinuteOf(c.createdDate)),
+    ...view.intervals.flatMap((b) => [b.from, b.to]),
+    ...view.suggestions.flatMap((s) => s.items.map((x) => x.minute)),
   ];
   const start = Math.min(9 * 60, Math.floor(Math.min(...minutes) / 60) * 60);
   const end = Math.max(18 * 60, Math.ceil(Math.max(...minutes) / 60) * 60);
   const pct = (m) => `${(((m - start) / (end - start)) * 100).toFixed(2)}%`;
   const hours = [];
   for (let h = start; h <= end; h += 60) hours.push(h);
+
+  const show = (s, item) => (e) => setHover({ s, item, rect: e.currentTarget.getBoundingClientRect() });
+  const hide = () => setHover(null);
+  const pin = (s, item) => (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHover(null);
+    setPinned((p) => (p?.item?.id === item.id ? null : { s, item, rect }));
+  };
+  const closeThread = useCallback(() => setPinned(null), []);
 
   return (
     <div className="px-6 py-4 overflow-x-auto custom-scrollbar">
@@ -460,7 +625,11 @@ function Timeline({ view }) {
         </div>
         {view.suggestions.map((s) => (
           <div key={s.key} className="grid grid-cols-[180px_1fr] items-center h-8 border-t border-dashed border-white/5">
-            <div className="flex items-center gap-2 pr-3 text-[11px] font-semibold text-slate-300 truncate" title={s.title}>
+            <div
+              className="flex items-center gap-2 pr-3 text-[11px] font-semibold text-slate-300 truncate"
+              onMouseEnter={show(s, null)}
+              onMouseLeave={hide}
+            >
               <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: s.colour }} />
               <span className="truncate">{s.title}</span>
             </div>
@@ -468,7 +637,7 @@ function Timeline({ view }) {
               {hours.map((h) => (
                 <div key={h} className="absolute inset-y-0 w-px bg-white/5" style={{ left: pct(h) }} />
               ))}
-              {view.blocks
+              {view.intervals
                 .filter((b) => b.taskId === s.taskId)
                 .map((b, i) => (
                   <div
@@ -477,54 +646,216 @@ function Timeline({ view }) {
                     style={{ left: pct(b.from), width: `calc(${pct(b.to)} - ${pct(b.from)})`, background: s.colour, opacity: 0.25 }}
                   />
                 ))}
-              {s.comments.map((c) => (
-                <span
-                  key={c.id}
-                  title={`${clock(localMinuteOf(c.createdDate))}  ${c.text}`}
-                  className="absolute top-[10px] w-3 h-3 -ml-1.5 rounded-full bg-[#141b28] border-[2.5px] hover:scale-125 transition-transform cursor-default"
-                  style={{ left: pct(localMinuteOf(c.createdDate)), borderColor: s.colour }}
-                />
-              ))}
+              {s.items.map((item) => {
+                const isPinned = pinned?.item?.id === item.id;
+                return (
+                  <Mark
+                    key={item.id}
+                    item={item}
+                    colour={s.colour}
+                    active={isPinned}
+                    data-timeline-mark
+                    onMouseEnter={pinned ? undefined : show(s, item)}
+                    onMouseLeave={hide}
+                    onFocus={pinned ? undefined : show(s, item)}
+                    onBlur={hide}
+                    onClick={pin(s, item)}
+                    aria-label={`${clock(item.minute)}: ${item.text || "attachment"}. Show everything on ${s.title}`}
+                    aria-expanded={isPinned}
+                    className={`absolute top-1/2 -translate-y-1/2 transition-transform hover:scale-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
+                      isPinned ? "scale-125" : ""
+                    }`}
+                    style={{ left: pct(item.minute) }}
+                  />
+                );
+              })}
             </div>
           </div>
         ))}
         <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[11px] text-slate-500">
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full border-2 border-slate-400" /> A comment you posted (hover to read it)
+            <span className="w-2.5 h-2.5 rounded-full border-2 border-slate-400" /> Your comment
           </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-4 h-2 rounded bg-slate-400/30" /> Time it probably covers
-          </span>
+          {view.hasHistory && (
+            <>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rotate-45 rounded-[2px] bg-slate-400" /> Handed to you
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-[2px] border-2 border-slate-500" /> Closed
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 h-2 rounded bg-slate-400/30" /> Time it probably covers
+              </span>
+            </>
+          )}
+          <span>Hover a mark to read it, click for the whole day on that task.</span>
         </div>
       </div>
+
+      {hover && !pinned && (
+        <Floating rect={hover.rect} className="w-72 pointer-events-none">
+          <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-400">
+            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: hover.s.colour }} />
+            <span className="truncate">{hover.s.title}</span>
+          </div>
+          {hover.item && (
+            <p className="mt-1.5 text-xs text-slate-100 leading-relaxed line-clamp-5 break-words">
+              <span className="font-mono text-[#38bdf8] mr-2">{clock(hover.item.minute)}</span>
+              <ItemText item={hover.item} />
+            </p>
+          )}
+        </Floating>
+      )}
+
+      {pinned && <Thread pinned={pinned} onClose={closeThread} />}
     </div>
+  );
+}
+
+function ItemText({ item }) {
+  if (item.type === "comment") return item.text || <span className="italic text-slate-500">Attachment only</span>;
+  return <span className="italic text-slate-300">{item.text}</span>;
+}
+
+// Everything that happened on the task that day, opened from a mark.
+function Thread({ pinned, onClose }) {
+  const { s, item: clicked, rect } = pinned;
+  const ref = useRef(null);
+
+  useEffect(() => {
+    // Capture phase, so Escape closes this and not the whole modal.
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    const onDown = (e) => {
+      if (ref.current?.contains(e.target) || e.target.closest?.("[data-timeline-mark]")) return;
+      onClose();
+    };
+    // Anchored to a mark, so it would drift away from it on scroll.
+    const onScroll = (e) => {
+      if (!ref.current?.contains(e.target)) onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    ref.current?.querySelector("[data-clicked]")?.scrollIntoView({ block: "nearest" });
+  }, [clicked.id]);
+
+  const jobCode = (s.fields.guessed.jobNumber || "").match(/XY\d{5,6}/i)?.[0];
+
+  return (
+    <Floating rect={rect} className="w-80" innerRef={ref} role="dialog" aria-label={`Activity on ${s.title}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs font-bold text-white">
+            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: s.colour }} />
+            <span className="break-words">{s.title}</span>
+          </div>
+          <div className="mt-0.5 text-[10px] text-slate-500">
+            {jobCode && <span className="font-mono text-slate-400 mr-2">{jobCode}</span>}
+            {plural(s.commentCount, "comment")} from you
+          </div>
+        </div>
+        <button onClick={onClose} aria-label="Close" className="p-1 -m-1 text-slate-500 hover:text-white rounded">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <ul className="mt-2.5 max-h-60 overflow-y-auto custom-scrollbar flex flex-col gap-1 -mx-1">
+        {s.items.map((item) => {
+          const isClicked = item.id === clicked.id;
+          return (
+            <li
+              key={item.id}
+              data-clicked={isClicked || undefined}
+              className={`px-2.5 py-1.5 rounded-lg text-xs leading-relaxed break-words border-l-2 ${
+                isClicked ? "bg-white/[0.06] text-slate-100" : "text-slate-300 border-transparent"
+              }`}
+              style={isClicked ? { borderColor: s.colour } : undefined}
+            >
+              <span className={`font-mono mr-2 ${isClicked ? "text-[#38bdf8]" : "text-slate-500"}`}>{clock(item.minute)}</span>
+              <ItemText item={item} />
+            </li>
+          );
+        })}
+      </ul>
+    </Floating>
+  );
+}
+
+// A card pinned next to `rect` (a DOM rect), above it when there's room and
+// below otherwise, kept inside the window. Portalled to <body> so the modal's
+// scroll areas can't clip it.
+function Floating({ rect, className = "", innerRef, children, ...rest }) {
+  const localRef = useRef(null);
+  const ref = innerRef || localRef;
+  const [pos, setPos] = useState(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { offsetWidth: w, offsetHeight: h } = el;
+    const gap = 10;
+    const left = Math.max(8, Math.min(window.innerWidth - w - 8, rect.left + rect.width / 2 - w / 2));
+    const above = rect.top - h - gap;
+    const top = above >= 8 ? above : Math.min(window.innerHeight - h - 8, rect.bottom + gap);
+    setPos({ left, top });
+  }, [rect, ref]);
+
+  return createPortal(
+    <div
+      ref={ref}
+      {...rest}
+      className={`fixed z-[100002] p-3 rounded-xl border border-white/10 bg-gradient-to-b from-[#1f2738] to-[#171e2c] shadow-2xl shadow-black/50 text-slate-300 ${className}`}
+      style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: 0, visibility: "hidden" }}
+    >
+      <div className="absolute inset-x-0 top-0 h-px rounded-t-xl bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+      {children}
+    </div>,
+    document.body
   );
 }
 
 function Suggestion({ s, frozen, edit }) {
   const [open, setOpen] = useState(false);
-  const covered = s.gap === 0;
   const jobCode = (s.fields.guessed.jobNumber || "").match(/XY\d{5,6}/i)?.[0];
-  const pill = covered ? (
-    <Pill cls="text-emerald-400 bg-emerald-400/10">On Legacy · {hm(s.logged.hours)}</Pill>
-  ) : s.logged.hours > 0 ? (
-    <Pill cls="text-amber-400 bg-amber-400/10">Short by {hm(s.gap)}</Pill>
-  ) : (
-    <Pill cls="text-[#38bdf8] bg-[#38bdf8]/10">Not logged</Pill>
-  );
-  const hint = covered
-    ? `Comments suggest ${hm(s.est)}`
-    : s.logged.hours > 0
-    ? `${hm(s.est)} suggested, ${hm(s.logged.hours)} logged${s.logged.match === "job" ? " on this job" : ""}`
-    : `${hm(s.est)} suggested`;
+  const pill =
+    s.standing === "covered" ? (
+      <Pill cls="text-emerald-400 bg-emerald-400/10">On the timesheets · {hm(s.logged.hours)}</Pill>
+    ) : s.standing === "short" ? (
+      <Pill cls="text-amber-400 bg-amber-400/10">Short by {hm(s.gap)}</Pill>
+    ) : (
+      <Pill cls="text-[#38bdf8] bg-[#38bdf8]/10">Not on the timesheets</Pill>
+    );
+  const onJob = s.logged.match === "job" ? " on this job" : "";
+  const hint =
+    s.est === null
+      ? s.logged.hours > 0
+        ? `${hm(s.logged.hours)} logged${onJob}. Add more if needed`
+        : "Set the time you spent"
+      : s.standing === "covered"
+      ? `Your activity suggests ${hm(s.est)}`
+      : s.standing === "short"
+      ? `${hm(s.est)} suggested, ${hm(s.logged.hours)} logged${onJob}`
+      : `${hm(s.est)} suggested`;
 
   return (
-    <li className={`grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 ${covered ? "opacity-55" : ""}`}>
+    <li className={`grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 ${s.locked ? "opacity-55" : ""}`}>
       <input
         type="checkbox"
         id={`ct-${s.key}`}
         checked={s.on}
-        disabled={covered || frozen}
+        disabled={s.locked || frozen}
         onChange={(e) => edit(s.key, { on: e.target.checked })}
         aria-label={`Include ${s.title}`}
         className="mt-1 w-4 h-4 accent-[#12a0e1] cursor-pointer disabled:cursor-default"
@@ -542,7 +873,7 @@ function Suggestion({ s, frozen, edit }) {
           {s.fields.guessed.territory && <span>{s.fields.guessed.territory}</span>}
           {s.fields.guessed.category && <span>{s.fields.guessed.category}</span>}
         </div>
-        {!covered && (
+        {!s.locked && (
           <div className="mt-2.5 flex items-center gap-2">
             <label htmlFor={`ctn-${s.key}`} className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
               Notes
@@ -562,33 +893,35 @@ function Suggestion({ s, frozen, edit }) {
           className="mt-2 flex items-center gap-1 text-[11px] font-bold text-[#38bdf8] hover:text-[#7dd3fc]"
         >
           <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
-          {s.comments.length} comment{s.comments.length !== 1 ? "s" : ""}
+          {s.items.length === s.commentCount ? plural(s.commentCount, "comment") : `Activity (${s.items.length})`}
         </button>
         {open && (
           <ul className="mt-2 pl-3 border-l-2 flex flex-col gap-1.5" style={{ borderColor: s.colour }}>
-            {s.comments.map((c) => (
-              <li key={c.id} className="text-xs text-slate-300 break-words">
-                <span className="font-mono text-slate-500 mr-2">{clock(localMinuteOf(c.createdDate))}</span>
-                {c.text || <span className="italic text-slate-500">(attachment only)</span>}
+            {s.items.map((item) => (
+              <li key={item.id} className="text-xs text-slate-300 break-words">
+                <span className="font-mono text-slate-500 mr-2">{clock(item.minute)}</span>
+                <ItemText item={item} />
               </li>
             ))}
           </ul>
         )}
       </div>
       <div className="flex flex-col items-end gap-1 col-start-2 sm:col-start-auto max-sm:items-start max-sm:mt-2">
-        {covered ? (
+        {s.locked ? (
           <span className="font-mono text-sm font-bold text-slate-300">{hm(s.logged.hours)}</span>
         ) : (
           <div className="flex items-center rounded-lg border border-white/10 bg-black/20 overflow-hidden">
             <button
-              onClick={() => edit(s.key, { hours: Math.max(0.25, s.hours - 0.25), on: true })}
-              disabled={frozen}
+              onClick={() => edit(s.key, { hours: Math.max(0, s.hours - 0.25), on: s.hours - 0.25 > 0 })}
+              disabled={frozen || s.hours <= 0}
               aria-label="Less time"
               className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-40"
             >
               <Minus className="w-3.5 h-3.5" />
             </button>
-            <output className="min-w-[3.25rem] text-center font-mono text-sm font-bold text-white">{hm(s.hours)}</output>
+            <output className={`min-w-[3.25rem] text-center font-mono text-sm font-bold ${s.hours > 0 ? "text-white" : "text-slate-500"}`}>
+              {s.hours > 0 ? hm(s.hours) : "—"}
+            </output>
             <button
               onClick={() => edit(s.key, { hours: Math.min(12, s.hours + 0.25), on: true })}
               disabled={frozen}

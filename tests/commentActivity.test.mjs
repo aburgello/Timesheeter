@@ -1,5 +1,6 @@
 import {
-  estimateCommentTime,
+  estimateFromActivity,
+  activityToEvents,
   roundToQuarterHours,
   hoursLoggedFor,
   jobCode,
@@ -11,38 +12,68 @@ const at = (hhmm) => {
   const [h, m] = hhmm.split(":").map(Number);
   return h * 60 + m;
 };
-const c = (time, taskId) => ({ taskId, minute: at(time) });
+const start = (time, taskId, cue = "status") => ({ taskId, minute: at(time), kind: "start", cue });
+const mine = (time, taskId) => ({ taskId, minute: at(time), kind: "mine" });
+const stop = (time, taskId) => ({ taskId, minute: at(time), kind: "stop" });
+const est = (events, opts) => estimateFromActivity(events, opts).byTask;
 
-// A morning on two tasks, one comment when each piece of work is done.
-const morning = [c("10:00", "a"), c("10:45", "a"), c("11:30", "b"), c("13:30", "b")];
+// The case this exists for: handed the task, no comment until it's sent.
+check("assigned, then sent for review: the whole stretch counts", est([start("10:00", "a", "assigned"), mine("12:30", "a")]).a, 150);
+check("a hand-off before the working day counts from 09:30", est([start("08:15", "a"), mine("11:30", "a")]).a, 120);
 
-const lead = estimateCommentTime(morning, "lead");
-check("lead: first comment counts back to 09:30", lead.blocks[0], { taskId: "a", from: at("09:30"), to: at("10:00") });
-check("lead: each comment claims the time since the one before", lead.byTask.a, 30 + 45);
-check("lead: a long gap is capped at 90 min", lead.byTask.b, 45 + 90);
+// Two tasks moved to Motion at once share the time they overlap.
+const shared = est([start("10:00", "a"), start("10:00", "b"), mine("11:00", "a"), mine("12:00", "b")]);
+check("overlap is split evenly", shared, { a: 30, b: 30 + 60 });
 
-// Out of order in, same answer out: Wrike doesn't promise an order.
-check("lead: input order doesn't matter", estimateCommentTime([...morning].reverse(), "lead").byTask, lead.byTask);
+// With no hand-off that day, a comment reaches back to the last one, else 09:30.
+check("comment with no cue counts back to 09:30", est([mine("10:30", "a")]).a, 60);
+check("...and a second one back to the first", est([mine("10:00", "a"), mine("11:00", "a")]).a, 30 + 60);
 
-// Three comments in the same minute are one piece of work, not three.
-const burst = estimateCommentTime([c("10:00", "a"), c("10:00", "a"), c("10:00", "a")], "lead");
-check("lead: a burst isn't counted three times", burst.byTask.a, 30);
+// Someone moving it on after you've delivered is the review step, not a start.
+check("a status change after your comment isn't a new start", est([start("09:30", "a"), mine("11:00", "a"), start("11:05", "a")]).a, 90);
+// ...but being assigned again is.
+check("being re-assigned after your comment is", est([mine("11:00", "a"), start("16:00", "a", "assigned")]).a, 90 + 120);
 
-// A comment posted straight after another task's still lists its task.
-const instant = estimateCommentTime([c("10:00", "a"), c("10:00", "b")], "lead");
-check("lead: a zero-length task is still listed", Object.keys(instant.byTask).sort(), ["a", "b"]);
-check("lead: and still gets one timesheet step", roundToQuarterHours(instant.byTask.b), 0.25);
+check("a hand-off with nothing after runs to 18:00", est([start("16:00", "a")]).a, 120);
+check("...or to now, on today", est([start("13:00", "a", "assigned")], { dayEnd: at("14:00") }).a, 60);
+check("closed by someone else ends the stretch", est([start("10:00", "a"), stop("11:00", "a")]).a, 60);
+check("a stop with nothing open is ignored", est([stop("11:00", "a"), mine("12:00", "a")]).a, 150);
 
-// A comment before the working day doesn't claim negative time.
-check("lead: early comment claims nothing", estimateCommentTime([c("08:40", "a")], "lead").byTask.a, 0);
+const busy = est([start("09:30", "a", "assigned"), start("09:30", "b", "assigned"), start("09:30", "c", "assigned")]);
+check("the day never adds up to more than it had", Object.values(busy).reduce((s, m) => s + m, 0), at("18:00") - at("09:30"));
 
-const span = estimateCommentTime(morning, "span");
-check("span: first to last plus a 20 min lead-in", span.byTask.a, 45 + 20);
-check("span: a silence over 75 min splits the stretch", span.byTask.b, 20 + 20);
-check("span: one block per stretch", span.blocks.filter((b) => b.taskId === "b").length, 2);
+check("a task whose only event is before 09:30 is still listed", est([mine("08:40", "a")]), { a: 0 });
 
-// Comments without a task (left on a folder) are skipped, not crashed on.
-check("folder comments are ignored", estimateCommentTime([{ taskId: undefined, minute: 600 }], "lead").byTask, {});
+// Raw activity → events.
+const iso = (hhmm) => {
+  const [h, m] = hhmm.split(":").map(Number);
+  return new Date(2026, 8, 23, h, m).toISOString();
+};
+const row = (time, taskId, event_type, extra = {}) => ({ task_id: taskId, event_type, occurred_at: iso(time), ...extra });
+const events = activityToEvents({
+  me: "ME",
+  comments: [{ taskId: "t1", createdDate: iso("12:00") }, { taskId: null, createdDate: iso("12:05") }],
+  activity: [
+    row("09:00", "t1", "TaskResponsiblesAdded", { user_ids: ["ME", "OTHER"], author_id: "PROD" }),
+    row("09:05", "t2", "TaskResponsiblesAdded", { user_ids: ["OTHER"], author_id: "PROD" }),
+    row("10:00", "t3", "TaskStatusChanged", { author_id: "PROD", custom_status_id: "MOTION" }),
+    row("10:10", "t4", "TaskStatusChanged", { author_id: "PROD", custom_status_id: "MOTION" }),
+    row("16:00", "t3", "TaskStatusChanged", { author_id: "PROD", custom_status_id: "DONE" }),
+    row("15:00", "t1", "TaskStatusChanged", { author_id: "ME", custom_status_id: "REVIEW" }),
+    row("17:00", "t5", "TaskResponsiblesRemoved", { user_ids: ["ME"], author_id: "PROD" }),
+  ],
+  isMyTask: (id) => ["t1", "t3"].includes(id),
+  statusGroup: (id) => ({ MOTION: "Active", REVIEW: "Active", DONE: "Completed" })[id],
+});
+const brief = events.map((e) => `${e.taskId} ${e.kind}${e.cue ? `/${e.cue}` : ""}`).sort();
+check("activity becomes events", brief, [
+  "t1 mine", // comment
+  "t1 mine", // status change made by me
+  "t1 start/assigned",
+  "t3 start/status", // moved to Motion by someone else, my task
+  "t3 stop", // moved to a Completed status by someone else
+  "t5 stop", // I was taken off it
+]);
 
 check("rounds to the nearest quarter hour", roundToQuarterHours(80), 1.25);
 check("never below one step", roundToQuarterHours(3), 0.25);

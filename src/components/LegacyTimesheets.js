@@ -637,6 +637,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Last-built status-id → name map, reused by the webhook patch below so an
   // incoming single-task event doesn't need to refetch /api/wrike/workflows.
   const statusDictRef = useRef({});
+  // customStatusId → its group (Active, Completed, Deferred, Cancelled), from
+  // the same workflows read. The comment suggestions use it to tell a task
+  // being handed to you from one being closed.
+  const statusGroupRef = useRef({});
 
   // The folder tree, held for the life of the page. Localisation campaigns put
   // the market in a folder rather than in the task name — an hour on
@@ -730,16 +734,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const wfRes = await fetch("/api/wrike/workflows");
       const wfJson = await wfRes.json();
       const statusDict = {};
+      const statusGroups = {};
       if (wfJson.data) {
         wfJson.data.forEach((wf) => {
           if (wf.customStatuses) {
             wf.customStatuses.forEach((st) => {
               statusDict[st.id] = st.name;
+              statusGroups[st.id] = st.group;
             });
           }
         });
       }
       statusDictRef.current = statusDict;
+      statusGroupRef.current = statusGroups;
 
       // superTaskIds is what tells us a task is a subtask at all — see
       // fetchParentTasks for why the parent has to be looked up rather than
@@ -2506,6 +2513,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           initialDay={activeDay}
           resolveTasks={resolveCommentTasks}
           rowFieldsFromTask={rowFieldsFromTask}
+          myTaskIds={activeWrikeData.map((t) => t.id)}
+          statusName={(id) => statusDictRef.current[id]}
+          statusGroup={(id) => statusGroupRef.current[id]}
           onAddRows={handleAddCommentRows}
         />
       )}
@@ -3767,11 +3777,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   }
                   setShowCommentTrail(true);
                 }}
-                title="Suggests rows from the comments you posted in Wrike"
+                title="Suggests timesheet rows from your Wrike activity: tasks you were handed and the comments you posted"
                 className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
               >
                 <MessagesSquare className="w-4 h-4" />
-                From My Comments
+                What Did I Work On?
               </button>
             )}
           </div>

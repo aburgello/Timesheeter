@@ -33,9 +33,9 @@ globalThis.fetch = async (url, opts = {}) => {
     configReads++;
     return new Response(JSON.stringify([{ webhook_id: "HOOK", secret: currentSecret }]), { status: 200 });
   }
-  if (url.includes("/wrike_webhook_events")) {
+  if (url.includes("/rpc/record_wrike_webhook_events")) {
     if (insertGate) await insertGate;
-    inserts.push(JSON.parse(opts.body));
+    inserts.push(JSON.parse(opts.body).events);
     return new Response("", { status: 201 });
   }
   throw new Error(`unexpected fetch: ${url}`);
@@ -80,6 +80,25 @@ const evt = (id) => ({ taskId: id, eventType: "TaskStatusChanged", lastUpdatedDa
   await Promise.all(ctx.pending);
   check("one batched insert for a 3-event delivery", inserts.length, 1);
   check("...carrying all three rows", inserts[0].map((r) => r.task_id), ["A", "B", "C"]);
+}
+
+// 2b. Status and assignment detail rides along in the same call, for
+// wrike_task_activity. Every row carries every key (null when absent) so the
+// function reads one shape whatever the event.
+{
+  inserts = [];
+  const ctx = makeCtx();
+  await deliver([
+    { ...evt("S"), status: "Motion", customStatusId: "CS2", oldCustomStatusId: "CS1", eventAuthorId: "PROD" },
+    { taskId: "R", eventType: "TaskResponsiblesAdded", addedResponsibles: ["ME"], eventAuthorId: "PROD", lastUpdatedDate: "2026-08-27T10:05:00Z" },
+  ], SECRET_OLD, ctx);
+  await Promise.all(ctx.pending);
+  check("still one call for the delivery", inserts.length, 1);
+  check("status change detail is sent", inserts[0][0], {
+    task_id: "S", event_type: "TaskStatusChanged", occurred_at: "2026-08-27T10:00:00Z",
+    author_id: "PROD", status: "Motion", custom_status_id: "CS2", old_custom_status_id: "CS1", user_ids: null,
+  });
+  check("assignment detail is sent", [inserts[0][1].user_ids, inserts[0][1].author_id, inserts[0][1].status], [["ME"], "PROD", null]);
 }
 
 // 3. Events without a taskId are dropped, and a delivery of only those writes nothing.

@@ -701,19 +701,21 @@ async function upsertWebhookConfig(env, { webhookId, secret }) {
   return row;
 }
 
-// Takes the whole delivery's rows at once. PostgREST inserts an array in a
-// single statement, so a multi-event delivery costs one round trip rather than
-// one per event.
+// Takes the whole delivery's rows at once, in one call, so a multi-event
+// delivery costs one round trip rather than one per event. The function writes
+// wrike_webhook_events as before and copies status and assignment changes into
+// wrike_task_activity in the same statement. See migration 20260923181757 for
+// why that's a function call, not a second request or new columns.
 async function insertWebhookEvents(env, rows) {
   if (!rows.length) return;
   try {
-    const res = await sbFetch(env, `/wrike_webhook_events`, {
+    const res = await sbFetch(env, `/rpc/record_wrike_webhook_events`, {
       method: "POST",
       // return=minimal: this is a fire-and-forget insert, we don't need the rows
       // echoed back — asking for the representation just adds a SELECT that can
       // fail on its own.
       headers: { Prefer: "return=minimal" },
-      body: JSON.stringify(rows),
+      body: JSON.stringify({ events: rows }),
     });
     if (!res.ok) {
       console.error(`[webhook] insert failed ${res.status}:`, await res.text().catch(() => ""));
@@ -1173,6 +1175,13 @@ async function handleWebhookEvent(request, env, ctx) {
       task_id: evt.taskId,
       event_type: evt.eventType || null,
       occurred_at: evt.lastUpdatedDate || new Date().toISOString(),
+      // Only kept in wrike_task_activity (status and assignment changes), for
+      // telling when work on a task began. See record_wrike_webhook_events.
+      author_id: evt.eventAuthorId || null,
+      status: evt.status || null,
+      custom_status_id: evt.customStatusId || null,
+      old_custom_status_id: evt.oldCustomStatusId || null,
+      user_ids: evt.addedResponsibles || evt.removedResponsibles || null,
     }));
 
   // Acknowledge first, write after. Wrike times a delivery out and counts it as
