@@ -13,6 +13,12 @@ import { useDepartment } from "../../hooks/useDepartment";
 // Section icons come from the pages registry filtered by department (see
 // src/lib/departments.js), including Administration; only Profile gets its
 // own dedicated avatar slot at the foot of the rail.
+//
+// Below md the rail is a bottom bar instead: a fixed 80px-wide strip down the
+// side costs a phone a fifth of its width, and the hover flyout doesn't work
+// on a touch screen anyway (a tap leaves :hover stuck, so the expanded rail
+// sat over the page until you tapped elsewhere). Same pages, same gradients,
+// along the bottom where a thumb reaches.
 export default function Rail({ activePage, setActivePage }) {
   const [initials, setInitials] = useState("");
   const wrikeUserId = localStorage.getItem("wrike_user_id");
@@ -53,77 +59,133 @@ export default function Rail({ activePage, setActivePage }) {
         ? `bg-gradient-to-br ${activeGrad} text-white shadow-lg focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white/70`
         : "text-[#768994] hover:text-[#122027] hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[#12a0e1]/30"
     }`;
+  // The label rides the rail's hover expansion, so it's gated behind the same
+  // (hover: hover) query the width is — on a touch screen the rail never
+  // expands, and a label fading in over a 56px slot would just overflow it.
   const railLabelClass =
-    "text-sm font-bold whitespace-nowrap pr-4 opacity-0 group-hover/rail:opacity-100 transition-opacity duration-200";
+    "text-sm font-bold whitespace-nowrap pr-4 opacity-0 [@media(hover:hover)]:group-hover/rail:opacity-100 transition-opacity duration-200";
+
+  // One square in the bottom bar. Icon only — at eight pages across a 390px
+  // screen there's no room for a legible label, so the active page's gradient
+  // (the same one its header wears) is what says where you are.
+  const barItemClass = (active, activeGrad) =>
+    `flex-1 basis-0 min-w-[2.75rem] h-12 flex items-center justify-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 ${
+      active
+        ? `bg-gradient-to-br ${activeGrad} text-white shadow-md`
+        : "text-[#768994]"
+    }`;
 
   return (
-    // group/rail + hover:w-64 turns the slim icon rail into a labelled flyout
-    // on hover (overlays content, doesn't push it — it's fixed). overflow-hidden
-    // clips the labels flush to the animating width.
-    <nav className="group/rail fixed left-0 top-0 bottom-0 z-40 w-20 hover:w-64 overflow-hidden flex flex-col gap-1.5 px-3 py-5 bg-white/80 hover:bg-white/95 backdrop-blur-md border-r border-black/5 transition-[width,background-color] duration-300 ease-out">
-      {/* Colour wash at the rail's top — the active page's gradient, faded
-          out downward, so the rail head picks up the header's colour instead
-          of reading as a detached white strip. Sits over the nav's white bg
-          but under the buttons. */}
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute inset-x-0 top-0 h-36 bg-gradient-to-br ${
-          PAGE_GRADIENTS[activePage] || PAGE_GRADIENTS.management
-        } opacity-35 [mask-image:linear-gradient(to_bottom,black,transparent)]`}
-      />
+    <>
+      {/* ── Phone: bottom bar ────────────────────────────────────────────── */}
+      <nav className="md:hidden fixed inset-x-0 bottom-0 z-40 flex items-center gap-1 px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] bg-white/95 backdrop-blur-md border-t border-black/5">
+        <button
+          onClick={() => setActivePage("home")}
+          aria-label="Home"
+          className={`${barItemClass(false)} border border-dashed border-[#dce4ec]`}
+        >
+          <Home className="w-5 h-5" strokeWidth={2.25} />
+        </button>
 
-      <button
-        onClick={() => setActivePage("home")}
-        title="Home"
-        className="group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden border border-dashed border-[#dce4ec] text-[#768994] hover:border-[#12a0e1] hover:text-[#12a0e1] transition-colors shrink-0 mt-4 focus-visible:ring-4 focus-visible:ring-[#12a0e1]/30 focus-visible:outline-none"
-      >
-        <span className="w-14 h-14 shrink-0 flex items-center justify-center">
-          <Home className="w-6 h-6" strokeWidth={2.25} />
-        </span>
-        <span className={railLabelClass}>Home</span>
-      </button>
+        {sections.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setActivePage(id)}
+            aria-label={label}
+            aria-current={activePage === id ? "page" : undefined}
+            className={barItemClass(activePage === id, PAGE_GRADIENTS[id])}
+          >
+            <Icon className="w-5 h-5" strokeWidth={activePage === id ? 2.5 : 2} />
+          </button>
+        ))}
 
-      {/* Vertical space sets the Home button apart from the section
-          switchers — no visible rule (kept transparent). */}
-      <div className="mt-6 mb-4 shrink-0" />
+        <button
+          onClick={() => setActivePage("profile")}
+          aria-label={PAGES.profile.label}
+          aria-current={activePage === "profile" ? "page" : undefined}
+          className={barItemClass(activePage === "profile", PAGE_GRADIENTS.profile)}
+        >
+          <span
+            className={`w-8 h-8 flex items-center justify-center text-xs font-black rounded-xl ${
+              activePage === "profile" ? "" : "bg-slate-100"
+            }`}
+          >
+            {initials || "?"}
+          </span>
+        </button>
+      </nav>
 
-      <div className="relative z-10 flex flex-col gap-1.5 flex-1 pt-2">
-        {sections.map(({ id, label, icon: Icon }) => {
-          const isActive = activePage === id;
-          return (
-            <button
-              key={id}
-              onClick={() => setActivePage(id)}
-              title={label}
-              className={railRowClass(isActive, PAGE_GRADIENTS[id])}
-            >
-              <span className="w-14 h-14 shrink-0 flex items-center justify-center">
-                <Icon className="w-6 h-6" strokeWidth={isActive ? 2.5 : 2} />
-              </span>
-              <span className={railLabelClass}>{label}</span>
-            </button>
-          );
-        })}
-      </div>
+      {/* ── Tablet and up: the side rail ─────────────────────────────────── */}
+      {/* group/rail + hover:w-64 turns the slim icon rail into a labelled flyout
+          on hover (overlays content, doesn't push it — it's fixed). overflow-hidden
+          clips the labels flush to the animating width. The expansion is behind
+          (hover: hover) so a touch device — where :hover sticks after a tap —
+          never gets stranded with the rail open across the page. */}
+      <nav className="group/rail hidden md:flex fixed left-0 top-0 bottom-0 z-40 w-20 [@media(hover:hover)]:hover:w-64 overflow-hidden flex-col gap-1.5 px-3 py-5 bg-white/80 [@media(hover:hover)]:hover:bg-white/95 backdrop-blur-md border-r border-black/5 transition-[width,background-color] duration-300 ease-out">
+        {/* Colour wash at the rail's top — the active page's gradient, faded
+            out downward, so the rail head picks up the header's colour instead
+            of reading as a detached white strip. Sits over the nav's white bg
+            but under the buttons. */}
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute inset-x-0 top-0 h-36 bg-gradient-to-br ${
+            PAGE_GRADIENTS[activePage] || PAGE_GRADIENTS.management
+          } opacity-35 [mask-image:linear-gradient(to_bottom,black,transparent)]`}
+        />
 
-      <button
-        onClick={() => setActivePage("profile")}
-        title="Your profile & hub"
-        className={`group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden transition-colors shrink-0 mt-1 focus-visible:outline-none ${
-          activePage === "profile"
-            ? `bg-gradient-to-br ${PAGE_GRADIENTS.profile} text-white shadow-lg focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white/70`
-            : "text-[#768994] hover:text-[#122027] hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[#12a0e1]/30"
-        }`}
-      >
-        <span
-          className={`w-14 h-14 shrink-0 flex items-center justify-center text-sm font-black rounded-2xl ${
-            activePage === "profile" ? "" : "bg-slate-100"
+        <button
+          onClick={() => setActivePage("home")}
+          title="Home"
+          className="group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden border border-dashed border-[#dce4ec] text-[#768994] hover:border-[#12a0e1] hover:text-[#12a0e1] transition-colors shrink-0 mt-4 focus-visible:ring-4 focus-visible:ring-[#12a0e1]/30 focus-visible:outline-none"
+        >
+          <span className="w-14 h-14 shrink-0 flex items-center justify-center">
+            <Home className="w-6 h-6" strokeWidth={2.25} />
+          </span>
+          <span className={railLabelClass}>Home</span>
+        </button>
+
+        {/* Vertical space sets the Home button apart from the section
+            switchers — no visible rule (kept transparent). */}
+        <div className="mt-6 mb-4 shrink-0" />
+
+        <div className="relative z-10 flex flex-col gap-1.5 flex-1 pt-2">
+          {sections.map(({ id, label, icon: Icon }) => {
+            const isActive = activePage === id;
+            return (
+              <button
+                key={id}
+                onClick={() => setActivePage(id)}
+                title={label}
+                className={railRowClass(isActive, PAGE_GRADIENTS[id])}
+              >
+                <span className="w-14 h-14 shrink-0 flex items-center justify-center">
+                  <Icon className="w-6 h-6" strokeWidth={isActive ? 2.5 : 2} />
+                </span>
+                <span className={railLabelClass}>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          onClick={() => setActivePage("profile")}
+          title="Your profile & hub"
+          className={`group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden transition-colors shrink-0 mt-1 focus-visible:outline-none ${
+            activePage === "profile"
+              ? `bg-gradient-to-br ${PAGE_GRADIENTS.profile} text-white shadow-lg focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white/70`
+              : "text-[#768994] hover:text-[#122027] hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[#12a0e1]/30"
           }`}
         >
-          {initials || "?"}
-        </span>
-        <span className={railLabelClass}>{PAGES.profile.label}</span>
-      </button>
-    </nav>
+          <span
+            className={`w-14 h-14 shrink-0 flex items-center justify-center text-sm font-black rounded-2xl ${
+              activePage === "profile" ? "" : "bg-slate-100"
+            }`}
+          >
+            {initials || "?"}
+          </span>
+          <span className={railLabelClass}>{PAGES.profile.label}</span>
+        </button>
+      </nav>
+    </>
   );
 }

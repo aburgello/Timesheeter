@@ -54,9 +54,10 @@ export default function TableSearchableSelect({
     if (!isOpen || !wrapperRef.current) return;
     // layoutRect (not getBoundingClientRect) so the trigger's coordinates are
     // in the same layout space as innerWidth/Height and the fixed style we set
-    // below. Under the app's html{zoom:1.1} a raw rect is visual pixels, which
-    // the browser would zoom a second time on paint — landing the dropdown
-    // offset from its trigger, worse the further down/right the row is.
+    // below. Under a non-1 html{zoom} a raw rect is visual pixels, which the
+    // browser would zoom a second time on paint — landing the dropdown offset
+    // from its trigger, worse the further down/right the row is. The app's own
+    // zoom: 1.1 has since been removed, so the correction is currently a no-op.
     const rect = layoutRect(wrapperRef.current);
     // Layout pixels, matching layoutRect and the inline styles below.
     const { vw, vh } = layoutViewport();

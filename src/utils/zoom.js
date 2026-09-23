@@ -1,6 +1,11 @@
-// The app runs at `html { zoom: 1.1 }` everywhere except Home (see
-// src/tailwind.css, and the `home-page` opt-out in App.jsx). CSS `zoom` quietly
-// splits the page into two coordinate spaces:
+// The app no longer sets a global CSS `zoom` — it ran at `html { zoom: 1.1 }`
+// until that was removed, and these helpers now resolve to a factor of 1 and
+// pass coordinates through unchanged. They are kept, and still worth using in
+// positioning code, because they are correct at ANY zoom factor: if a zoom is
+// ever reintroduced on <html> (or on a subtree) every call site below keeps
+// working instead of silently drifting again. What that drift was:
+//
+// CSS `zoom` quietly splits the page into two coordinate spaces:
 //
 //   • getBoundingClientRect() / clientX / clientY report VISUAL pixels —
 //     already multiplied by the zoom factor.

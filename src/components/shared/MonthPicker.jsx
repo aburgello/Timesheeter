@@ -13,8 +13,9 @@ import { layoutRect } from "../../utils/zoom";
 //
 // Portalled to <body> so it escapes any `overflow` or stacking context on the
 // toolbar, and positioned with layoutRect() rather than getBoundingClientRect()
-// — the app runs at `html { zoom: 1.1 }`, which puts rects and inline styles in
-// different coordinate spaces. See src/utils/zoom.js.
+// — a CSS `zoom` on <html> puts rects and inline styles in different coordinate
+// spaces. The app-wide zoom that made this necessary has been removed, so
+// layoutRect() is currently a pass-through. See src/utils/zoom.js.
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const FULL = ["January", "February", "March", "April", "May", "June",

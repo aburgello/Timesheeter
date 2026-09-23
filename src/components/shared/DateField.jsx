@@ -7,10 +7,11 @@ import { Calendar, ChevronLeft, ChevronRight, X } from "lucide-react";
 // displays en-GB DD/MM/YYYY to match the rest of the app.
 //
 // The popover is positioned in normal flow (absolute inside a relative wrapper),
-// NOT portaled+fixed: the app runs at html { zoom: 1.1 }, and fixed positioning
-// from getBoundingClientRect double-applies that zoom, so the panel drifted
-// further from its field the more the page was scrolled. In-flow absolute has no
-// coordinate math and is immune to the zoom. It flips above the field when the
+// NOT portaled+fixed. That started as a fix for the app-wide html { zoom: 1.1 },
+// where fixed positioning from getBoundingClientRect double-applied the zoom and
+// the panel drifted further from its field the more the page was scrolled. The
+// zoom is gone, but in-flow absolute is kept: it needs no coordinate math at all,
+// so there is nothing to drift. It flips above the field when the
 // trigger sits low in the viewport so the calendar never opens off-screen.
 const MONTHS = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];

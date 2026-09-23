@@ -337,21 +337,15 @@ export default function ExcalidrawPageEditor({ pageId, content, onChange }) {
   }
 
   return (
-    // The app runs at a deliberate, app-wide `zoom: 1.1` (src/tailwind.css).
-    // Excalidraw does its own screen-to-canvas coordinate math internally —
-    // it has no idea an ancestor is scaling the page, so every click/draw
-    // lands 10% off from where the cursor visually is (worse the further
-    // from the origin). We can't patch Excalidraw's internals the way
-    // RichNoteEditor's own hand-rolled positioning was fixed; instead this
-    // inner layer applies the exact inverse zoom (1/1.1), so the NET zoom
-    // Excalidraw's subtree experiences is 1.1 × (1/1.1) = 1 — a genuine,
-    // un-zoomed 100% as far as Excalidraw can tell. The 110% width/height
-    // compensates the visual shrink that same inverse zoom would otherwise
-    // cause, so the canvas still fills the outer box edge-to-edge instead of
-    // rendering undersized inside it.
+    // Excalidraw does its own screen-to-canvas coordinate math internally and
+    // has no idea whether an ancestor is scaling the page, so it needs to sit
+    // at a net zoom of exactly 1. This used to mean an inner layer applying
+    // the inverse (1/1.1) of the app-wide `zoom: 1.1`, with 110% width/height
+    // to undo that layer's own visual shrink. The app-wide zoom is gone, so
+    // the subtree is already at 1 and the inner layer just fills its parent.
     <div style={{ height: "100%", minHeight: 640, position: "relative", overflow: "hidden" }}>
       <div
-        style={{ position: "absolute", top: 0, left: 0, width: "110%", height: "110%", zoom: 1 / 1.1 }}
+        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
         onDropCapture={onDropCapture}
       >
         <Excalidraw

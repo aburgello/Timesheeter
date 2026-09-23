@@ -193,17 +193,6 @@ export default function App() {
     hashPrimed.current = true;
   }, [activePage]);
 
-  // Home is deliberately built to own exactly one viewport with no scroll
-  // (h-dvh + overflow-hidden, see Home.jsx) — the app-wide 110% zoom
-  // (tailwind.css) breaks that invariant, since fixed-px content that used
-  // to fit the viewport exactly no longer does once the effective CSS-pixel
-  // budget shrinks. Every other page is fine growing past one screen and
-  // scrolling; Home specifically isn't supposed to, so it opts out via this
-  // class instead of the zoom being dialled back for everyone.
-  useEffect(() => {
-    document.documentElement.classList.toggle("home-page", activePage === "home");
-  }, [activePage]);
-
   // Which custom field names a market, discovered once per session. Warmed here
   // rather than per-page because the readers are synchronous and live in two
   // different components (the Tracker's guessFieldsFromTask and Legacy's), and
@@ -755,7 +744,7 @@ export default function App() {
           and pt-3 (not mt-3) so the margin can't collapse through the app
           root and expose the document canvas as a dark strip */}
       {!hasToken && activePage !== "profile" && activePage !== "home" && (
-        <div className="pl-20 mx-auto max-w-[1400px] px-4 sm:px-6 pt-3">
+        <div className="md:pl-20 mx-auto max-w-[1400px] px-4 sm:px-6 pt-3">
           <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex items-center gap-3">
             <Key className="w-4 h-4 text-amber-600 shrink-0" />
             <p className="text-xs font-bold text-amber-800 flex-1">
@@ -945,7 +934,7 @@ export default function App() {
           globalWrikeData below; wrikeData is only passed through for the
           task detail modal's lookups. */}
       {boardVisited && (
-        <div className={`pl-20 ${activePage === "todayslist" ? "block" : "hidden"}`}>
+        <div className={`md:pl-20 pb-20 md:pb-0 ${activePage === "todayslist" ? "block" : "hidden"}`}>
           <Suspense fallback={activePage === "todayslist" ? <PageLoading /> : null}>
             <TodaysList
               wrikeData={globalWrikeData}
@@ -982,7 +971,7 @@ export default function App() {
             initial="initial"
             animate="animate"
             exit="exit"
-            className={activePage === "home" ? "" : "pl-20"}
+            className={activePage === "home" ? "" : "md:pl-20 pb-20 md:pb-0"}
           >
             {/* The boundary sits around the page content, not the whole app,
                 so a page that throws leaves the Rail mounted and navigable —

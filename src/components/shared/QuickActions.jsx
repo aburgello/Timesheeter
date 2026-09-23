@@ -187,7 +187,9 @@ export default function QuickActions({ activePage, department, onNavigate, onOpe
     // that pins it open — hover alone would strand keyboard and touch users,
     // who get no hover event at all.
     <div
-      className="fixed bottom-6 right-6 z-[100] flex flex-col items-end"
+      // Below md the nav is a bottom bar, so the bubble sits above it
+      // rather than on top of the profile button at the bar's right end.
+      className="fixed bottom-24 md:bottom-6 right-4 md:right-6 z-[100] flex flex-col items-end"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
