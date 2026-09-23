@@ -122,6 +122,22 @@ check("logged: a multi-market row counts for each of its markets", forMarket("Sw
 check("logged: a market in two rows gets both", forMarket("Czech").hours, 1);
 check("logged: a market with nothing logged is nothing", forMarket("Brazil"), { hours: 0, regular: 0, extra: 0, match: "" });
 check("logged: markets match regardless of case", forMarket("indonesia").hours, 1);
+// The Czech task resolves to "Czech Republic"; the rows say "Czech". Same
+// checkbox on the timesheet, so the same market.
+check("logged: Czech Republic matches Czech", forMarket("Czech Republic").hours, 1);
+check("logged: ...and the other way round", hoursLoggedFor(
+  [{ taskId: null, jobNumber: "XY026205", territory: "Czech Republic", timeSpent: "0:45", additionalTime: "none" }],
+  { taskId: "t", jobNumber: "XY026205", territory: "Czech" }, parseTimeToHours).hours, 0.75);
+// Codes and aliases go through the same resolver Wrike Pull uses first.
+const czRow = [{ taskId: null, jobNumber: "XY026205", territory: "Czech", timeSpent: "0:30", additionalTime: "none" }];
+check("logged: an alias (Czechia) matches too", hoursLoggedFor(czRow, { taskId: "t", jobNumber: "XY026205", territory: "Czechia" }, parseTimeToHours).hours, 0.5);
+check("logged: Canada - French matches Canadian-French", hoursLoggedFor(
+  [{ taskId: null, jobNumber: "XY026205", territory: "Canadian-French", timeSpent: "0:30", additionalTime: "none" }],
+  { taskId: "t", jobNumber: "XY026205", territory: "Canada - French" }, parseTimeToHours).hours, 0.5);
+// Markets that share a code but are separate timesheet choices stay apart.
+check("logged: India language markets aren't merged", hoursLoggedFor(
+  [{ taskId: null, jobNumber: "XY026205", territory: "India - Tamil", timeSpent: "1:00", additionalTime: "none" }],
+  { taskId: "t", jobNumber: "XY026205", territory: "India - Hindi" }, parseTimeToHours).hours, 0);
 check("logged: a task with no market falls back to the whole job", forMarket("").hours, 3);
 check("logged: nothing on the timesheets", hoursLoggedFor(dayRows, { taskId: "q", jobNumber: "XY099999" }, parseTimeToHours), { hours: 0, regular: 0, extra: 0, match: "" });
 

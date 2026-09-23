@@ -623,8 +623,10 @@ function Timeline({ view, activeItemId, onPick }) {
   const pct = (m) => `${(((m - start) / (end - start)) * 100).toFixed(2)}%`;
   const hours = [];
   for (let h = start; h <= end; h += 60) hours.push(h);
-  // Past 18:00 is overtime; shade it so the Add. Time suggestion reads at a glance.
-  const hasOvertime = end > DAY_END_MIN;
+  // Past 18:00 is overtime; shade it so the Add. Time suggestion reads at a
+  // glance. Only on days with estimates: without history nothing is
+  // suggested, and the band claimed otherwise.
+  const hasOvertime = view.hasHistory && end > DAY_END_MIN;
 
   const show = (s, item) => (e) => setHover({ s, item, rect: e.currentTarget.getBoundingClientRect() });
   const hide = () => setHover(null);

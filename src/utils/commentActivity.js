@@ -1,4 +1,5 @@
-import { splitTerritories } from "./territories";
+import { splitTerritories, toTimesheetTerritories } from "./territories";
+import { resolveCountryCode } from "./countryCodes";
 
 // ── Estimating what you worked on, from your Wrike activity ──────────────────
 // People often don't comment on a task until they have something to send for
@@ -156,6 +157,16 @@ export const jobCode = (jobNumber) =>
  * A row covering several markets counts in full for each of them: that time
  * was spent on all of them together. A task with no market falls back to the
  * whole job.
+ *
+ * Markets are compared through the app's own territory rules, in two steps:
+ *   1. resolveCountryCode, the resolver Wrike Pull uses: codes, aliases and
+ *      the ones curated in Administration → Translation Countries, so "CZ",
+ *      "Czechia" and "Canada - French" each land on one territory name.
+ *   2. The timesheet's own name for it (what Copy Me! exports), which is
+ *      where two names we both carry become one: "Czech Republic" is the
+ *      site's "Czech". The resolver leaves those apart, as both are valid.
+ * Not by market code: India's language markets share IN and Spain - Catalan
+ * shares ES, and those are separate timesheet choices.
  */
 export function hoursLoggedFor(dayRows, { taskId, jobNumber, territory }, parseHours) {
   const sum = (list, match) => {
@@ -167,9 +178,11 @@ export function hoursLoggedFor(dayRows, { taskId, jobNumber, territory }, parseH
   if (byTask.length) return sum(byTask, "task");
   const code = jobCode(jobNumber);
   const byJob = code ? dayRows.filter((r) => !r.taskId && jobCode(r.jobNumber) === code) : [];
-  const markets = new Set(splitTerritories(territory).map((t) => t.toLowerCase()));
+  const asTimesheet = (value) =>
+    toTimesheetTerritories(splitTerritories(value).map((t) => resolveCountryCode(t) || t)).map((t) => t.toLowerCase());
+  const markets = new Set(asTimesheet(territory));
   if (!markets.size) return byJob.length ? sum(byJob, "job") : { hours: 0, regular: 0, extra: 0, match: "" };
-  const byMarket = byJob.filter((r) => splitTerritories(r.territory).some((t) => markets.has(t.toLowerCase())));
+  const byMarket = byJob.filter((r) => asTimesheet(r.territory).some((t) => markets.has(t)));
   return byMarket.length ? sum(byMarket, "market") : { hours: 0, regular: 0, extra: 0, match: "" };
 }
 
