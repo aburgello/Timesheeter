@@ -1,5 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   X,
   MessagesSquare,
@@ -10,8 +9,9 @@ import {
   ChevronRight,
   CheckCircle,
   AlertCircle,
-  Info,
+  Check,
 } from "lucide-react";
+import FloatingCard from "../shared/FloatingCard";
 import { fetchMyCommentsForDay } from "../../lib/wrikeComments";
 import { fetchActivityForDay, historyStart } from "../../lib/taskActivity";
 import {
@@ -338,10 +338,6 @@ export default function CommentTrailModal({
     return () => clearTimeout(t);
   }, [added]);
 
-  const sinceText = view?.since
-    ? view.since.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })
-    : null;
-
   return (
     <div className="fixed inset-0 z-[100001] flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
@@ -365,7 +361,7 @@ export default function CommentTrailModal({
                 What did I work on?
               </h2>
               <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
-                Suggestions from your Wrike activity: the tasks you were handed and the comments you posted. Tick the ones that are right, adjust the time and add them to your timesheet.
+                Suggestions from your Wrike activity: the tasks you were handed and the comments you posted.
               </p>
             </div>
           </div>
@@ -461,20 +457,11 @@ export default function CommentTrailModal({
                 )}
               </div>
 
-              {/* How the times were worked out, or why there are none */}
-              {view.hasHistory ? (
+              {/* How the times were worked out */}
+              {view.hasHistory && (
                 <p className="px-6 py-3 border-b border-white/5 bg-black/10 text-xs text-slate-400">
                   Work on a task starts when you're assigned or someone moves it into a new status, and ends when you comment or change its status yourself. Where tasks overlap, the time is split between them.
                 </p>
-              ) : (
-                <div className="px-6 py-3 border-b border-white/5 bg-[#38bdf8]/[0.06] text-xs text-slate-300 flex items-start gap-2.5">
-                  <Info className="w-4 h-4 mt-px shrink-0 text-[#38bdf8]" />
-                  <p>
-                    {sinceText
-                      ? `Times are worked out from status changes, which TimeHub has recorded since ${sinceText}. For ${day.name}, here's what you commented on; add the time yourself.`
-                      : `Times are worked out from status changes, which TimeHub has only just started recording, so suggested times will appear from tomorrow. For now, here's what you commented on; add the time yourself.`}
-                  </p>
-                </div>
               )}
 
               <Timeline view={view} />
@@ -694,7 +681,7 @@ function Timeline({ view }) {
       </div>
 
       {hover && !pinned && (
-        <Floating rect={hover.rect} className="w-72 pointer-events-none">
+        <FloatingCard rect={hover.rect} className="p-3 w-72 pointer-events-none">
           <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-400">
             <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: hover.s.colour }} />
             <span className="truncate">{hover.s.title}</span>
@@ -705,7 +692,7 @@ function Timeline({ view }) {
               <ItemText item={hover.item} />
             </p>
           )}
-        </Floating>
+        </FloatingCard>
       )}
 
       {pinned && <Thread pinned={pinned} onClose={closeThread} />}
@@ -755,7 +742,7 @@ function Thread({ pinned, onClose }) {
   const jobCode = (s.fields.guessed.jobNumber || "").match(/XY\d{5,6}/i)?.[0];
 
   return (
-    <Floating rect={rect} className="w-80" innerRef={ref} role="dialog" aria-label={`Activity on ${s.title}`}>
+    <FloatingCard rect={rect} className="p-3 w-80" innerRef={ref} role="dialog" aria-label={`Activity on ${s.title}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs font-bold text-white">
@@ -789,40 +776,7 @@ function Thread({ pinned, onClose }) {
           );
         })}
       </ul>
-    </Floating>
-  );
-}
-
-// A card pinned next to `rect` (a DOM rect), above it when there's room and
-// below otherwise, kept inside the window. Portalled to <body> so the modal's
-// scroll areas can't clip it.
-function Floating({ rect, className = "", innerRef, children, ...rest }) {
-  const localRef = useRef(null);
-  const ref = innerRef || localRef;
-  const [pos, setPos] = useState(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const { offsetWidth: w, offsetHeight: h } = el;
-    const gap = 10;
-    const left = Math.max(8, Math.min(window.innerWidth - w - 8, rect.left + rect.width / 2 - w / 2));
-    const above = rect.top - h - gap;
-    const top = above >= 8 ? above : Math.min(window.innerHeight - h - 8, rect.bottom + gap);
-    setPos({ left, top });
-  }, [rect, ref]);
-
-  return createPortal(
-    <div
-      ref={ref}
-      {...rest}
-      className={`fixed z-[100002] p-3 rounded-xl border border-white/10 bg-gradient-to-b from-[#1f2738] to-[#171e2c] shadow-2xl shadow-black/50 text-slate-300 ${className}`}
-      style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: 0, visibility: "hidden" }}
-    >
-      <div className="absolute inset-x-0 top-0 h-px rounded-t-xl bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-      {children}
-    </div>,
-    document.body
+    </FloatingCard>
   );
 }
 
@@ -851,14 +805,12 @@ function Suggestion({ s, frozen, edit }) {
 
   return (
     <li className={`grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 ${s.locked ? "opacity-55" : ""}`}>
-      <input
-        type="checkbox"
+      <Tick
         id={`ct-${s.key}`}
         checked={s.on}
         disabled={s.locked || frozen}
         onChange={(e) => edit(s.key, { on: e.target.checked })}
-        aria-label={`Include ${s.title}`}
-        className="mt-1 w-4 h-4 accent-[#12a0e1] cursor-pointer disabled:cursor-default"
+        label={`Include ${s.title}`}
       />
       <div className="min-w-0">
         <label htmlFor={`ct-${s.key}`} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm font-bold text-white cursor-pointer">
@@ -935,6 +887,32 @@ function Suggestion({ s, frozen, edit }) {
         <span className="text-[10px] text-slate-500 whitespace-nowrap">{hint}</span>
       </div>
     </li>
+  );
+}
+
+// The site's own tick box (the one on Legacy's row selection), over a real
+// checkbox so the label, keyboard and screen readers still work.
+function Tick({ id, checked, disabled, onChange, label }) {
+  return (
+    <span className="relative mt-0.5 w-4 h-4 shrink-0">
+      <input
+        type="checkbox"
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        onChange={onChange}
+        aria-label={label}
+        className="peer absolute inset-0 m-0 opacity-0 cursor-pointer disabled:cursor-default"
+      />
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none w-4 h-4 rounded-[4px] border flex items-center justify-center transition-[background-color,border-color] duration-150 peer-focus-visible:ring-2 peer-focus-visible:ring-[#12a0e1]/60 ${
+          checked ? "bg-[#12a0e1] border-[#12a0e1]" : "bg-black/20 border-white/30 peer-hover:border-white/60"
+        } ${disabled ? "opacity-40" : ""}`}
+      >
+        {checked && <Check className="w-3 h-3 text-white" strokeWidth={4} />}
+      </span>
+    </span>
   );
 }
 

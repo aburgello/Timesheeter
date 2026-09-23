@@ -73,6 +73,7 @@ import { categoryForTaskWithSource } from "../utils/categoryFamily";
 import { countryPullSource, categoryPullSource } from "../utils/pullSource";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
 import CommentTrailModal from "./legacy/CommentTrailModal";
+import { HoverLabel } from "./shared/FloatingCard";
 
 // A grid textarea that grows to fit its text instead of hiding it.
 //
@@ -3760,30 +3761,28 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         {/* Bottom Action Bar */}
         <div className="p-4 border-t border-[#dce4ec] bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
           <div className="flex gap-3 flex-wrap">
+            <HoverLabel label="Wrike Timesheets">
+              <button
+                onClick={handleOpenWrikeModal}
+                aria-label="Wrike Timesheets"
+                className="flex items-center justify-center p-3 bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
+              >
+                <LayoutList className="w-4 h-4" />
+              </button>
+            </HoverLabel>
             <button
-              onClick={handleOpenWrikeModal}
+              onClick={() => {
+                if (!wrikeUserId) {
+                  showToast("Please connect Wrike in Profile → Settings first.");
+                  return;
+                }
+                setShowCommentTrail(true);
+              }}
               className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
             >
-              <LayoutList className="w-4 h-4" />
-              Wrike Timesheets
+              <MessagesSquare className="w-4 h-4" />
+              What Did I Work On?
             </button>
-            {/* Behind the same grant as Debug Pull while it's being tried out. */}
-            {(isAdmin || canDebugPull) && (
-              <button
-                onClick={() => {
-                  if (!wrikeUserId) {
-                    showToast("Please connect Wrike in Profile → Settings first.");
-                    return;
-                  }
-                  setShowCommentTrail(true);
-                }}
-                title="Suggests timesheet rows from your Wrike activity: tasks you were handed and the comments you posted"
-                className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
-              >
-                <MessagesSquare className="w-4 h-4" />
-                What Did I Work On?
-              </button>
-            )}
           </div>
           <div className="flex gap-3 flex-wrap">
             <button
