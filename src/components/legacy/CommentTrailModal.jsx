@@ -91,6 +91,9 @@ export default function CommentTrailModal({
   // Per "iso:taskId": what the member changed — { on, hours, notes }.
   const [edits, setEdits] = useState({});
   const [added, setAdded] = useState(null);
+  // The row a timeline mark was clicked for: { key, itemId, n }. n makes a
+  // second click on the same mark jump again.
+  const [jump, setJump] = useState(null);
 
   const load = useCallback(
     async (d) => {
@@ -464,7 +467,11 @@ export default function CommentTrailModal({
                 </p>
               )}
 
-              <Timeline view={view} />
+              <Timeline
+                view={view}
+                activeItemId={jump?.itemId}
+                onPick={(s, item) => setJump({ key: s.key, itemId: item.id, n: Date.now() })}
+              />
 
               {(state.truncated || view.folderOnly > 0) && (
                 <div className="px-6 pb-3 -mt-1 text-[11px] text-slate-500 flex flex-col gap-0.5">
@@ -484,7 +491,7 @@ export default function CommentTrailModal({
               {/* Suggestions */}
               <ul className="border-t border-white/5">
                 {view.suggestions.map((s) => (
-                  <Suggestion key={s.key} s={s} frozen={isFrozen} edit={edit} />
+                  <Suggestion key={s.key} s={s} frozen={isFrozen} edit={edit} jump={jump?.key === s.key ? jump : null} />
                 ))}
               </ul>
             </>
@@ -574,12 +581,11 @@ function Mark({ item, colour, active, className = "", style, ...rest }) {
   );
 }
 
-// One lane per task. Hovering a mark previews it; clicking opens everything
-// that happened on the task that day, the clicked one highlighted.
-function Timeline({ view }) {
+// One lane per task. Hovering a mark previews it; clicking takes you to that
+// task's row below, to set its time.
+function Timeline({ view, activeItemId, onPick }) {
   // { s, item, rect } — the mark (or lane name, with item null) being previewed.
   const [hover, setHover] = useState(null);
-  const [pinned, setPinned] = useState(null);
 
   const minutes = [
     ...view.intervals.flatMap((b) => [b.from, b.to]),
@@ -593,13 +599,6 @@ function Timeline({ view }) {
 
   const show = (s, item) => (e) => setHover({ s, item, rect: e.currentTarget.getBoundingClientRect() });
   const hide = () => setHover(null);
-  const pin = (s, item) => (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    setHover(null);
-    setPinned((p) => (p?.item?.id === item.id ? null : { s, item, rect }));
-  };
-  const closeThread = useCallback(() => setPinned(null), []);
-
   return (
     <div className="px-6 py-4 overflow-x-auto custom-scrollbar">
       <div className="min-w-[640px]">
@@ -634,23 +633,24 @@ function Timeline({ view }) {
                   />
                 ))}
               {s.items.map((item) => {
-                const isPinned = pinned?.item?.id === item.id;
+                const isActive = activeItemId === item.id;
                 return (
                   <Mark
                     key={item.id}
                     item={item}
                     colour={s.colour}
-                    active={isPinned}
-                    data-timeline-mark
-                    onMouseEnter={pinned ? undefined : show(s, item)}
+                    active={isActive}
+                    onMouseEnter={show(s, item)}
                     onMouseLeave={hide}
-                    onFocus={pinned ? undefined : show(s, item)}
+                    onFocus={show(s, item)}
                     onBlur={hide}
-                    onClick={pin(s, item)}
-                    aria-label={`${clock(item.minute)}: ${item.text || "attachment"}. Show everything on ${s.title}`}
-                    aria-expanded={isPinned}
+                    onClick={() => {
+                      hide();
+                      onPick(s, item);
+                    }}
+                    aria-label={`${clock(item.minute)}: ${item.text || "attachment"}. Go to ${s.title} to set its time`}
                     className={`absolute top-1/2 -translate-y-1/2 transition-transform hover:scale-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
-                      isPinned ? "scale-125" : ""
+                      isActive ? "scale-125" : ""
                     }`}
                     style={{ left: pct(item.minute) }}
                   />
@@ -676,11 +676,11 @@ function Timeline({ view }) {
               </span>
             </>
           )}
-          <span>Hover a mark to read it, click for the whole day on that task.</span>
+          <span>Hover a mark to read it, click it to set that task's time.</span>
         </div>
       </div>
 
-      {hover && !pinned && (
+      {hover && (
         <FloatingCard rect={hover.rect} className="p-3 w-72 pointer-events-none">
           <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-400">
             <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: hover.s.colour }} />
@@ -695,7 +695,6 @@ function Timeline({ view }) {
         </FloatingCard>
       )}
 
-      {pinned && <Thread pinned={pinned} onClose={closeThread} />}
     </div>
   );
 }
@@ -705,83 +704,24 @@ function ItemText({ item }) {
   return <span className="italic text-slate-300">{item.text}</span>;
 }
 
-// Everything that happened on the task that day, opened from a mark.
-function Thread({ pinned, onClose }) {
-  const { s, item: clicked, rect } = pinned;
-  const ref = useRef(null);
-
-  useEffect(() => {
-    // Capture phase, so Escape closes this and not the whole modal.
-    const onKey = (e) => {
-      if (e.key !== "Escape") return;
-      e.stopPropagation();
-      onClose();
-    };
-    const onDown = (e) => {
-      if (ref.current?.contains(e.target) || e.target.closest?.("[data-timeline-mark]")) return;
-      onClose();
-    };
-    // Anchored to a mark, so it would drift away from it on scroll.
-    const onScroll = (e) => {
-      if (!ref.current?.contains(e.target)) onClose();
-    };
-    window.addEventListener("keydown", onKey, true);
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("scroll", onScroll, true);
-    return () => {
-      window.removeEventListener("keydown", onKey, true);
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("scroll", onScroll, true);
-    };
-  }, [onClose]);
-
-  useEffect(() => {
-    ref.current?.querySelector("[data-clicked]")?.scrollIntoView({ block: "nearest" });
-  }, [clicked.id]);
-
-  const jobCode = (s.fields.guessed.jobNumber || "").match(/XY\d{5,6}/i)?.[0];
-
-  return (
-    <FloatingCard rect={rect} className="p-3 w-80" innerRef={ref} role="dialog" aria-label={`Activity on ${s.title}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-xs font-bold text-white">
-            <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: s.colour }} />
-            <span className="break-words">{s.title}</span>
-          </div>
-          <div className="mt-0.5 text-[10px] text-slate-500">
-            {jobCode && <span className="font-mono text-slate-400 mr-2">{jobCode}</span>}
-            {plural(s.commentCount, "comment")} from you
-          </div>
-        </div>
-        <button onClick={onClose} aria-label="Close" className="p-1 -m-1 text-slate-500 hover:text-white rounded">
-          <X className="w-3.5 h-3.5" />
-        </button>
-      </div>
-      <ul className="mt-2.5 max-h-60 overflow-y-auto custom-scrollbar flex flex-col gap-1 -mx-1">
-        {s.items.map((item) => {
-          const isClicked = item.id === clicked.id;
-          return (
-            <li
-              key={item.id}
-              data-clicked={isClicked || undefined}
-              className={`px-2.5 py-1.5 rounded-lg text-xs leading-relaxed break-words border-l-2 ${
-                isClicked ? "bg-white/[0.06] text-slate-100" : "text-slate-300 border-transparent"
-              }`}
-              style={isClicked ? { borderColor: s.colour } : undefined}
-            >
-              <span className={`font-mono mr-2 ${isClicked ? "text-[#38bdf8]" : "text-slate-500"}`}>{clock(item.minute)}</span>
-              <ItemText item={item} />
-            </li>
-          );
-        })}
-      </ul>
-    </FloatingCard>
-  );
-}
-
-function Suggestion({ s, frozen, edit }) {
+function Suggestion({ s, frozen, edit, jump }) {
   const [open, setOpen] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const rowRef = useRef(null);
+  const plusRef = useRef(null);
+
+  // Clicked on the timeline: bring this row into view, show the clicked
+  // comment in its activity, and put the time control under the keyboard.
+  useEffect(() => {
+    if (!jump) return;
+    setOpen(true);
+    setFlash(true);
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    rowRef.current?.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+    (plusRef.current && !plusRef.current.disabled ? plusRef.current : rowRef.current)?.focus({ preventScroll: true });
+    const t = setTimeout(() => setFlash(false), 1600);
+    return () => clearTimeout(t);
+  }, [jump?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const jobCode = (s.fields.guessed.jobNumber || "").match(/XY\d{5,6}/i)?.[0];
   const pill =
     s.standing === "covered" ? (
@@ -804,7 +744,13 @@ function Suggestion({ s, frozen, edit }) {
       : `${hm(s.est)} suggested`;
 
   return (
-    <li className={`grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 ${s.locked ? "opacity-55" : ""}`}>
+    <li
+      ref={rowRef}
+      tabIndex={-1}
+      className={`grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 outline-none transition-colors duration-700 ${
+        flash ? "bg-[#12a0e1]/10" : ""
+      } ${s.locked ? "opacity-55" : ""}`}
+    >
       <Tick
         id={`ct-${s.key}`}
         checked={s.on}
@@ -848,13 +794,19 @@ function Suggestion({ s, frozen, edit }) {
           {s.items.length === s.commentCount ? plural(s.commentCount, "comment") : `Activity (${s.items.length})`}
         </button>
         {open && (
-          <ul className="mt-2 pl-3 border-l-2 flex flex-col gap-1.5" style={{ borderColor: s.colour }}>
-            {s.items.map((item) => (
-              <li key={item.id} className="text-xs text-slate-300 break-words">
-                <span className="font-mono text-slate-500 mr-2">{clock(item.minute)}</span>
-                <ItemText item={item} />
-              </li>
-            ))}
+          <ul className="mt-2 -mx-2 flex flex-col gap-0.5">
+            {s.items.map((item) => {
+              const picked = jump?.itemId === item.id;
+              return (
+                <li
+                  key={item.id}
+                  className={`px-2 py-1 rounded-md text-xs break-words ${picked ? "bg-white/[0.07] text-slate-100" : "text-slate-300"}`}
+                >
+                  <span className={`font-mono mr-2 ${picked ? "text-[#38bdf8]" : "text-slate-500"}`}>{clock(item.minute)}</span>
+                  <ItemText item={item} />
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -875,6 +827,7 @@ function Suggestion({ s, frozen, edit }) {
               {s.hours > 0 ? hm(s.hours) : "—"}
             </output>
             <button
+              ref={plusRef}
               onClick={() => edit(s.key, { hours: Math.min(12, s.hours + 0.25), on: true })}
               disabled={frozen}
               aria-label="More time"
