@@ -31,6 +31,7 @@ import {
   CheckCircle,
   Lock,
   LayoutList,
+  MessagesSquare,
   X,
   AlertCircle,
   Copy,
@@ -71,6 +72,7 @@ import { mergeMultiCountryRows } from "../utils/mergeMultiCountry";
 import { categoryForTaskWithSource } from "../utils/categoryFamily";
 import { countryPullSource, categoryPullSource } from "../utils/pullSource";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
+import CommentTrailModal from "./legacy/CommentTrailModal";
 
 // A grid textarea that grows to fit its text instead of hiding it.
 //
@@ -512,6 +514,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const [isWrikeModalOpen, setIsWrikeModalOpen] = useState(false);
   const [modalTab, setModalTab] = useState("timesheet");
   const [showReminderModal, setShowReminderModal] = useState(false);
+  const [showCommentTrail, setShowCommentTrail] = useState(false);
   const [wrikeTimesheetData, setWrikeTimesheetData] = useState({});
   const [wrikeWeeklyLogs, setWrikeWeeklyLogs] = useState([]);
   const [expandedGroups, setExpandedGroups] = useState({});
@@ -1593,6 +1596,145 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     ];
   };
 
+  // Everything a Legacy row says about the job, worked out from one Wrike
+  // task: job number, client, film, description, country and category. Wrike
+  // Pull and the comment suggestions both build rows through this, so a row
+  // suggested from a comment reads exactly like one pulled from a timelog.
+  //
+  // Pure apart from reading the Job Book: registering a new job (ensureJob) is
+  // left to the caller, because the comment suggestions resolve every task
+  // they show and should only write to the book for rows actually added.
+  const rowFieldsFromTask = (task) => {
+    const guessed = guessFieldsFromTask(task);
+
+    let client = "";
+    // Job number "Film Name : CODE, Description" is the ground truth — prefer it over
+    // task.projectName, which comes from fragile Wrike folder tree-climbing and can
+    // misfire on shared/multi-parent folder structures.
+    let filmTitle = "";
+    // Split on " : " (space-colon-space) specifically, not the first bare colon — film
+    // titles can contain their own colon (e.g. "Paw Patrol: The Dino Movie : XY025793, ...").
+    if ((guessed.jobNumber || "").includes(" : ")) {
+      filmTitle = guessed.jobNumber.split(" : ")[0].trim();
+    }
+    if (!filmTitle) filmTitle = filmFromTask(task);
+    if (
+      filmTitle &&
+      filmTitle === filmTitle.toUpperCase() &&
+      filmTitle !== filmTitle.toLowerCase()
+    ) {
+      filmTitle = filmTitle.replace(
+        /\w\S*/g,
+        (w) => w[0].toUpperCase() + w.slice(1).toLowerCase()
+      );
+    }
+    const searchTitle = (task?.title || "").toUpperCase();
+    // Check FILM_MAPPINGS — match by value against jobNumber or filmTitle
+    const _filmMatch1 = Object.entries(FILM_MAPPINGS).find(
+      ([, v]) =>
+        (guessed.jobNumber || "")
+          .toLowerCase()
+          .startsWith(v.toLowerCase()) ||
+        (filmTitle || "").toLowerCase().startsWith(v.toLowerCase())
+    );
+    if (_filmMatch1) filmTitle = _filmMatch1[1];
+
+    if (task) {
+      const pathUpper = (task.extractedPathData || "").toUpperCase();
+      if (pathUpper.includes("UNIVERSAL")) {
+        const terr = (guessed.territory || "").toUpperCase();
+        if (terr === "UK" || terr === "UNITED KINGDOM")
+          client = "Universal Pictures UK";
+        else if (terr === "AUSTRALIA" || terr === "AU" || terr === "AUS")
+          client = "Universal Pictures Australia";
+        else client = "Universal Pictures International";
+      } else if (pathUpper.includes("PARAMOUNT"))
+        client = "Paramount Pictures";
+      else if (pathUpper.includes("SONY")) client = "Sony Pictures";
+    }
+
+    // Blank film on a real job code stays blank for the Job Book to fill —
+    // see the same rule in guessFieldsFromTask.
+    if (
+      ((!filmTitle || filmTitle === "Unknown Project") &&
+        !/XY\d{5,6}/i.test(guessed.jobNumber || "")) ||
+      searchTitle.includes("SHOWREEL") ||
+      searchTitle.includes("INTERNAL") ||
+      searchTitle.includes("PITCH")
+    ) {
+      filmTitle = "XYi Unbilled";
+      if (!client) client = "Internal";
+    }
+
+    // Job Book override — an admin-curated record beats any guess above
+    const known1 = jobLookup?.getJob?.(guessed.jobNumber);
+    if (known1?.film_title) filmTitle = known1.film_title;
+    if (known1?.client) client = known1.client;
+    // Upgrade a bare "XY025716" to Job Book's canonical
+    // "Film : XY025716, Description" string so pulled rows read
+    // consistently with those that carried the full string from Wrike.
+    if (known1?.job_number && (known1.job_number.includes(" : ") || !(guessed.jobNumber || "").includes(" : "))) {
+      // Job Book is authoritative — adopt its registered number whenever
+      // the code is on file (canonical wins; a bare row won't downgrade a
+      // canonical guess). Backfilled book = primary match, not a fallback.
+      guessed.jobNumber = known1.job_number;
+    } else if (
+      guessed.folderDescription &&
+      guessed.jobNumber &&
+      !guessed.jobNumber.includes(" : ") &&
+      filmTitle &&
+      filmTitle !== "XYi Unbilled"
+    ) {
+      // Brand-new job with no Job Book record yet. Build the canonical
+      // string ONLY out of what Wrike's folder tree says, which is the
+      // same source scanStudioJobNumbers reconciles the book against — so
+      // this row and any later scan cannot disagree.
+      //
+      // This used to synthesize from the TASK title, which describes a
+      // piece of work rather than a job. It wrote rows like
+      // "The Odyssey : XY026047, ODY_Print_Teaser1SHT_Birds_CMYK_KR" into
+      // the book permanently: well-formed enough that the scan's film and
+      // malformed-code checks both pass, so nothing ever flagged it, and
+      // every later pull adopted it in preference to a fresh guess.
+      //
+      // The BARE code, not guessed.jobNumber: resolveJobNumber returns
+      // its input untouched when the code isn't in the list, so an
+      // unmatched code arrives here still carrying its suffix and used to
+      // land in the string twice over.
+      const bare = (guessed.jobNumber.match(/XY\d{5,6}/i) || [])[0];
+      if (bare) {
+        guessed.jobNumber = `${filmTitle} : ${bare}, ${guessed.folderDescription}`;
+      }
+    }
+    return { guessed, client, filmTitle };
+  };
+
+  // The tasks behind the comment suggestions, resolved like Wrike Pull resolves
+  // a timelog's task: from the jobs already synced, else fetched by id. The
+  // folder tree and country fields load first because rowFieldsFromTask reads
+  // them. A ref keeps this one function for the modal's lifetime, so a
+  // re-render here doesn't make it load the day again.
+  const resolveCommentTasksRef = useRef(null);
+  resolveCommentTasksRef.current = async (taskIds) => {
+    await Promise.all([ensureFolderTree(), warmCountryFields()]);
+    const all = await fetchMissingTasks(activeWrikeData, taskIds.map((taskId) => ({ taskId })));
+    const want = new Set(taskIds);
+    return all.filter((t) => want.has(t.id));
+  };
+  const resolveCommentTasks = useCallback(
+    (taskIds) => resolveCommentTasksRef.current(taskIds),
+    []
+  );
+
+  const handleAddCommentRows = (newRows, dayName) => {
+    // Registered only now, for rows actually added — same as a pull does.
+    newRows.forEach((r) =>
+      jobLookup?.ensureJob?.(r.jobNumber, { filmTitle: r.filmTitle, client: r.client })
+    );
+    addRows(newRows);
+    setActiveDay(dayName);
+  };
+
   const dismissNewWeekBanner = () => setNewWeekBanner(false);
 
   const handlePullTimes = async (dateStr = null) => {
@@ -1688,107 +1830,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       Object.values(grouped).forEach(
         ({ log, logDate, dayOfWeek, totalHours, notes, allIds }) => {
           const task = currentTasks.find((t) => t.id === log.taskId);
-          const guessed = guessFieldsFromTask(task);
-
-          let client = "";
-          // Job number "Film Name : CODE, Description" is the ground truth — prefer it over
-          // task.projectName, which comes from fragile Wrike folder tree-climbing and can
-          // misfire on shared/multi-parent folder structures.
-          let filmTitle = "";
-          // Split on " : " (space-colon-space) specifically, not the first bare colon — film
-          // titles can contain their own colon (e.g. "Paw Patrol: The Dino Movie : XY025793, ...").
-          if ((guessed.jobNumber || "").includes(" : ")) {
-            filmTitle = guessed.jobNumber.split(" : ")[0].trim();
-          }
-          if (!filmTitle) filmTitle = filmFromTask(task);
-          if (
-            filmTitle &&
-            filmTitle === filmTitle.toUpperCase() &&
-            filmTitle !== filmTitle.toLowerCase()
-          ) {
-            filmTitle = filmTitle.replace(
-              /\w\S*/g,
-              (w) => w[0].toUpperCase() + w.slice(1).toLowerCase()
-            );
-          }
-          const searchTitle = (task?.title || "").toUpperCase();
-          // Check FILM_MAPPINGS — match by value against jobNumber or filmTitle
-          const _filmMatch1 = Object.entries(FILM_MAPPINGS).find(
-            ([, v]) =>
-              (guessed.jobNumber || "")
-                .toLowerCase()
-                .startsWith(v.toLowerCase()) ||
-              (filmTitle || "").toLowerCase().startsWith(v.toLowerCase())
-          );
-          if (_filmMatch1) filmTitle = _filmMatch1[1];
-
-          if (task) {
-            const pathUpper = (task.extractedPathData || "").toUpperCase();
-            if (pathUpper.includes("UNIVERSAL")) {
-              const terr = (guessed.territory || "").toUpperCase();
-              if (terr === "UK" || terr === "UNITED KINGDOM")
-                client = "Universal Pictures UK";
-              else if (terr === "AUSTRALIA" || terr === "AU" || terr === "AUS")
-                client = "Universal Pictures Australia";
-              else client = "Universal Pictures International";
-            } else if (pathUpper.includes("PARAMOUNT"))
-              client = "Paramount Pictures";
-            else if (pathUpper.includes("SONY")) client = "Sony Pictures";
-          }
-
-          // Blank film on a real job code stays blank for the Job Book to fill —
-          // see the same rule in guessFieldsFromTask.
-          if (
-            ((!filmTitle || filmTitle === "Unknown Project") &&
-              !/XY\d{5,6}/i.test(guessed.jobNumber || "")) ||
-            searchTitle.includes("SHOWREEL") ||
-            searchTitle.includes("INTERNAL") ||
-            searchTitle.includes("PITCH")
-          ) {
-            filmTitle = "XYi Unbilled";
-            if (!client) client = "Internal";
-          }
-
-          // Job Book override — an admin-curated record beats any guess above
-          const known1 = jobLookup?.getJob?.(guessed.jobNumber);
-          if (known1?.film_title) filmTitle = known1.film_title;
-          if (known1?.client) client = known1.client;
-          // Upgrade a bare "XY025716" to Job Book's canonical
-          // "Film : XY025716, Description" string so pulled rows read
-          // consistently with those that carried the full string from Wrike.
-          if (known1?.job_number && (known1.job_number.includes(" : ") || !(guessed.jobNumber || "").includes(" : "))) {
-            // Job Book is authoritative — adopt its registered number whenever
-            // the code is on file (canonical wins; a bare row won't downgrade a
-            // canonical guess). Backfilled book = primary match, not a fallback.
-            guessed.jobNumber = known1.job_number;
-          } else if (
-            guessed.folderDescription &&
-            guessed.jobNumber &&
-            !guessed.jobNumber.includes(" : ") &&
-            filmTitle &&
-            filmTitle !== "XYi Unbilled"
-          ) {
-            // Brand-new job with no Job Book record yet. Build the canonical
-            // string ONLY out of what Wrike's folder tree says, which is the
-            // same source scanStudioJobNumbers reconciles the book against — so
-            // this row and any later scan cannot disagree.
-            //
-            // This used to synthesize from the TASK title, which describes a
-            // piece of work rather than a job. It wrote rows like
-            // "The Odyssey : XY026047, ODY_Print_Teaser1SHT_Birds_CMYK_KR" into
-            // the book permanently: well-formed enough that the scan's film and
-            // malformed-code checks both pass, so nothing ever flagged it, and
-            // every later pull adopted it in preference to a fresh guess.
-            //
-            // The BARE code, not guessed.jobNumber: resolveJobNumber returns
-            // its input untouched when the code isn't in the list, so an
-            // unmatched code arrives here still carrying its suffix and used to
-            // land in the string twice over.
-            const bare = (guessed.jobNumber.match(/XY\d{5,6}/i) || [])[0];
-            if (bare) {
-              guessed.jobNumber = `${filmTitle} : ${bare}, ${guessed.folderDescription}`;
-            }
-          }
+          const { guessed, client, filmTitle } = rowFieldsFromTask(task);
           // No folder description means no canonical string — the bare code is
           // registered as a stub instead. Deliberately conspicuous: a bare row
           // trips the Studio Scan's own malformed-code test and gets filled in
@@ -2454,6 +2496,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         </div>
       )}
       {/* --- REMINDER MODAL --- */}
+      {showCommentTrail && (
+        <CommentTrailModal
+          onClose={() => setShowCommentTrail(false)}
+          wrikeUserId={wrikeUserId}
+          rows={rows}
+          frozenDays={frozenDays}
+          initialDay={activeDay}
+          resolveTasks={resolveCommentTasks}
+          rowFieldsFromTask={rowFieldsFromTask}
+          onAddRows={handleAddCommentRows}
+        />
+      )}
+
       {showReminderModal && (
         <div
           className="fixed inset-0 z-[100001] flex items-center justify-center p-4"
@@ -3689,13 +3744,32 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
         {/* Bottom Action Bar */}
         <div className="p-4 border-t border-[#dce4ec] bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
-          <button
-            onClick={handleOpenWrikeModal}
-            className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
-          >
-            <LayoutList className="w-4 h-4" />
-            Wrike Timesheets
-          </button>
+          <div className="flex gap-3 flex-wrap">
+            <button
+              onClick={handleOpenWrikeModal}
+              className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
+            >
+              <LayoutList className="w-4 h-4" />
+              Wrike Timesheets
+            </button>
+            {/* Behind the same grant as Debug Pull while it's being tried out. */}
+            {(isAdmin || canDebugPull) && (
+              <button
+                onClick={() => {
+                  if (!wrikeUserId) {
+                    showToast("Please connect Wrike in Profile → Settings first.");
+                    return;
+                  }
+                  setShowCommentTrail(true);
+                }}
+                title="Suggests rows from the comments you posted in Wrike"
+                className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
+              >
+                <MessagesSquare className="w-4 h-4" />
+                From My Comments
+              </button>
+            )}
+          </div>
           <div className="flex gap-3 flex-wrap">
             <button
               onClick={() => handlePullTimes()}
