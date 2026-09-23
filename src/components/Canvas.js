@@ -3937,10 +3937,6 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
         .wrike-matrix-render tr:nth-child(even) { background-color: #f8fafc; }
         .wrike-matrix-render tr:hover { background-color: #c2410d/5; }
         .wrike-matrix-render a { color: #c2410d; font-weight: 700; text-decoration: underline; }
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #dce4ec; border-radius: 10px; }
-        .custom-scrollbar:hover::-webkit-scrollbar-thumb { background-color: #cbd5e1; }
       `}</style>
 
       {/* --- COMMAND PALETTE OVERLAY (z-300) --- */}
