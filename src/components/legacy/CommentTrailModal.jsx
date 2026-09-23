@@ -582,7 +582,8 @@ function Stat({ value, label, warn }) {
 // A timeline mark: a ring for your comment, a filled diamond for a hand-off, a
 // small square for anything closing the task, a filled ring for your own
 // status change.
-function Mark({ item, colour, active, className = "", style, ...rest }) {
+// A mark whose task has nothing on the timesheets glows (see .mark-glow).
+function Mark({ item, colour, active, glow, className = "", style, ...rest }) {
   const shape =
     item.type === "cue"
       ? "w-2.5 h-2.5 -ml-[5px] rotate-45 rounded-[2px]"
@@ -598,9 +599,10 @@ function Mark({ item, colour, active, className = "", style, ...rest }) {
   return (
     <button
       {...rest}
-      className={`${shape} ${className}`}
+      className={`${shape} ${glow ? "mark-glow" : ""} ${className}`}
       style={{
         ...style,
+        "--glow": colour,
         background: fill,
         borderColor: item.type === "closed" ? "#64748b" : colour,
       }}
@@ -674,6 +676,7 @@ function Timeline({ view, activeItemId, onPick }) {
                     item={item}
                     colour={s.colour}
                     active={isActive}
+                    glow={s.standing === "missing"}
                     onMouseEnter={show(s, item)}
                     onMouseLeave={hide}
                     onFocus={show(s, item)}
@@ -709,6 +712,15 @@ function Timeline({ view, activeItemId, onPick }) {
                 <span className="w-4 h-2 rounded bg-slate-400/30" /> Time it probably covers
               </span>
             </>
+          )}
+          {view.suggestions.some((s) => s.standing === "missing") && (
+            <span className="flex items-center gap-1.5">
+              <span
+                className="w-2.5 h-2.5 rounded-full border-2 border-slate-300 mark-glow"
+                style={{ "--glow": "#cbd5e1" }}
+              />{" "}
+              Not on the timesheets yet
+            </span>
           )}
           {hasOvertime && (
             <span className="flex items-center gap-1.5">

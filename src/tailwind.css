@@ -204,6 +204,28 @@
   }
 }
 
+/* "What did I work on?": a timeline mark whose task has nothing on the
+   timesheets yet breathes a soft halo in its lane colour (--glow), so what
+   still needs logging stands out from what's done. Still, not pulsing, for
+   anyone who's asked for less motion. */
+@keyframes mark-glow {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--glow) 0%, transparent), 0 0 4px 0 color-mix(in srgb, var(--glow) 45%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--glow) 18%, transparent), 0 0 12px 2px color-mix(in srgb, var(--glow) 60%, transparent);
+  }
+}
+.mark-glow {
+  animation: mark-glow 1.6s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mark-glow {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--glow) 18%, transparent), 0 0 10px 1px color-mix(in srgb, var(--glow) 55%, transparent);
+  }
+}
+
 /* Film grain over the whole viewport for depth (sits above the page background
    and cards, below modals/toasts; never intercepts clicks). */
 body::after {
