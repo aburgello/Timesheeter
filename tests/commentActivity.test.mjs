@@ -37,7 +37,16 @@ check("being re-assigned after your comment is", est([mine("11:00", "a"), start(
 check("a hand-off with nothing after runs to 18:00", est([start("16:00", "a")]).a, 120);
 check("...or to now, on today", est([start("13:00", "a", "assigned")], { dayEnd: at("14:00") }).a, 60);
 check("closed by someone else ends the stretch", est([start("10:00", "a"), stop("11:00", "a")]).a, 60);
-check("a stop with nothing open is ignored", est([stop("11:00", "a"), mine("12:00", "a")]).a, 150);
+check("a close is an event too: your next action counts from it", est([stop("11:00", "a"), mine("12:00", "a")]).a, 60);
+
+// Your action answers the LATEST thing that happened on the task, not the
+// first: moved to Motion at 10:02, on to Prep at 10:30, you reply at 10:35.
+const other = (time, taskId) => ({ taskId, minute: at(time), kind: "other" });
+check("latest: a later status change starts the stretch", est([start("10:02", "a"), start("10:30", "a"), mine("10:35", "a")]).a, 5);
+check("latest: so does someone else's comment", est([start("10:00", "a"), other("11:00", "a"), mine("11:40", "a")]).a, 40);
+check("latest: and your own previous action", est([start("10:00", "a"), mine("10:30", "a"), mine("11:00", "a")]).a, 60);
+check("latest: someone's change in the same minute as your comment is a reaction to it, not its start", est([start("10:35", "a"), mine("10:35", "a")]).a, 65);
+check("latest: someone else's comment alone isn't a hand-off", est([other("16:00", "a")]).a, 0);
 
 const busy = est([start("09:30", "a", "assigned"), start("09:30", "b", "assigned"), start("09:30", "c", "assigned")]);
 check("the day never adds up to more than it had", Object.values(busy).reduce((s, m) => s + m, 0), at("18:00") - at("09:30"));
@@ -73,6 +82,7 @@ const row = (time, taskId, event_type, extra = {}) => ({ task_id: taskId, event_
 const events = activityToEvents({
   me: "ME",
   comments: [{ taskId: "t1", createdDate: iso("12:00") }, { taskId: null, createdDate: iso("12:05") }],
+  others: [{ taskId: "t1", createdDate: iso("11:30") }],
   activity: [
     row("09:00", "t1", "TaskResponsiblesAdded", { user_ids: ["ME", "OTHER"], author_id: "PROD" }),
     row("09:05", "t2", "TaskResponsiblesAdded", { user_ids: ["OTHER"], author_id: "PROD" }),
@@ -89,6 +99,7 @@ const brief = events.map((e) => `${e.taskId} ${e.kind}${e.cue ? `/${e.cue}` : ""
 check("activity becomes events", brief, [
   "t1 mine", // comment
   "t1 mine", // status change made by me
+  "t1 other", // someone else's comment
   "t1 start/assigned",
   "t3 start/status", // moved to Motion by someone else, my task
   "t3 stop", // moved to a Completed status by someone else

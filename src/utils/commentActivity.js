@@ -9,13 +9,21 @@ import { resolveCountryCode } from "./countryCodes";
 // changes come from wrike_task_activity, recorded by the webhook; see
 // migration 20260923181757.
 //
-// Each task's day is read as stretches:
+// Each of your actions answers whatever happened on the task just before it,
+// so each task's day is read as stretches:
+//   mine  — you comment on it or change its status yourself. Closes a stretch
+//           that began at the LATEST earlier event on the task that day: a
+//           status change or assignment by anyone, anyone's comment, or your
+//           own previous action. With nothing earlier that day, it runs from
+//           the start of the day. The latest, not the first: a task moved to
+//           Motion at 10:02 and on to Prep at 10:30, answered at 10:35, is five
+//           minutes' work on what was asked at 10:30, not half an hour.
 //   start — you're assigned, or someone else moves it into an active status.
-//   mine  — you comment on it or change its status yourself. Closes the
-//           stretch. With no start before it that day, the stretch runs back
-//           to where you last left the task, or to the start of the day.
+//           An event like any other, and also a hand-off: if you haven't
+//           answered it by the end of the day, you were working on it since.
 //   stop  — someone else moves it to a closed status (Completed, Deferred,
-//           Cancelled). Closes an open stretch without it being yours.
+//           Cancelled), or takes you off it. Ends an unanswered hand-off.
+//   other — someone else's comment. Only ever the start of your next stretch.
 // A stretch still open at the end of the day runs to the end of the day, with
 // one exception: a status change by someone else AFTER you've already acted on
 // the task that day is most likely the review step ("Client Review"), not a
@@ -41,7 +49,7 @@ export const DAY_END_MIN = 18 * 60; // also where overtime begins
 export const EARLIEST_MIN = 7 * 60;
 
 /**
- * events: [{ taskId, minute, kind: "start"|"mine"|"stop", cue?: "assigned"|"status" }]
+ * events: [{ taskId, minute, kind: "start"|"mine"|"stop"|"other", cue?: "assigned"|"status" }]
  * dayEnd: where unclosed stretches stop — 18:00, or now if that's earlier today.
  * Returns {
  *   byTask:         { [taskId]: minutes }, all of it
@@ -68,22 +76,31 @@ export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd 
     add(taskId, to <= dayStart ? Math.max(from, EARLIEST_MIN) : Math.max(from, dayStart), to);
 
   for (const [taskId, list] of perTask) {
-    list.sort((a, b) => a.minute - b.minute);
-    let open = null; // { minute, cue } of the start that opened the stretch
+    // Times here are whole minutes, so a tie needs deciding. Your own action
+    // goes first: someone moving the task in the same minute you post is
+    // almost always reacting to it (moving it on once you've delivered), not
+    // the thing you were answering.
+    list.sort((a, b) => a.minute - b.minute || (b.kind === "mine") - (a.kind === "mine"));
+    let last = null; // the latest event so far: where your next stretch starts
     let lastMine = null;
+    let handoff = null; // { minute, cue }: the first hand-off you haven't answered
     for (const e of list) {
-      if (e.kind === "start") {
-        if (!open) open = { minute: e.minute, cue: e.cue };
-      } else if (e.kind === "mine") {
-        closedByYou(taskId, open ? open.minute : lastMine ?? dayStart, e.minute);
+      if (e.kind === "mine") {
+        closedByYou(taskId, last ?? dayStart, e.minute);
         lastMine = e.minute;
-        open = null;
-      } else if (e.kind === "stop" && open) {
-        unclosed(taskId, open.minute, e.minute);
-        open = null;
+        handoff = null;
+      } else if (e.kind === "start") {
+        if (!handoff) handoff = { minute: e.minute, cue: e.cue };
+      } else if (e.kind === "stop" && handoff) {
+        unclosed(taskId, handoff.minute, e.minute);
+        handoff = null;
       }
+      last = e.minute;
     }
-    if (open && !(open.cue === "status" && lastMine !== null)) unclosed(taskId, open.minute, dayEnd);
+    // An unanswered hand-off runs to the end of the day, except a status change
+    // by someone else after you've already acted that day: that's the review
+    // step, not new work for you.
+    if (handoff && !(handoff.cue === "status" && lastMine !== null)) unclosed(taskId, handoff.minute, dayEnd);
   }
 
   // Split each stretch of the day between the tasks open in it. 18:00 is a cut
@@ -106,16 +123,22 @@ export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd 
 /**
  * One person's day of Wrike activity, as estimateFromActivity's events.
  *   comments   your comments: [{ taskId, createdDate }]
+ *   others     other people's comments on those tasks, same shape
  *   activity   wrike_task_activity rows for the day
  *   isMyTask   (taskId) => whether you're assigned to it; someone else's
  *              status change only cues work on a task that's yours
  *   statusGroup (customStatusId) => "Active" | "Completed" | "Deferred" |
  *              "Cancelled" | undefined (unknown counts as active)
  */
-export function activityToEvents({ comments, activity, me, isMyTask, statusGroup }) {
-  const events = comments
-    .filter((c) => c.taskId)
-    .map((c) => ({ taskId: c.taskId, minute: localMinuteOf(c.createdDate), kind: "mine" }));
+export function activityToEvents({ comments, others = [], activity, me, isMyTask, statusGroup }) {
+  const events = [
+    ...comments
+      .filter((c) => c.taskId)
+      .map((c) => ({ taskId: c.taskId, minute: localMinuteOf(c.createdDate), kind: "mine" })),
+    ...others
+      .filter((c) => c.taskId)
+      .map((c) => ({ taskId: c.taskId, minute: localMinuteOf(c.createdDate), kind: "other" })),
+  ];
   for (const a of activity) {
     const minute = localMinuteOf(a.occurred_at);
     const base = { taskId: a.task_id, minute };

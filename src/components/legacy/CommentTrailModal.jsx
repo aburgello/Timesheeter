@@ -107,7 +107,7 @@ export default function CommentTrailModal({
     async (d) => {
       setByDay((p) => ({ ...p, [d.iso]: { status: "loading" } }));
       try {
-        const [{ comments, truncated }, since] = await Promise.all([
+        const [{ comments, others, truncated }, since] = await Promise.all([
           fetchMyCommentsForDay(d.date, wrikeUserId),
           // History is a bonus: if it can't be read, fall back to comments
           // only rather than showing nothing.
@@ -137,6 +137,9 @@ export default function CommentTrailModal({
           [d.iso]: {
             status: "ready",
             comments,
+            // Only on tasks that concern you; the rest of the account's
+            // comments aren't kept.
+            others: others.filter((c) => involved.has(c.taskId)),
             truncated,
             activity,
             hasHistory,
@@ -222,17 +225,19 @@ export default function CommentTrailModal({
     if (state.hasHistory) {
       const events = activityToEvents({
         comments: taskComments,
+        others: state.others,
         activity: state.activity,
         me,
         isMyTask,
         statusGroup: groupOf,
       });
       ({ byTask, overtimeByTask, intervals } = estimateFromActivity(events, { dayEnd }));
-      // A task whose only event is someone closing it wasn't worked on.
+      // Listed for your own action or a hand-off to you. A task whose only
+      // events are someone closing it or commenting on it wasn't worked on.
       taskOrder = [
         ...new Set(
           events
-            .filter((e) => e.kind !== "stop")
+            .filter((e) => e.kind === "mine" || e.kind === "start")
             .sort((a, b) => a.minute - b.minute)
             .map((e) => e.taskId)
         ),
@@ -278,6 +283,9 @@ export default function CommentTrailModal({
         ...taskComments
           .filter((c) => c.taskId === taskId)
           .map((c) => ({ id: c.id, minute: localMinuteOf(c.createdDate), type: "comment", text: c.text })),
+        ...state.others
+          .filter((c) => c.taskId === taskId)
+          .map((c) => ({ id: c.id, minute: localMinuteOf(c.createdDate), type: "theirs", text: c.text })),
         ...state.activity.filter((a) => a.task_id === taskId).map(describe).filter(Boolean),
       ].sort((a, b) => a.minute - b.minute);
       const key = `${day.iso}:${taskId}`;
@@ -491,7 +499,7 @@ export default function CommentTrailModal({
               {/* How the times were worked out */}
               {view.hasHistory && (
                 <p className="px-6 py-3 border-b border-white/5 bg-black/10 text-xs text-slate-400">
-                  Work on a task starts when you're assigned or someone moves it into a new status, and ends when you comment or change its status yourself. Where tasks overlap, the time is split between them.
+                  Each of your comments and status changes counts back to the last thing that happened on that task before it: a status change, an assignment or someone's comment. A task handed to you that you haven't answered yet counts until the end of the day. Where tasks overlap, the time is split between them.
                 </p>
               )}
 
@@ -580,41 +588,27 @@ function Stat({ value, label, warn }) {
   );
 }
 
-// A timeline mark: a ring for your comment, a filled diamond for a hand-off, a
-// small square for anything closing the task, a filled ring for your own
-// status change.
-// A mark whose task has nothing on the timesheets glows (see .mark-glow).
-function Mark({ item, colour, active, glow, className = "", style, ...rest }) {
-  const shape =
-    item.type === "cue"
-      ? "w-2.5 h-2.5 -ml-[5px] rotate-45 rounded-[2px]"
-      : item.type === "closed"
-      ? "w-2.5 h-2.5 -ml-[5px] rounded-[2px] border-2"
-      : "w-3 h-3 -ml-1.5 rounded-full border-[2.5px]";
-  const fill =
-    item.type === "cue" || item.type === "mine" || active
-      ? colour
-      : item.type === "closed"
-      ? "transparent"
-      : "#141b28";
+// Your comment on the timeline: a ring in the task's colour, filled once it's
+// the one you clicked. A task with nothing on the timesheets glows (see
+// .mark-glow in tailwind.css).
+function Mark({ colour, active, glow, className = "", style, ...rest }) {
   return (
     <button
       {...rest}
-      className={`${shape} ${glow ? "mark-glow" : ""} ${className}`}
-      style={{
-        ...style,
-        "--glow": colour,
-        background: fill,
-        borderColor: item.type === "closed" ? "#64748b" : colour,
-      }}
+      className={`w-3 h-3 -ml-1.5 rounded-full border-[2.5px] ${glow ? "mark-glow" : ""} ${className}`}
+      style={{ ...style, "--glow": colour, background: active ? colour : "#141b28", borderColor: colour }}
     />
   );
 }
 
-// One lane per task. Hovering a mark previews it; clicking takes you to that
-// task's row below, to set its time.
+// One lane per task: a bar for each stretch of work, your comments as rings on
+// top. Status changes aren't drawn one by one (a busy task turned into a pile
+// of diamonds that hid the comments underneath); a stretch a hand-off opened
+// gets a solid cap at its start instead, and the changes behind a stretch are
+// in its hover card. Every one is still listed under the task's Activity.
+// Clicking a comment or a bar takes you to that task's row, to set its time.
 function Timeline({ view, activeItemId, onPick }) {
-  // { s, item, rect } — the mark (or lane name, with item null) being previewed.
+  // { s, item } for a comment or lane name, { s, bar } for a stretch, + rect.
   const [hover, setHover] = useState(null);
 
   const minutes = [
@@ -631,8 +625,13 @@ function Timeline({ view, activeItemId, onPick }) {
   // suggested, and the band claimed otherwise.
   const hasOvertime = view.hasHistory && end > DAY_END_MIN;
 
-  const show = (s, item) => (e) => setHover({ s, item, rect: e.currentTarget.getBoundingClientRect() });
+  const show = (payload) => (e) => setHover({ ...payload, rect: e.currentTarget.getBoundingClientRect() });
   const hide = () => setHover(null);
+  // What happened inside a stretch, for its card: the hand-off that opened it,
+  // the comments and changes along it, the action that closed it.
+  const within = (s, b) => s.items.filter((x) => x.minute >= b.from - 1 && x.minute <= b.to + 1);
+  const openedBy = (s, b) => s.items.find((x) => x.type === "cue" && Math.abs(x.minute - b.from) <= 1);
+
   return (
     <div className="px-6 py-4 overflow-x-auto custom-scrollbar">
       <div className="min-w-[640px]">
@@ -643,76 +642,91 @@ function Timeline({ view, activeItemId, onPick }) {
             </span>
           ))}
         </div>
-        {view.suggestions.map((s) => (
-          <div key={s.key} className="grid grid-cols-[180px_1fr] items-center h-8 border-t border-dashed border-white/5">
-            <div
-              className="flex items-center gap-2 pr-3 text-[11px] font-semibold text-slate-300 truncate"
-              onMouseEnter={show(s, null)}
-              onMouseLeave={hide}
-            >
-              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: s.colour }} />
-              <span className="truncate">{s.title}</span>
-            </div>
-            <div className="relative h-full">
-              {hasOvertime && (
-                <div className="absolute inset-y-0 right-0 bg-amber-400/[0.06]" style={{ left: pct(DAY_END_MIN) }} />
-              )}
-              {hours.map((h) => (
-                <div key={h} className="absolute inset-y-0 w-px bg-white/5" style={{ left: pct(h) }} />
-              ))}
-              {view.intervals
-                .filter((b) => b.taskId === s.taskId)
-                .map((b, i) => (
-                  <div
-                    key={i}
-                    className="absolute top-[11px] h-2.5 rounded"
-                    style={{ left: pct(b.from), width: `calc(${pct(b.to)} - ${pct(b.from)})`, background: s.colour, opacity: 0.25 }}
-                  />
+        {view.suggestions.map((s) => {
+          const comments = s.items.filter((x) => x.type === "comment");
+          const bars = view.intervals.filter((b) => b.taskId === s.taskId);
+          // The glow goes on the comments, or on the bars of a task you were
+          // handed but haven't commented on, so every unlogged task shows it.
+          const missing = s.standing === "missing";
+          return (
+            <div key={s.key} className="grid grid-cols-[180px_1fr] items-center h-8 border-t border-dashed border-white/5">
+              <div
+                className="flex items-center gap-2 pr-3 text-[11px] font-semibold text-slate-300 truncate"
+                onMouseEnter={show({ s, item: null })}
+                onMouseLeave={hide}
+              >
+                <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: s.colour }} />
+                <span className="truncate">{s.title}</span>
+              </div>
+              <div className="relative h-full">
+                {hasOvertime && (
+                  <div className="absolute inset-y-0 right-0 bg-amber-400/[0.06]" style={{ left: pct(DAY_END_MIN) }} />
+                )}
+                {hours.map((h) => (
+                  <div key={h} className="absolute inset-y-0 w-px bg-white/5" style={{ left: pct(h) }} />
                 ))}
-              {s.items.map((item) => {
-                const isActive = activeItemId === item.id;
-                return (
-                  <Mark
-                    key={item.id}
-                    item={item}
-                    colour={s.colour}
-                    active={isActive}
-                    glow={s.standing === "missing"}
-                    onMouseEnter={show(s, item)}
-                    onMouseLeave={hide}
-                    onFocus={show(s, item)}
-                    onBlur={hide}
-                    onClick={() => {
-                      hide();
-                      onPick(s, item);
-                    }}
-                    aria-label={`${clock(item.minute)}: ${item.text || "attachment"}. Go to ${s.title} to set its time`}
-                    className={`absolute top-1/2 -translate-y-1/2 transition-transform hover:scale-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
-                      isActive ? "scale-125" : ""
-                    }`}
-                    style={{ left: pct(item.minute) }}
-                  />
-                );
-              })}
+                {bars.map((b, i) => {
+                  const cue = openedBy(s, b);
+                  return (
+                    <button
+                      key={i}
+                      onMouseEnter={show({ s, bar: b })}
+                      onMouseLeave={hide}
+                      onFocus={show({ s, bar: b })}
+                      onBlur={hide}
+                      onClick={() => {
+                        hide();
+                        onPick(s, within(s, b).find((x) => x.type === "comment") || within(s, b)[0] || { id: null });
+                      }}
+                      aria-label={`${s.title}, ${clock(b.from)} to ${clock(b.to)}. Go to it to set its time`}
+                      className={`absolute top-[11px] h-2.5 rounded bg-[color-mix(in_srgb,var(--c)_28%,transparent)] hover:bg-[color-mix(in_srgb,var(--c)_48%,transparent)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
+                        missing && !comments.length ? "mark-glow" : ""
+                      }`}
+                      style={{ "--c": s.colour, "--glow": s.colour, left: pct(b.from), width: `calc(${pct(b.to)} - ${pct(b.from)})` }}
+                    >
+                      {cue && <span className="absolute inset-y-0 left-0 w-1 rounded-l" style={{ background: s.colour }} />}
+                    </button>
+                  );
+                })}
+                {comments.map((item) => {
+                  const isActive = activeItemId === item.id;
+                  return (
+                    <Mark
+                      key={item.id}
+                      colour={s.colour}
+                      active={isActive}
+                      glow={missing}
+                      onMouseEnter={show({ s, item })}
+                      onMouseLeave={hide}
+                      onFocus={show({ s, item })}
+                      onBlur={hide}
+                      onClick={() => {
+                        hide();
+                        onPick(s, item);
+                      }}
+                      aria-label={`${clock(item.minute)}: ${item.text || "attachment"}. Go to ${s.title} to set its time`}
+                      className={`absolute top-1/2 -translate-y-1/2 transition-transform hover:scale-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
+                        isActive ? "scale-125" : ""
+                      }`}
+                      style={{ left: pct(item.minute) }}
+                    />
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[11px] text-slate-500">
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full border-2 border-slate-400" /> Your comment
           </span>
           {view.hasHistory && (
-            <>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rotate-45 rounded-[2px] bg-slate-400" /> Handed to you
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-[2px] border-2 border-slate-500" /> Closed
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-4 h-2 rounded bg-slate-400/30" /> Time it probably covers
-              </span>
-            </>
+            <span className="flex items-center gap-1.5">
+              <span className="relative w-5 h-2 rounded bg-slate-400/30 overflow-hidden">
+                <span className="absolute inset-y-0 left-0 w-1 bg-slate-400" />
+              </span>{" "}
+              Time it probably covers, solid where it was handed to you
+            </span>
           )}
           {view.suggestions.some((s) => s.standing === "missing") && (
             <span className="flex items-center gap-1.5">
@@ -728,12 +742,12 @@ function Timeline({ view, activeItemId, onPick }) {
               <span className="w-4 h-2 rounded bg-amber-400/25" /> After 18:00, suggested as add. time
             </span>
           )}
-          <span>Hover a mark to read it, click it to set that task's time.</span>
+          <span>Hover a comment or a bar for details, click it to set that task's time.</span>
         </div>
       </div>
 
       {hover && (
-        <FloatingCard rect={hover.rect} className="p-3 w-72 pointer-events-none">
+        <FloatingCard rect={hover.rect} className="p-3 w-80 pointer-events-none">
           <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-400">
             <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: hover.s.colour }} />
             <span className="truncate">{hover.s.title}</span>
@@ -744,15 +758,50 @@ function Timeline({ view, activeItemId, onPick }) {
               <ItemText item={hover.item} />
             </p>
           )}
+          {hover.bar && <BarDetails s={hover.s} bar={hover.bar} items={within(hover.s, hover.bar)} intervals={view.intervals} />}
         </FloatingCard>
       )}
+    </div>
+  );
+}
 
+// A stretch's hover card: how long, why it started, what happened along it.
+function BarDetails({ s, bar, items, intervals }) {
+  const shared = intervals.some((o) => o.taskId !== s.taskId && o.from < bar.to && o.to > bar.from);
+  const opened = items.some((x) => x.type === "cue" && Math.abs(x.minute - bar.from) <= 1);
+  return (
+    <div className="mt-1.5 text-xs">
+      <p className="font-mono text-slate-100">
+        {clock(bar.from)}–{clock(bar.to)} <span className="text-slate-500">· {hm((bar.to - bar.from) / 60)}</span>
+      </p>
+      {!opened && !items.some((x) => x.minute <= bar.from + 1) && (
+        <p className="mt-1 text-slate-400">No hand-off that day, so it counts from the start of the day.</p>
+      )}
+      {items.length > 0 && (
+        <ul className="mt-1.5 flex flex-col gap-1">
+          {items.slice(0, 6).map((x) => (
+            <li key={x.id} className="line-clamp-2 break-words text-slate-300">
+              <span className="font-mono text-slate-500 mr-2">{clock(x.minute)}</span>
+              <ItemText item={x} />
+            </li>
+          ))}
+          {items.length > 6 && <li className="text-slate-500">and {items.length - 6} more in its Activity</li>}
+        </ul>
+      )}
+      {shared && <p className="mt-1.5 text-slate-500">Other tasks were open at the same time, so this time is split with them.</p>}
     </div>
   );
 }
 
 function ItemText({ item }) {
   if (item.type === "comment") return item.text || <span className="italic text-slate-500">Attachment only</span>;
+  if (item.type === "theirs")
+    return (
+      <>
+        <span className="text-slate-500">Someone else: </span>
+        {item.text || <span className="italic text-slate-500">attachment only</span>}
+      </>
+    );
   return <span className="italic text-slate-300">{item.text}</span>;
 }
 

@@ -34,22 +34,29 @@ async function fetchWindow(startMs, endMs) {
 }
 
 /**
- * Your comments on the local calendar day `date`, oldest first.
- * Resolves { comments: [{ id, taskId, folderId, text, createdDate }], truncated }.
+ * The comments on the local calendar day `date`, oldest first: yours, and
+ * everyone else's on tasks (the same response carries both, so keeping the
+ * others costs no extra call). Other people's comments matter because your
+ * reply answers them — see utils/commentActivity.js.
+ * Resolves { comments, others, truncated }, each comment
+ * { id, taskId, folderId, text, createdDate }.
  */
 export async function fetchMyCommentsForDay(date, authorId) {
   const { start, end } = dayRangeUtc(date);
   const { data, truncated } = await fetchWindow(Date.parse(start), Date.parse(end));
   const seen = new Set();
-  const comments = data
-    .filter((c) => c.authorId === authorId && !seen.has(c.id) && seen.add(c.id))
-    .map((c) => ({
-      id: c.id,
-      taskId: c.taskId || null,
-      folderId: c.folderId || null,
-      text: (c.text || "").trim(),
-      createdDate: c.createdDate,
-    }))
-    .sort((x, y) => Date.parse(x.createdDate) - Date.parse(y.createdDate));
-  return { comments, truncated };
+  const shape = (c) => ({
+    id: c.id,
+    taskId: c.taskId || null,
+    folderId: c.folderId || null,
+    text: (c.text || "").trim(),
+    createdDate: c.createdDate,
+  });
+  const byTime = (x, y) => Date.parse(x.createdDate) - Date.parse(y.createdDate);
+  const unique = data.filter((c) => !seen.has(c.id) && seen.add(c.id));
+  return {
+    comments: unique.filter((c) => c.authorId === authorId).map(shape).sort(byTime),
+    others: unique.filter((c) => c.authorId !== authorId && c.taskId).map(shape).sort(byTime),
+    truncated,
+  };
 }
