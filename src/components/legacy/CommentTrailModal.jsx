@@ -78,7 +78,7 @@ export default function CommentTrailModal({
   resolveTasks,
   rowFieldsFromTask,
   onAddRows,
-  myTaskIds,
+  prepare,
   statusName,
   statusGroup,
 }) {
@@ -91,7 +91,7 @@ export default function CommentTrailModal({
   // Read through a ref so a re-render of the grid behind (new arrays, new
   // callbacks) doesn't make a loaded day look stale and fetch it again.
   const live = useRef();
-  live.current = { resolveTasks, myTaskIds, statusName, statusGroup };
+  live.current = { resolveTasks, prepare, statusName, statusGroup };
 
   // Per day: { status: "loading"|"ready"|"error", comments, truncated, activity,
   // tasks, hasHistory, since, error }
@@ -107,7 +107,7 @@ export default function CommentTrailModal({
     async (d) => {
       setByDay((p) => ({ ...p, [d.iso]: { status: "loading" } }));
       try {
-        const [{ comments, others, truncated }, since] = await Promise.all([
+        const [{ comments, others, truncated }, since, myTaskIds] = await Promise.all([
           fetchMyCommentsForDay(d.date, wrikeUserId),
           // History is a bonus: if it can't be read, fall back to comments
           // only rather than showing nothing.
@@ -115,9 +115,11 @@ export default function CommentTrailModal({
             console.warn("[what did I work on] status history unavailable:", err.message);
             return null;
           }),
+          // Your tasks and the status groups, once the page's sync has them.
+          live.current.prepare(),
         ]);
         const hasHistory = !!since && since <= d.date;
-        const mine = new Set(live.current.myTaskIds);
+        const mine = new Set(myTaskIds);
         const commented = [...new Set(comments.map((c) => c.taskId).filter(Boolean))];
 
         const activity = hasHistory
@@ -144,6 +146,7 @@ export default function CommentTrailModal({
             activity,
             hasHistory,
             since,
+            myTaskIds,
             tasks: new Map(tasks.map((t) => [t.id, t])),
           },
         }));
@@ -181,7 +184,8 @@ export default function CommentTrailModal({
   // render so a row added (or deleted in the grid behind) is reflected at once.
   const view = useMemo(() => {
     if (state?.status !== "ready") return null;
-    const { statusName: nameOf, statusGroup: groupOf, myTaskIds: myIds } = live.current;
+    const { statusName: nameOf, statusGroup: groupOf } = live.current;
+    const myIds = state.myTaskIds;
     const me = wrikeUserId;
     const taskComments = state.comments.filter((c) => c.taskId);
     const assignedToday = new Set(

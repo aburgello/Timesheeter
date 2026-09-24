@@ -128,7 +128,8 @@ export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd 
  *   isMyTask   (taskId) => whether you're assigned to it; someone else's
  *              status change only cues work on a task that's yours
  *   statusGroup (customStatusId) => "Active" | "Completed" | "Deferred" |
- *              "Cancelled" | undefined (unknown counts as active)
+ *              "Cancelled" | undefined. Unknown is an ordinary event, not a
+ *              hand-off: guessing "active" read every close as new work.
  */
 export function activityToEvents({ comments, others = [], activity, me, isMyTask, statusGroup }) {
   const events = [
@@ -150,7 +151,13 @@ export function activityToEvents({ comments, others = [], activity, me, isMyTask
       if (a.author_id === me) events.push({ ...base, kind: "mine" });
       else if (isMyTask(a.task_id)) {
         const group = statusGroup(a.custom_status_id);
-        events.push(group && group !== "Active" ? { ...base, kind: "stop" } : { ...base, kind: "start", cue: "status" });
+        events.push(
+          group === "Active"
+            ? { ...base, kind: "start", cue: "status" }
+            : group
+            ? { ...base, kind: "stop" }
+            : { ...base, kind: "other" }
+        );
       }
     }
   }

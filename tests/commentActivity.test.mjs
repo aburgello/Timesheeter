@@ -89,6 +89,7 @@ const events = activityToEvents({
     row("10:00", "t3", "TaskStatusChanged", { author_id: "PROD", custom_status_id: "MOTION" }),
     row("10:10", "t4", "TaskStatusChanged", { author_id: "PROD", custom_status_id: "MOTION" }),
     row("16:00", "t3", "TaskStatusChanged", { author_id: "PROD", custom_status_id: "DONE" }),
+    row("16:30", "t3", "TaskStatusChanged", { author_id: "PROD", custom_status_id: "NOT_LOADED" }),
     row("15:00", "t1", "TaskStatusChanged", { author_id: "ME", custom_status_id: "REVIEW" }),
     row("17:00", "t5", "TaskResponsiblesRemoved", { user_ids: ["ME"], author_id: "PROD" }),
   ],
@@ -101,6 +102,7 @@ check("activity becomes events", brief, [
   "t1 mine", // status change made by me
   "t1 other", // someone else's comment
   "t1 start/assigned",
+  "t3 other", // a status whose group isn't known: an event, never a hand-off
   "t3 start/status", // moved to Motion by someone else, my task
   "t3 stop", // moved to a Completed status by someone else
   "t5 stop", // I was taken off it

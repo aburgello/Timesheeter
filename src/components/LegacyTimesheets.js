@@ -547,7 +547,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
   useEffect(() => {
     if (wrikeUserId && localWrikeTasks.length === 0) {
-      handleSyncMyJobs(true);
+      initialSyncRef.current = handleSyncMyJobs(true);
     }
   }, [wrikeUserId]);
 
@@ -1728,6 +1728,33 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // folder tree and country fields load first because rowFieldsFromTask reads
   // them. A ref keeps this one function for the modal's lifetime, so a
   // re-render here doesn't make it load the day again.
+  // What did I work on? needs two things this page loads in its first sync:
+  // your tasks, and each status's group (Active / Completed / ...), which is
+  // how a hand-off is told from a close. Opened before that sync finished, it
+  // read every "moved to Delivered" on your subtasks as a new hand-off and
+  // filled the day with bars. So it waits for the sync, and fetches the
+  // workflows itself only if the sync didn't get them.
+  const initialSyncRef = useRef(null);
+  const activeWrikeDataRef = useRef(activeWrikeData);
+  activeWrikeDataRef.current = activeWrikeData;
+  const prepareCommentTrail = useCallback(async () => {
+    const synced = await Promise.resolve(initialSyncRef.current).catch(() => null);
+    if (!Object.keys(statusGroupRef.current).length) {
+      try {
+        const wf = await (await fetch("/api/wrike/workflows")).json();
+        for (const w of wf.data || []) {
+          for (const st of w.customStatuses || []) {
+            statusDictRef.current[st.id] = st.name;
+            statusGroupRef.current[st.id] = st.group;
+          }
+        }
+      } catch (err) {
+        console.warn("[what did I work on] workflows unavailable:", err.message);
+      }
+    }
+    return (synced || activeWrikeDataRef.current).map((t) => t.id);
+  }, []);
+
   const resolveCommentTasksRef = useRef(null);
   resolveCommentTasksRef.current = async (taskIds) => {
     await Promise.all([ensureFolderTree(), warmCountryFields()]);
@@ -2578,7 +2605,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           initialDay={activeDay}
           resolveTasks={resolveCommentTasks}
           rowFieldsFromTask={rowFieldsFromTask}
-          myTaskIds={activeWrikeData.map((t) => t.id)}
+          prepare={prepareCommentTrail}
           statusName={(id) => statusDictRef.current[id]}
           statusGroup={(id) => statusGroupRef.current[id]}
           onAddRows={handleAddCommentRows}
