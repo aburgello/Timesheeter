@@ -503,13 +503,6 @@ export default function CommentTrailModal({
                 )}
               </div>
 
-              {/* How the times were worked out */}
-              {view.hasHistory && (
-                <p className="px-6 py-3 border-b border-white/5 bg-black/10 text-xs text-slate-400">
-                  Each of your comments and status changes counts back to the last thing that happened on that task before it: a status change, an assignment or someone's comment. A task handed to you that you haven't answered yet counts until the end of the day. Where tasks overlap, the time is split between them.
-                </p>
-              )}
-
               <Timeline
                 view={view}
                 activeItemId={jump?.itemId}

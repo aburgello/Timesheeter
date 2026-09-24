@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef } from "react";
 import { useTasks } from "./useTasks";
-import { parseTimeToHours, parseTimeToSeconds, secondsToHM } from "../utils/timeHelpers";
+import { parseTimeToHours } from "../utils/timeHelpers";
+import { normaliseLegacyRow } from "../utils/legacyRow";
 import { ukDateForWeekday } from "../utils/dates";
 
 // Hours from any stored shape — "1:30", "1.5", "2", "none". Kept as a named
@@ -9,30 +10,6 @@ import { ukDateForWeekday } from "../utils/dates";
 // useTasks uses to build rawSeconds.
 export const hmToHours = parseTimeToHours;
 
-// Normalise a legacy row on add/read — useTasks.fromDb already handles seconds↔hours.
-// No rounding here, and none at export either: Supabase and the exported JSON both
-// carry the exact pulled/entered time. The timesheet website's step size varies by
-// job (UK-folder jobs take 0.25, INT jobs 0.5), so the bookmarklet snaps each row
-// against that row's own dropdown — the only place the real grid is knowable.
-const normaliseLegacyRow = (row) => ({
-  ...row,
-  territory: row.territory || "",
-  // Always H:MM ("none" for nothing), whatever shape it was stored or picked
-  // in: a row picked as "0.5" before the dropdown went H:MM reads 0:30 too.
-  timeSpent: secondsToHM(parseTimeToSeconds(row.timeSpent)),
-  additionalTime: secondsToHM(parseTimeToSeconds(row.additionalTime)),
-  // Derive rawSeconds from timeSpent for in-memory use, through the shared
-  // parser so "H:MM", "1.5" and "2" all mean what they say.
-  rawSeconds: row.rawSeconds ?? parseTimeToSeconds(row.timeSpent),
-  // And the same for add. time. Rows loaded from the database get this in
-  // useTasks, but rows ADDED here (a pull, What did I work on?, Merge) didn't,
-  // and the group header and Copy Me! read additionalSeconds: their add. time
-  // counted as none, in the header and on the timesheet, until a reload.
-  additionalSeconds: row.additionalSeconds ?? parseTimeToSeconds(row.additionalTime),
-  // Auto-derive project description from job number
-  projectDescription: row.projectDescription ||
-    (row.jobNumber?.includes(",") ? row.jobNumber.substring(row.jobNumber.indexOf(",") + 1).trim() : ""),
-});
 
 /**
  * Wraps useTasks scoped to source="legacy".
