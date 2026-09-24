@@ -1,13 +1,19 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { SlidersHorizontal, Search, Check } from "lucide-react";
 import { CATEGORIES } from "../../constants.js";
 
 // The two "how should my pulled rows arrive" preferences, as a popover hanging
 // off the bottom-centre tongue next to Lock.
 //
-// It opens UPWARD (bottom-full) because the tongue sits at the foot of the
-// table, a few pixels above the action bar — a downward panel would open into
-// the page footer and off the bottom of the viewport.
+// It opens UPWARD because the tongue sits at the foot of the table, a few
+// pixels above the action bar — a downward panel would open into the page
+// footer and off the bottom of the viewport.
+//
+// The panel is portalled to <body> and fixed above the button. Inside the
+// tongue it could never rise above the table: the tongue is its own stacking
+// context at z-10, so the panel's z-index only counted within it, and the
+// table's country and category cells drew straight over the panel.
 //
 // The category list is built here rather than reusing SearchableSelect: that
 // component's menu is a 900px-wide, 20rem-tall panel anchored top-full, which
@@ -21,14 +27,39 @@ export default function PullDefaultsPopover({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const wrapRef = useRef(null);
+  const panelRef = useRef(null);
+  // Where the panel sits: centred on the button, its bottom edge just above it,
+  // kept inside the window. Measured, since the panel lives outside the tongue.
+  const [pos, setPos] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const place = () => {
+      const r = wrapRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const width = Math.min(320, window.innerWidth - 16);
+      const left = Math.max(8, Math.min(window.innerWidth - width - 8, r.left + r.width / 2 - width / 2));
+      setPos({ left, width, bottom: window.innerHeight - r.top + 8 });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
 
   // Close on outside click and on Escape. Both listeners are only attached
   // while open, so a closed popover costs nothing.
   useEffect(() => {
     if (!open) return;
     const onDown = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target))
-        setOpen(false);
+      if (wrapRef.current?.contains(e.target) || panelRef.current?.contains(e.target)) return;
+      setOpen(false);
     };
     const onKey = (e) => {
       if (e.key === "Escape") setOpen(false);
@@ -73,7 +104,7 @@ export default function PullDefaultsPopover({
         <span className="truncate">{label}</span>
       </button>
 
-      {open && (
+      {open && pos && createPortal(
         // Two elements on purpose. tailwindcss-animate's `enter` keyframe sets
         // `transform: translate3d(var(--tw-enter-translate-x, 0), …)`, and its
         // end state is the element's own computed transform. Put `animate-in`
@@ -82,9 +113,13 @@ export default function PullDefaultsPopover({
         // width to the right of centre and slides left into place, which reads
         // as "why is it coming in from the right".
         //
-        // So the outer element owns the centring transform and never animates;
-        // the inner one owns the animation and has no transform of its own.
-        <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-[320px] z-[999999]">
+        // So the outer element owns the position and never animates; the inner
+        // one owns the animation and has no transform of its own.
+        <div
+          ref={panelRef}
+          className="fixed z-[99999]"
+          style={{ left: pos.left, bottom: pos.bottom, width: pos.width }}
+        >
           <div className="w-full bg-white border border-[#dce4ec] rounded-2xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
             {/* Merge markets */}
             <div className="p-4 border-b border-[#dce4ec] flex items-center gap-3">
@@ -179,7 +214,8 @@ export default function PullDefaultsPopover({
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
