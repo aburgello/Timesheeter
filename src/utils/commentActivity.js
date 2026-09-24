@@ -164,6 +164,28 @@ export function activityToEvents({ comments, others = [], activity, me, isMyTask
   return events;
 }
 
+/**
+ * A task's estimate as the two timesheet columns, each on the 0.25 grid:
+ * { regular, extra } in hours, extra being the part after 18:00.
+ *
+ * Something happened on the task, so the pair is never 0:00 + 0:00: the one
+ * step goes in whichever column had more of the minutes. It used to go in
+ * Time always, so three minutes' delivery at 18:43 was suggested as 0:15 of
+ * regular time instead of 0:15 add. time.
+ */
+export function splitEstimate(minutes, overtimeMinutes) {
+  const q = (m) => Math.round((m || 0) / 15) / 4;
+  const extraMin = overtimeMinutes || 0;
+  const regularMin = Math.max(0, (minutes || 0) - extraMin);
+  let regular = q(regularMin);
+  let extra = q(extraMin);
+  if (regular + extra === 0) {
+    if (extraMin > regularMin) extra = 0.25;
+    else regular = 0.25;
+  }
+  return { regular, extra };
+}
+
 // Minutes → hours on the timesheet's 0.25 grid, never below one step: anything
 // you worked on took some time. The bookmarklet still snaps
 // each row to its own job's grid (INT jobs only take 0.5) when it's pasted.

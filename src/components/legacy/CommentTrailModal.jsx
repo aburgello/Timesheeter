@@ -17,7 +17,7 @@ import { fetchActivityForDay, historyStart } from "../../lib/taskActivity";
 import {
   estimateFromActivity,
   activityToEvents,
-  roundToQuarterHours,
+  splitEstimate,
   hoursLoggedFor,
   localMinuteOf,
   DAY_START_MIN,
@@ -46,8 +46,6 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
 const hm = (hours) => secondsToHM(hours * 3600, "0:00");
 const clock = (minute) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 const plural = (n, word) => `${n} ${word}${n !== 1 ? "s" : ""}`;
-// Minutes → hours on the 0.25 grid, zero allowed (roundToQuarterHours has a floor).
-const quarters = (minutes) => Math.round((minutes || 0) / 15) / 4;
 // How much of an estimate isn't on the sheet yet, on the 0.25 grid. Under
 // half a step short counts as covered.
 const shortfall = (estimate, logged) => {
@@ -267,11 +265,7 @@ export default function CommentTrailModal({
       let gap = null;
       let standing;
       if (state.hasHistory) {
-        estExtra = quarters(overtimeByTask[taskId]);
-        estRegular = quarters(byTask[taskId] - overtimeByTask[taskId]);
-        // Something happened on it, so never nothing — the same one-step floor
-        // roundToQuarterHours gives.
-        if (estRegular + estExtra === 0) estRegular = roundToQuarterHours(0);
+        ({ regular: estRegular, extra: estExtra } = splitEstimate(byTask[taskId], overtimeByTask[taskId]));
         est = estRegular + estExtra;
         // The total decides whether anything is missing; the columns only
         // decide where a real shortfall goes. Otherwise overtime already

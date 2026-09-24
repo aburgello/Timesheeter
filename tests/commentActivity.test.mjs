@@ -1,6 +1,7 @@
 import {
   estimateFromActivity,
   activityToEvents,
+  splitEstimate,
   roundToQuarterHours,
   hoursLoggedFor,
   jobCode,
@@ -157,3 +158,13 @@ check("logged: nothing on the timesheets", hoursLoggedFor(dayRows, { taskId: "q"
 const range = dayRangeUtc(new Date(2026, 8, 23, 15, 12));
 check("day range has no milliseconds", /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(range.start), true);
 check("day range is 24 hours", (new Date(range.end) - new Date(range.start)) / 3600000, 24);
+
+// The two columns a task's estimate goes in.
+check("split: before 18:00 is time", splitEstimate(90, 0), { regular: 1.5, extra: 0 });
+check("split: after 18:00 is add. time", splitEstimate(90, 60), { regular: 0.5, extra: 1 });
+// The case from the screenshot: 18:40 → 18:43, all after 18:00.
+check("split: a few minutes after 18:00 get their one step as add. time", splitEstimate(3, 3), { regular: 0, extra: 0.25 });
+check("split: a few minutes before 18:00 get it as time", splitEstimate(4, 0), { regular: 0.25, extra: 0 });
+check("split: the one step goes where most of the minutes were", splitEstimate(5, 3), { regular: 0, extra: 0.25 });
+check("split: a tie goes to time", splitEstimate(4, 2), { regular: 0.25, extra: 0 });
+check("split: nothing at all still gets one step", splitEstimate(0, 0), { regular: 0.25, extra: 0 });
