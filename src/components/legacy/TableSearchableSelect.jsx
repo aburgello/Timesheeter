@@ -5,6 +5,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import { layoutRect, layoutViewport } from "../../utils/zoom";
 import { isUnset } from "../../constants";
+import { parseTimeToHours } from "../../utils/timeHelpers";
 
 // --- MODERN SEARCHABLE SELECT FOR TABLE ROWS ---
 export default function TableSearchableSelect({
@@ -93,7 +94,11 @@ export default function TableSearchableSelect({
 
   const filteredOptions = options.filter((opt) => {
     if (searchTerm === value) return true;
-    return opt.toLowerCase().includes(searchTerm.toLowerCase());
+    const term = searchTerm.toLowerCase();
+    // Times are listed H:MM; anyone typing decimal hours ("1.5") out of habit
+    // still finds 1:30.
+    if (isTime && opt !== "none" && String(parseTimeToHours(opt)).startsWith(term)) return true;
+    return opt.toLowerCase().includes(term);
   });
 
   // Unfiltered = the search box still shows the current value (or nothing), so

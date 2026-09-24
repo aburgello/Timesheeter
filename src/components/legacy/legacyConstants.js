@@ -1,4 +1,5 @@
 // Extracted verbatim from LegacyTimesheets.js — no logic changes.
+import { secondsToHM } from "../../utils/timeHelpers";
 
 export const COLUMNS = [
   "Job Number",
@@ -27,9 +28,12 @@ export const DAYS = [
 // 0.25 steps: some jobs on the timesheet site (the UK-folder ones) accept
 // quarter hours, so a manual pick has to be able to say 0.25. Jobs that only
 // take half hours are snapped back up by the bookmarklet when the row is filled.
+// 0:15 steps to 24:00, written H:MM. They used to be decimal hours ("0.5"),
+// so a picked half hour read "0.5" beside a pulled "0:30" in the same column,
+// and read "0:30" itself after a reload, since the database stores H:MM.
 export const TIME_OPTIONS = [
   "none",
-  ...Array.from({ length: 96 }, (_, i) => ((i + 1) * 0.25).toString()),
+  ...Array.from({ length: 96 }, (_, i) => secondsToHM((i + 1) * 900)),
 ];
 
 // --- HELPER: Dark Mode Dynamic Status Tags --

@@ -22,72 +22,46 @@ import { secondsToHM, parseTimeToSeconds } from "./timeHelpers";
 // against both markets. The merged row does keep every constituent timelog id
 // in wrikeTimelogId, so the merge can at least be traced back to the individual
 // Wrike logs it came from.
-const mergeKey = (r) =>
-  [r.jobNumber || "", r.dayOfWeek || "", r.category || ""].join("");
-
+// Pull-time merging now shares the manual Merge's rules (mergeCheck / mergeRows
+// below), which it didn't: it keyed on the job number as TEXT, so one market
+// resolved to the bare "XY026066" and another to "Street Fighter : XY026066,
+// …" stayed apart though the grid shows both the same. And it only merged
+// within a single pull, so pulling twice in a day, or turning the setting on
+// after a pull, left one row per market. See mergeIntoSheet.
 export function mergeMultiCountryRows(rows) {
-  const byKey = new Map();
+  return mergeIntoSheet(rows, []).rows;
+}
 
-  for (const row of rows) {
-    const key = mergeKey(row);
-    const existing = byKey.get(key);
+/**
+ * Merge newly pulled rows with each other AND with rows already on the sheet
+ * for the same day, job (by XY code) and category, as Merge in the selection
+ * bar would. Returns { rows, replaces }: the rows to add, and the ids of sheet
+ * rows they replace, to be deleted once the new rows have saved.
+ */
+export function mergeIntoSheet(newRows, sheetRows = []) {
+  const groups = new Map();
+  const keyOf = (r) => [r.dayOfWeek || "", rowJob(r), r.category || ""].join("\u0000");
+  for (const r of newRows) {
+    const k = keyOf(r);
+    if (!groups.has(k)) groups.set(k, { sheet: [], pulled: [] });
+    groups.get(k).pulled.push(r);
+  }
+  for (const r of sheetRows) groups.get(keyOf(r))?.sheet.push(r);
 
-    if (!existing) {
-      // Clone so the caller's array is never mutated, and so _rawHours can be
-      // accumulated on our copy.
-      //
-      // The first row's taskId is the one the merged entry keeps. There is no
-      // better answer — the markets ARE different Wrike tasks — and taskId is
-      // only ever a convenience link back to Wrike, never a key anything
-      // matches on. Duplicate detection on the next pull runs off
-      // wrikeTimelogId, which keeps every constituent id below.
-      byKey.set(key, { ...row });
+  const rows = [];
+  const replaces = [];
+  for (const { sheet, pulled } of groups.values()) {
+    if (sheet.length + pulled.length === 1) {
+      const { _rawHours, ...only } = pulled[0];
+      rows.push(only);
       continue;
     }
-
-    // Sum the RAW hours and format once at the end. Rounding each row first and
-    // adding the results is what turns 2×2-minute logs into a full hour — the
-    // same trap the per-task grouping upstream already avoids.
-    existing._rawHours = (existing._rawHours || 0) + (row._rawHours || 0);
-
-    existing.territory = joinTerritories(
-      [...splitTerritories(existing.territory), ...splitTerritories(row.territory)].join(", ")
-    );
-
-    // Provenance: every timelog that fed the merged row, so nothing about where
-    // the time came from is lost. Both sides may already be comma-joined lists
-    // from the per-task grouping upstream, and fetchExistingTimelogIds splits on
-    // the comma, so a merged row still de-duplicates correctly on the next pull.
-    const ids = new Set(
-      [existing.wrikeTimelogId, row.wrikeTimelogId]
-        .filter(Boolean)
-        .join(",")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    );
-    existing.wrikeTimelogId = [...ids].join(",");
-
-    // Prose fields: keep the first non-empty rather than concatenating. Merged
-    // market rows carry near-identical descriptions ("FID INTL DIGITAL Outdoor
-    // Campaign Markets" on every one), so joining them would produce a wall of
-    // repeated text in a cell the member then has to clean up by hand.
-    if (!existing.projectDescription) existing.projectDescription = row.projectDescription;
-    if (!existing.notes) existing.notes = row.notes;
-    if (!existing.client) existing.client = row.client;
-    if (!existing.filmTitle) existing.filmTitle = row.filmTitle;
-
-    // A flag set on ANY constituent row survives the merge — dropping a
-    // client-amends or 3D marker because it was only on the second market would
-    // under-bill the entry.
-    existing.clientAmends = existing.clientAmends || row.clientAmends;
-    existing.is3D = existing.is3D || row.is3D;
+    // What's on the sheet first, so the merged entry keeps its task link and
+    // its notes lead.
+    rows.push({ ...mergeRows([...sheet, ...pulled]), id: pulled[0].id });
+    replaces.push(...sheet.map((r) => r.id));
   }
-
-  return [...byKey.values()].map(({ _rawHours, ...row }) => ({
-    ...row,
-    timeSpent: secondsToHM((_rawHours || 0) * 3600),
-  }));
+  return { rows, replaces };
 }
 
 // ── Merging rows by hand ─────────────────────────────────────────────────────
@@ -131,7 +105,13 @@ export function mergeCheck(rows) {
 export function mergeRows(rows) {
   const [first] = rows;
   const firstOf = (key) => rows.map((r) => r[key]).find((v) => v) || "";
-  const seconds = (key) => rows.reduce((s, r) => s + parseTimeToSeconds(r[key]), 0);
+  // A freshly pulled row carries its unrounded hours; summing those before
+  // formatting keeps two 20-second logs from adding up to nothing.
+  const seconds = (key) =>
+    rows.reduce(
+      (s, r) => s + (key === "timeSpent" && r._rawHours != null ? r._rawHours * 3600 : parseTimeToSeconds(r[key])),
+      0
+    );
   const ids = [
     ...new Set(
       rows
@@ -146,7 +126,7 @@ export function mergeRows(rows) {
   const notes = [...new Set(rows.map((r) => (r.notes || "").trim()).filter(Boolean))];
   // The first row's own time in seconds would ride along and be read back
   // as the merged row's time; dropped so it's derived from the new totals.
-  const { id: _id, rawSeconds: _raw, additionalSeconds: _extra, ...base } = first;
+  const { id: _id, rawSeconds: _raw, additionalSeconds: _extra, _rawHours: _unrounded, ...base } = first;
   return {
     ...base,
     territory: joinTerritories(rows.flatMap((r) => splitTerritories(r.territory)).join(", ")),

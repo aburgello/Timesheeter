@@ -146,3 +146,49 @@ check("merge: one row isn't a merge", mergeCheck([picked[0]]).ok, false);
 check("merge: different jobs don't", mergeCheck([picked[0], sheet("Spain", "", { jobNumber: "XY026040" })]).reason, "These rows are on different jobs.");
 check("merge: different categories don't", mergeCheck([picked[0], sheet("Spain", "", { category: "Print - Artwork" })]).reason, "These rows have different categories.");
 check("merge: different days don't", mergeCheck([picked[0], sheet("Spain", "", { dayOfWeek: "Tuesday" })]).reason, "These rows are on different days.");
+
+// ── Pull-time merge into the sheet (Merge markets into one entry) ──────────
+import { mergeIntoSheet } from "../src/utils/mergeMultiCountry.js";
+
+// The report: XY026066 pulled with the setting on still showed one row per
+// market. One market's task resolved to the bare code, another to the full
+// job string, and earlier pulls' rows were never merged with later ones.
+const pulled = (territory, jobNumber, extra) => ({
+  id: `p-${territory}`,
+  jobNumber,
+  dayOfWeek: "Thursday",
+  category: "Print - Project Management",
+  territory,
+  timeSpent: "0:30",
+  additionalTime: "none",
+  _rawHours: 0.5,
+  ...extra,
+});
+const onSheet = {
+  id: "s-portugal",
+  jobNumber: "Street Fighter : XY026066, INTL PRINT Outdoor Campaign Bespoke",
+  dayOfWeek: "Thursday",
+  category: "Print - Project Management",
+  territory: "Portugal",
+  timeSpent: "0:30",
+  additionalTime: "none",
+  wrikeTimelogId: "L0",
+};
+const pull = mergeIntoSheet(
+  [
+    pulled("Thailand", "XY026066", { wrikeTimelogId: "L1" }),
+    pulled("Sweden", "Street Fighter : XY026066, INTL PRINT Outdoor Campaign Bespoke", { wrikeTimelogId: "L2" }),
+    pulled("Peru", "XY026066", { wrikeTimelogId: "L3", category: "Print - Artwork" }),
+  ],
+  [onSheet, { ...onSheet, id: "s-other-day", dayOfWeek: "Wednesday" }]
+);
+check("pull merge: bare code and full job string merge", pull.rows.length, 2);
+const mergedPull = pull.rows.find((r) => r.category === "Print - Project Management");
+check("pull merge: folds into the row already on the sheet", mergedPull.territory, "Portugal, Thailand, Sweden");
+check("pull merge: ...which it replaces", pull.replaces, ["s-portugal"]);
+check("pull merge: time adds up across sheet and pull", mergedPull.timeSpent, "1:30");
+check("pull merge: every timelog is kept", mergedPull.wrikeTimelogId, "L0,L1,L2");
+check("pull merge: a different category is left alone", pull.rows.find((r) => r.category === "Print - Artwork").territory, "Peru");
+check("pull merge: rows on another day aren't touched", pull.replaces.includes("s-other-day"), false);
+check("pull merge: no unrounded hours leak onto a row", pull.rows.some((r) => "_rawHours" in r), false);
+check("pull merge: nothing on the sheet, nothing replaced", mergeIntoSheet([pulled("Chile", "XY026066")], []).replaces, []);

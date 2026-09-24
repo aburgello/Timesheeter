@@ -69,7 +69,7 @@ import {
   toTimesheetTerritories,
 } from "../utils/territories";
 import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
-import { mergeMultiCountryRows, mergeCheck, mergeRows } from "../utils/mergeMultiCountry";
+import { mergeIntoSheet, mergeCheck, mergeRows } from "../utils/mergeMultiCountry";
 import { categoryForTaskWithSource } from "../utils/categoryFamily";
 import { countryPullSource, categoryPullSource } from "../utils/pullSource";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
@@ -1913,12 +1913,16 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         }
       );
 
-      const pulledRows = groupMultiCountry
-        ? mergeMultiCountryRows(newRows)
-        : newRows.map(({ _rawHours, ...r }) => r);
+      // With markets merged, new rows also fold into what's already on the
+      // sheet for that day, job and category, so pulling twice in a day still
+      // ends with one entry. The rows they replace go only once the merged
+      // rows have saved.
+      const { rows: pulledRows, replaces } = groupMultiCountry
+        ? mergeIntoSheet(newRows, rows.filter((r) => !frozenDays[r.dayOfWeek]))
+        : { rows: newRows.map(({ _rawHours, ...r }) => r), replaces: [] };
 
       if (pulledRows.length > 0) {
-        addRows(pulledRows);
+        if ((await addRows(pulledRows)) && replaces.length) await deleteRows(replaces);
         // The grid only shows rows from the current week (weekStart) — a
         // debug pull for an older date saves fine but won't appear here, so
         // say so instead of implying it's now visible in the table below.
@@ -1928,8 +1932,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         const n = pulledRows.length;
         // Report the merge when it did something, so a pull that turns six
         // market rows into two isn't mistaken for six missing timelogs.
-        const mergedAway = newRows.length - n;
-        const mergeNote = mergedAway > 0 ? ` (${newRows.length} market rows merged into ${n})` : "";
+        const mergedAway = newRows.length + replaces.length - n;
+        const mergeNote = mergedAway > 0
+          ? ` (${newRows.length + replaces.length} market rows merged into ${n}${replaces.length ? `, ${replaces.length} of them already on the sheet` : ""})`
+          : "";
         showToast(
           pulledBeforeThisWeek
             ? `Pulled ${n} row${n !== 1 ? "s" : ""} from Wrike${mergeNote} — from a previous week, so it won't show in this grid. Check Jobs Feed to verify.`
