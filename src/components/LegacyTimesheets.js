@@ -32,6 +32,7 @@ import {
   Lock,
   LayoutList,
   MessagesSquare,
+  Merge,
   X,
   AlertCircle,
   Copy,
@@ -68,7 +69,7 @@ import {
   toTimesheetTerritories,
 } from "../utils/territories";
 import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
-import { mergeMultiCountryRows } from "../utils/mergeMultiCountry";
+import { mergeMultiCountryRows, mergeCheck, mergeRows } from "../utils/mergeMultiCountry";
 import { categoryForTaskWithSource } from "../utils/categoryFamily";
 import { countryPullSource, categoryPullSource } from "../utils/pullSource";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
@@ -382,8 +383,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     message: "",
     type: "error",
   });
-  const showToast = (message, type = "error") =>
-    setToast({ show: true, message, type });
+  // `action` ({ label, onClick }) adds a button, e.g. Merge's Undo; a toast
+  // carrying one stays up longer so there's time to reach it. `n` restarts the
+  // timer when one toast replaces another, which used to inherit the old one's
+  // remaining time and vanish early.
+  const showToast = (message, type = "error", action = null) =>
+    setToast({ show: true, message, type, action, n: Date.now() });
 
   // Initialised here so showToast is available to pass in
   const {
@@ -394,6 +399,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     addRows,
     updateRow,
     deleteRow,
+    deleteRows,
     weekStart,
     justSaved,
   } = useLegacyRows(showToast, wrikeUserId);
@@ -405,10 +411,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     if (!toast.show) return;
     const t = setTimeout(
       () => setToast({ show: false, message: "", type: "error" }),
-      4000
+      toast.action ? 10000 : 4000
     );
     return () => clearTimeout(t);
-  }, [toast.show]);
+  }, [toast.show, toast.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Today's real calendar day name (for modal column locking)
   const todayDayName = React.useMemo(() => {
@@ -2469,6 +2475,52 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, selectedRowIds, activeDay, frozenDays, addRows, clearSelection]);
 
+  // Merge the ticked rows into one entry: the same work in several markets,
+  // on one job, day and category (see mergeCheck and mergeRows). The merged
+  // row is saved first and the originals are only deleted once it has landed,
+  // so a failed write loses nothing.
+  const selectedRows = useMemo(
+    () => rows.filter((r) => selectedRowIds.has(r.id)),
+    [rows, selectedRowIds]
+  );
+  const mergeState = useMemo(() => mergeCheck(selectedRows), [selectedRows]);
+  const [isMerging, setIsMerging] = useState(false);
+  const mergeSelected = useCallback(async () => {
+    if (frozenDays[activeDay] || isMerging) return;
+    const check = mergeCheck(selectedRows);
+    if (!check.ok) {
+      showToast(check.reason);
+      return;
+    }
+    setIsMerging(true);
+    try {
+      const merged = { ...mergeRows(selectedRows), id: Date.now() + Math.floor(Math.random() * 1000) };
+      // addRows has already said so if the save failed; the originals stay.
+      if (!(await addRows([merged]))) return;
+      await deleteRows(selectedRows.map((r) => r.id));
+      clearSelection();
+      const markets = splitTerritories(merged.territory).length;
+      const extra = merged.additionalTime !== "none" ? `, plus ${merged.additionalTime} add. time` : "";
+      // Undo puts the originals back as they were (same ids, times, markets
+      // and timelog links) before removing the merged row, so a failed save
+      // part-way leaves both rather than neither.
+      const originals = selectedRows;
+      const undo = async () => {
+        if (!(await addRows(originals))) return;
+        await deleteRows([merged.id]);
+        showToast(`Unmerged: the ${originals.length} rows are back.`, "success");
+      };
+      showToast(
+        `Merged ${selectedRows.length} rows into one entry: ${merged.timeSpent === "none" ? "0:00" : merged.timeSpent} across ${markets} market${markets !== 1 ? "s" : ""}${extra}.`,
+        "success",
+        { label: "Undo", onClick: undo }
+      );
+    } finally {
+      setIsMerging(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRows, activeDay, frozenDays, isMerging, addRows, deleteRows, clearSelection]);
+
   const showConsolidationWarning =
     !consolidatedView &&
     currentDayRows.some(
@@ -2502,6 +2554,18 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             <CheckCircle className="w-4 h-4 shrink-0" />
           )}
           {toast.message}
+          {toast.action && (
+            <button
+              onClick={() => {
+                const { onClick } = toast.action;
+                setToast({ show: false, message: "", type: "error" });
+                onClick();
+              }}
+              className="ml-1 px-3 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-xs font-black transition-colors"
+            >
+              {toast.action.label}
+            </button>
+          )}
         </div>
       )}
       {/* --- REMINDER MODAL --- */}
@@ -3709,6 +3773,30 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 <Copy className="w-3.5 h-3.5" />
                 Duplicate
               </button>
+              {/* Stays hoverable when it can't merge, so the reason shows. */}
+              <HoverLabel
+                label={
+                  !rowsAreEditable
+                    ? `${activeDay} is locked`
+                    : mergeState.ok
+                    ? "Merge into one entry: times added up, markets combined"
+                    : mergeState.reason
+                }
+              >
+                <button
+                  onClick={mergeSelected}
+                  aria-disabled={!rowsAreEditable || !mergeState.ok || isMerging}
+                  aria-label="Merge the ticked rows into one entry"
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
+                    !rowsAreEditable || !mergeState.ok || isMerging
+                      ? "text-white/80 opacity-40 cursor-not-allowed"
+                      : "text-white/80 hover:text-white hover:bg-white/10"
+                  }`}
+                >
+                  <Merge className="w-3.5 h-3.5" />
+                  {isMerging ? "Merging…" : "Merge"}
+                </button>
+              </HoverLabel>
               <span className="w-px h-4 bg-white/20 shrink-0" />
               <button
                 onClick={clearSelection}

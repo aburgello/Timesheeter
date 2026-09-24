@@ -180,6 +180,9 @@ export function useTasks(triggerToast, source = null, wrikeUserId = null, weekSt
       triggerToast?.("Some tasks failed to sync.");
       setTasks((prev) => prev.filter((t) => !stamped.some((s) => s.id === t.id)));
     }
+    // Whether the rows are really saved, for a caller that must not go on to
+    // delete anything otherwise (Legacy's Merge).
+    return !error;
   }, []);
 
   // Which rows have just been written to Supabase successfully, as id → nonce.

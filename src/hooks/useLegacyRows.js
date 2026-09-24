@@ -72,7 +72,7 @@ export function useLegacyRows(triggerToast, wrikeUserId = null) {
 
   // Add multiple rows at once (from Wrike pull) — ensure a valid dd/mm/yyyy date on each
   const addRows = useCallback(async (newRows) => {
-    await addTasks(newRows.map((r) => ({
+    return addTasks(newRows.map((r) => ({
       ...normaliseLegacyRow(r),
       source: "legacy",
       // A pulled row carries the timelog's own date; the fallback is for a row
@@ -97,6 +97,11 @@ export function useLegacyRows(triggerToast, wrikeUserId = null) {
     await deleteTasks([id]);
   }, [deleteTasks]);
 
+  // Delete several rows in one request (Legacy's Merge replaces them).
+  const deleteRows = useCallback(async (ids) => {
+    await deleteTasks(ids);
+  }, [deleteTasks]);
+
   // Normalise on read — week filtering is already applied inside useTasks
   const normalisedRows = useMemo(() => rows.map(normaliseLegacyRow), [rows]);
 
@@ -108,6 +113,7 @@ export function useLegacyRows(triggerToast, wrikeUserId = null) {
     addRows,
     updateRow,
     deleteRow,
+    deleteRows,
     weekStart,
     // id → nonce for rows whose write to Supabase just landed; the grid flashes
     // the row so an optimistic edit is visibly confirmed.

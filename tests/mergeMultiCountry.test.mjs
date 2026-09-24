@@ -94,3 +94,55 @@ check("a blank description is filled from the other row", firstBlank[0].projectD
 // Nothing to merge is a no-op, not a crash.
 check("empty input", mergeMultiCountryRows([]), []);
 check("single row passes through", mergeMultiCountryRows([denmark]).length, 1);
+
+// ── Merging rows by hand (the selection bar's Merge) ────────────────────────
+import { mergeCheck, mergeRows } from "../src/utils/mergeMultiCountry.js";
+
+// The case from the screenshot: XY026065, one row per market, 0:30 each,
+// Philippines twice, notes naming each batch.
+const sheet = (territory, notes, extra) => ({
+  id: Math.random(),
+  jobNumber: "Street Fighter : XY026065, INTL PRINT Outdoor Campaign Markets",
+  dayOfWeek: "Wednesday",
+  category: "Print - Project Management",
+  territory,
+  notes,
+  client: "Paramount Pictures",
+  filmTitle: "Street Fighter",
+  projectDescription: "INTL PRINT Outdoor Campaign Markets",
+  timeSpent: "0:30",
+  additionalTime: "none",
+  rawSeconds: 1800,
+  clientAmends: false,
+  is3D: false,
+  ...extra,
+});
+const picked = [
+  sheet("Portugal", "SF_Batch1_PT", { wrikeTimelogId: "L1", taskId: "T1" }),
+  sheet("Belgium", "SF_Batch1_BE_FR", { wrikeTimelogId: "L2,L3", taskId: "T2" }),
+  sheet("Peru", "SF_OOH_Peru - Batch 1", { wrikeTimelogId: "L4" }),
+  sheet("Philippines", "SF_FOH_PH - Batch 3"),
+  sheet("Norway", "SF_Batch1_NO"),
+  sheet("Philippines", "SF_FOH_PH - Batch 2", { additionalTime: "0:15" }),
+  sheet("Norway", "SF_Batch1_NO", { clientAmends: true }),
+  sheet("Poland", "", { jobNumber: "XY026065" }),
+];
+const one = mergeRows(picked);
+
+check("merge: rows on one job, day and category can merge", mergeCheck(picked), { ok: true });
+check("merge: the bare code and the full job string are the same job", mergeCheck([picked[0], picked[7]]).ok, true);
+check("merge: time is summed", one.timeSpent, "4:00");
+check("merge: add. time is summed separately", one.additionalTime, "0:15");
+check("merge: every market, once each", one.territory, "Portugal, Belgium, Peru, Philippines, Norway, Poland");
+check("merge: every timelog is kept, so a pull won't re-add any", one.wrikeTimelogId, "L1,L2,L3,L4");
+check("merge: distinct notes are joined", one.notes, "SF_Batch1_PT, SF_Batch1_BE_FR, SF_OOH_Peru - Batch 1, SF_FOH_PH - Batch 3, SF_Batch1_NO, SF_FOH_PH - Batch 2");
+check("merge: a flag on any row survives", one.clientAmends, true);
+check("merge: the first row's task link is kept", one.taskId, "T1");
+check("merge: no id, and no stale seconds from the first row", ["id" in one, "rawSeconds" in one], [false, false]);
+check("merge: no timelogs means none, not an empty string", mergeRows([picked[3], picked[4]]).wrikeTimelogId, null);
+check("merge: no add. time reads none", mergeRows([picked[3], picked[4]]).additionalTime, "none");
+
+check("merge: one row isn't a merge", mergeCheck([picked[0]]).ok, false);
+check("merge: different jobs don't", mergeCheck([picked[0], sheet("Spain", "", { jobNumber: "XY026040" })]).reason, "These rows are on different jobs.");
+check("merge: different categories don't", mergeCheck([picked[0], sheet("Spain", "", { category: "Print - Artwork" })]).reason, "These rows have different categories.");
+check("merge: different days don't", mergeCheck([picked[0], sheet("Spain", "", { dayOfWeek: "Tuesday" })]).reason, "These rows are on different days.");
