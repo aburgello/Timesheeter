@@ -308,7 +308,10 @@ export default function CommentTrailModal({
         gap,
         standing,
         locked,
-        on: !locked && (e.on ?? (est !== null && gap > 0)),
+        // Never ticked for you: an estimate is a suggestion, and a pre-ticked
+        // one is logged by anyone who presses Add without reading every row.
+        // Changing its time ticks it, since that's you deciding.
+        on: !locked && (e.on ?? false),
         hours: e.hours ?? gapRegular,
         extra: e.extra ?? gapExtra,
         // Not shown or edited here: rows carry the task's title as their note.
@@ -556,6 +559,8 @@ export default function CommentTrailModal({
               <span>Everything you worked on is already on the timesheets for {day.name}.</span>
             ) : view && !view.hasHistory && view.suggestions.length ? (
               <span>Set a time on a task to add it.</span>
+            ) : view && view.missing.length ? (
+              <span>Tick the tasks you want to add.</span>
             ) : null}
           </div>
           <div className="flex gap-2">
