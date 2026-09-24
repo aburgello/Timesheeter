@@ -1435,12 +1435,18 @@ async function panelLiveSubtasks(env, ids) {
   const row = await panelWrikeToken(env);
   if (!row || !ids.length) return [];
   const unique = [...new Set(ids.map(String))].slice(0, 400);
-  const fields = encodeURIComponent(PANEL_LIVE_FIELDS);
   const out = [];
   for (let i = 0; i < unique.length; i += 100) {
     const chunk = unique.slice(i, i + 100).join(",");
     try {
-      const res = await fetch(`https://${row.api_host}/api/v4/tasks/${chunk}?fields=${fields}`, {
+      // NO fields= ON A BY-ID REQUEST. Wrike's get-tasks-by-id returns those
+      // fields by default and 400s ("Fields parameter value 'subTaskIds' not
+      // allowed") when they are named -- useWrikeCache.js documents it. This
+      // sent PANEL_LIVE_FIELDS anyway, so every chunk failed and a refresh
+      // reported "live returned 0 of 13": any subtask the cache had never
+      // seen stayed nameless in the XYi panel, while TimeHub's own task
+      // modal (a bare by-id call) showed it fine.
+      const res = await fetch(`https://${row.api_host}/api/v4/tasks/${chunk}`, {
         headers: { Authorization: `Bearer ${row.access_token}` },
       });
       if (!res.ok) {
@@ -1667,18 +1673,28 @@ async function handlePanelJobs(request, url, env) {
       console.error("[panel/jobs] subtask cache query failed:", subCacheError);
     }
 
-    if (liveUsed) {
-      // Fresh subtasks for a parent whose children were never cached. Only
-      // rows that actually carry a title overlay the cached copy -- a live row
-      // without one would blank a name we already had.
-      const live = await panelLiveSubtasks(env, wantedSubIds);
+    // MIRROR WHAT TIMEHUB SHOWS. TimeHub's task modal reads subtasks live
+    // from Wrike; this read only the cache, so a subtask the cache had never
+    // seen (four of SF Motion Outdoor ID's five) came through nameless and
+    // the panel could not send it. On an ordinary load, fetch live ONLY the
+    // ids the cache could not name -- usually none, so no Wrike call at all;
+    // on a refresh, all of them, as before.
+    const cachedNames = new Set(
+      (subRows || []).filter((r) => r && r.task_data && r.task_data.title).map((r) => String(r.id))
+    );
+    const missingSubIds = wantedSubIds.filter((id) => !cachedNames.has(String(id)));
+    const liveSubIds = liveUsed ? wantedSubIds : missingSubIds;
+    if (liveSubIds.length) {
+      // Only rows that actually carry a title overlay the cached copy -- a
+      // live row without one would blank a name we already had.
+      const live = await panelLiveSubtasks(env, liveSubIds);
       for (const row of live) {
         if (row && row.task_data && row.task_data.title) subRows.push(row);
       }
       // A short result means Wrike gave back fewer subtasks than were asked
       // for -- worth surfacing rather than leaving as blank names.
-      if (live.length < wantedSubIds.length) {
-        subLiveError = `live returned ${live.length} of ${wantedSubIds.length}`;
+      if (live.length < liveSubIds.length) {
+        subLiveError = `live returned ${live.length} of ${liveSubIds.length}`;
       }
     }
   }
