@@ -126,9 +126,11 @@ const PAGE_VARIANTS = {
 };
 
 // Kept in sync with every `activePage === "..."` check below — the set of
-// ids the URL hash is allowed to select on load/refresh.
+// ids the URL hash is allowed to select on load/refresh. "timesheet" is left
+// out while the Timesheeter is hidden (see DEPARTMENT_PAGES), so a bookmark or
+// back-button entry for #timesheet lands on Home instead of the Tracker.
 const VALID_PAGES = [
-  "home", "timesheet", "canvas", "wriketest", "legacy", "profile",
+  "home", "canvas", "wriketest", "legacy", "profile",
   "management", "jobbook", "todayslist",
 ];
 
@@ -173,7 +175,7 @@ export default function App() {
   // browser's (or mouse's) back/forward buttons move between pages. Two
   // guards keep that from misbehaving:
   //
-  //  - Compared via pageFromHash(), not the raw hash, so a page that owns the
+  //  - Only the hash's first segment is compared, so a page that owns the
   //    second segment (`#management/films`) isn't clobbered back to
   //    `#management` the moment it sets one.
   //  - The first run replaces instead of pushing. On a cold load the hash is
@@ -186,7 +188,11 @@ export default function App() {
   // is correct — going back should be instant, not ceremonial.
   const hashPrimed = useRef(false);
   useEffect(() => {
-    if (pageFromHash() === activePage) { hashPrimed.current = true; return; }
+    // The raw segment, not pageFromHash(): a hash naming a page that isn't
+    // valid (a stale #timesheet bookmark) gets rewritten to where the member
+    // actually landed instead of lingering in the address bar.
+    const rawPage = window.location.hash.slice(1).split("/")[0] || "home";
+    if (rawPage === activePage) { hashPrimed.current = true; return; }
     const hash = `#${activePage}`;
     if (hashPrimed.current) window.history.pushState({}, "", hash);
     else window.history.replaceState({}, "", hash);
@@ -282,23 +288,6 @@ export default function App() {
   // Which pages this member's department can reach (drives the command
   // palette's nav entries; Home and the Rail read the same registry).
   const department = useDepartment();
-
-  // pageFromHash validates against every page that EXISTS, not against the ones
-  // this member has — so a bookmark or a back-button entry for #timesheet would
-  // still render the Tracker for a department that no longer lists it.
-  //
-  // Kept narrow on purpose: a blanket "not in your department's pages → home"
-  // would also lock admins out of #management, which they reach without it
-  // being in any department list. And it waits for `department`, which is
-  // undefined until profiles loads — bouncing on that would send Motion home
-  // mid-load. Declared here rather than up with the other page effects because
-  // it reads `department`, which is a const above only from this line down.
-  useEffect(() => {
-    if (department && department !== "Motion" && activePage === "timesheet") {
-      window.location.hash = "";
-      setActivePage("home");
-    }
-  }, [department, activePage]);
 
   // Warm this member's page chunks once the browser is idle, so the first
   // click on a Home row resolves from cache instead of hitting the network
@@ -701,12 +690,12 @@ export default function App() {
             <div className="flex gap-2 mt-3">
               <button
                 onClick={() => {
-                  setActivePage("timesheet");
+                  setActivePage("legacy");
                   dismissReminder();
                 }}
                 className="flex-1 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-xs font-black py-2 rounded-xl transition-colors"
               >
-                Go to Timesheeter
+                Go to Timesheets
               </button>
               <button
                 onClick={dismissReminder}
