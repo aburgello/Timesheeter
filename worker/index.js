@@ -114,6 +114,12 @@ export default {
       if (request.method === "OPTIONS") return panelPreflight();
       return handlePanelJobs(request, url, env);
     }
+    // A job's latest Wrike comment -- where the amends are written, per
+    // deliverable. Read on demand by the panel, one task at a time.
+    if (url.pathname === "/api/panel/comment") {
+      if (request.method === "OPTIONS") return panelPreflight();
+      return handlePanelComment(request, url, env);
+    }
 
     return env.ASSETS.fetch(request);
   },
@@ -1504,6 +1510,90 @@ async function panelLiveTasks(env, teamIds) {
     if (!nextPageToken) break;
   }
   return out;
+}
+
+// ── /api/panel/comment ───────────────────────────────────────────────────────
+// A job's LATEST Wrike comment, for the XYi panel. Amends are written on the
+// PARENT task as one comment listing deliverable filenames, each followed by
+// its note; the panel splits it and puts each note on its deliverable's row.
+// TaskDetailModal already reads exactly this (latest comment, when the status
+// says amend) through the session proxy, which a panel cannot use.
+//
+// COST: one Wrike call (GET /tasks/{id}/comments), cached per task for
+// PANEL_COMMENT_TTL in module scope, so reopening the tracker doesn't ask
+// again; `fresh=1` (the panel's refresh button) bypasses it. The author is
+// named from `profiles`, not from a second Wrike call to /contacts.
+//
+// The task id goes into a Wrike URL, so it must look like one (Wrike ids are
+// upper-case alphanumerics) -- anything else is refused rather than spliced.
+// Plain text only: `plainText=true`, and any tag that survives is stripped
+// here, so the panel never has markup to render.
+const PANEL_COMMENT_TTL = 3 * 60 * 1000;
+const panelCommentCache = new Map();
+
+function panelPlainText(s) {
+  return String(s || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+}
+
+async function handlePanelComment(request, url, env) {
+  if (!env.PANEL_KEY || request.headers.get("X-Panel-Key") !== env.PANEL_KEY) {
+    return json({ error: "unauthorized" }, { status: 401, headers: panelCors() });
+  }
+  const task = (url.searchParams.get("task") || "").trim();
+  if (!/^[A-Z0-9]{4,32}$/.test(task)) {
+    return json({ error: "bad_task" }, { status: 400, headers: panelCors() });
+  }
+  const fresh = url.searchParams.get("fresh") === "1";
+  const hit = panelCommentCache.get(task);
+  if (!fresh && hit && Date.now() - hit.at < PANEL_COMMENT_TTL) {
+    return json(hit.body, { headers: panelCors({ "Cache-Control": "no-store" }) });
+  }
+
+  const row = await panelWrikeToken(env);
+  if (!row) return json({ error: "no_wrike_token" }, { status: 502, headers: panelCors() });
+  let comments = [];
+  try {
+    const res = await fetch(`https://${row.api_host}/api/v4/tasks/${task}/comments?plainText=true`, {
+      headers: { Authorization: `Bearer ${row.access_token}` },
+    });
+    if (!res.ok) {
+      console.warn("[panel/comment] wrike", res.status, await res.text().catch(() => ""));
+      return json({ error: `wrike_${res.status}` }, { status: 502, headers: panelCors() });
+    }
+    comments = ((await res.json()) || {}).data || [];
+  } catch (err) {
+    console.error("[panel/comment] fetch threw", err);
+    return json({ error: "wrike_unreachable" }, { status: 502, headers: panelCors() });
+  }
+
+  const latest = comments
+    .filter((c) => c && panelPlainText(c.text))
+    .sort((a, b) => new Date(b.createdDate || 0) - new Date(a.createdDate || 0))[0];
+  let body = { task, count: comments.length, comment: null };
+  if (latest) {
+    let author = "";
+    try {
+      const pr = await sbFetch(env, `/profiles?select=first_name,last_name&wrike_user_id=eq.${encodeURIComponent(latest.authorId || "")}&limit=1`);
+      if (pr.ok) {
+        const p = ((await pr.json()) || [])[0];
+        if (p) author = `${p.first_name || ""} ${p.last_name || ""}`.trim();
+      }
+    } catch (_) { /* nameless is fine */ }
+    body = { task, count: comments.length, comment: { text: panelPlainText(latest.text), author, date: latest.createdDate || "" } };
+  }
+  panelCommentCache.set(task, { at: Date.now(), body });
+  return json(body, { headers: panelCors({ "Cache-Control": "no-store" }) });
 }
 
 async function handlePanelJobs(request, url, env) {
