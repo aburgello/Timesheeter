@@ -1529,6 +1529,7 @@ async function panelLiveTasks(env, teamIds) {
 // Plain text only: `plainText=true`, and any tag that survives is stripped
 // here, so the panel never has markup to render.
 const PANEL_COMMENT_TTL = 3 * 60 * 1000;
+const PANEL_COMMENT_RECENT = 8;
 const panelCommentCache = new Map();
 
 function panelPlainText(s) {
@@ -1580,21 +1581,29 @@ async function handlePanelComment(request, url, env) {
     return json({ error: "wrike_unreachable" }, { status: 502, headers: panelCors() });
   }
 
-  const latest = comments
+  // The newest few, not just the newest: the AMENDS are not always last -- on
+  // NO 2 a hand-off ("@Sara DOOH Motions x8: /Volumes/...") landed after
+  // Michael's per-deliverable notes. The panel picks the newest comment that
+  // is shaped like amends from these; `comment` stays the newest, for any
+  // caller that only wants that. Same one Wrike call either way.
+  const recent = comments
     .filter((c) => c && panelPlainText(c.text))
-    .sort((a, b) => new Date(b.createdDate || 0) - new Date(a.createdDate || 0))[0];
-  let body = { task, count: comments.length, comment: null };
-  if (latest) {
-    let author = "";
+    .sort((a, b) => new Date(b.createdDate || 0) - new Date(a.createdDate || 0))
+    .slice(0, PANEL_COMMENT_RECENT);
+  const names = {};
+  const authorIds = [...new Set(recent.map((c) => c.authorId).filter((id) => /^[A-Za-z0-9_-]{2,40}$/.test(String(id || ""))))];
+  if (authorIds.length) {
     try {
-      const pr = await sbFetch(env, `/profiles?select=first_name,last_name&wrike_user_id=eq.${encodeURIComponent(latest.authorId || "")}&limit=1`);
+      const pr = await sbFetch(env, `/profiles?select=wrike_user_id,first_name,last_name&wrike_user_id=in.(${authorIds.map(encodeURIComponent).join(",")})`);
       if (pr.ok) {
-        const p = ((await pr.json()) || [])[0];
-        if (p) author = `${p.first_name || ""} ${p.last_name || ""}`.trim();
+        for (const p of (await pr.json()) || []) {
+          if (p && p.wrike_user_id) names[p.wrike_user_id] = `${p.first_name || ""} ${p.last_name || ""}`.trim();
+        }
       }
     } catch (_) { /* nameless is fine */ }
-    body = { task, count: comments.length, comment: { text: panelPlainText(latest.text), author, date: latest.createdDate || "" } };
   }
+  const shaped = recent.map((c) => ({ text: panelPlainText(c.text), author: names[c.authorId] || "", date: c.createdDate || "" }));
+  const body = { task, count: comments.length, comment: shaped[0] || null, recent: shaped };
   panelCommentCache.set(task, { at: Date.now(), body });
   return json(body, { headers: panelCors({ "Cache-Control": "no-store" }) });
 }
