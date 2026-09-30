@@ -1524,8 +1524,8 @@ async function panelLiveTasks(env, teamIds) {
 // again; `fresh=1` (the panel's refresh button) bypasses it. The author is
 // named from `profiles`, not from a second Wrike call to /contacts.
 //
-// The task id goes into a Wrike URL, so it must look like one (Wrike ids are
-// upper-case alphanumerics) -- anything else is refused rather than spliced.
+// The task id goes into a Wrike URL, so it must look like one (letters,
+// digits, _ and -) -- anything else is refused rather than spliced.
 // Plain text only: `plainText=true`, and any tag that survives is stripped
 // here, so the panel never has markup to render.
 const PANEL_COMMENT_TTL = 3 * 60 * 1000;
@@ -1551,7 +1551,10 @@ async function handlePanelComment(request, url, env) {
     return json({ error: "unauthorized" }, { status: 401, headers: panelCors() });
   }
   const task = (url.searchParams.get("task") || "").trim();
-  if (!/^[A-Z0-9]{4,32}$/.test(task)) {
+  // Wrike ids are MIXED case and may carry _ or - (MAAAAAEQLrrJ,
+  // MAAAAABrMQm_): the first version allowed capitals only and refused every
+  // real job with a 400. Still nothing that means something in a URL path.
+  if (!/^[A-Za-z0-9_-]{4,40}$/.test(task)) {
     return json({ error: "bad_task" }, { status: 400, headers: panelCors() });
   }
   const fresh = url.searchParams.get("fresh") === "1";
