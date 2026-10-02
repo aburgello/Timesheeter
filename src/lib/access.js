@@ -7,8 +7,8 @@
 // Your Wrike ID is shown on the Profile Hub page (under your name, first 8
 // chars). An empty list means everyone gets access.
 //
-// This list is mirrored in the `profiles_write` RLS policy and the
-// `guard_can_debug_pull` trigger (see schema.sql), which are what actually
+// This list is mirrored in the `profiles_write` RLS policy (schema.sql) and the
+// `guard_can_debug_pull` trigger (supabase/migrations), which are what actually
 // permit editing other people's department/position, the Sync-from-Wrike
 // upsert and granting Debug Pull. Adding someone here without adding them
 // there gets them the Administration UI but silently-failing writes.

@@ -529,7 +529,7 @@ create policy "profiles_read" on public.profiles as permissive for select to aut
 -- management ids, which need to edit other people's department/position and to
 -- run the Sync-from-Wrike upsert. Keep the id list in step with MANAGEMENT_IDS
 -- in src/lib/access.js.
-create policy "profiles_write" on public.profiles as permissive for all to authenticated using ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)) or (((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text) in ('KUAWDLVN', 'KUAQT4JC'))) with check ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)) or (((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text) in ('KUAWDLVN', 'KUAQT4JC')));
+create policy "profiles_write" on public.profiles as permissive for all to authenticated using ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)) or (((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text) in ('KUAWDLVN', 'KUAQT4JC', 'KUAQGSEW'))) with check ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)) or (((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text) in ('KUAWDLVN', 'KUAQT4JC', 'KUAQGSEW')));
 create policy "auth_all" on public.project_descriptions as permissive for all to authenticated using (true) with check (true);
 create policy "wrike_user_isolation" on public.tasks as permissive for all to public using ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text))) with check ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)));
 create policy "auth_all" on public.translation_countries as permissive for all to public using (true) with check (true);
