@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Zap, StickyNote, Activity, Briefcase, Settings, FileScan,
+import { Zap, StickyNote, Briefcase, Settings, FileScan,
          FolderPlus, FileBarChart, ClipboardList } from "lucide-react";
 import { PAGE_GRADIENTS } from "../../lib/pageGradients";
 import { pageIdsFor } from "../../lib/departments";
@@ -83,15 +83,6 @@ const ACTIONS = [
     // Matches the Active Jobs hub row's own identity gradient in Profile.
     gradient: "from-[#12a0e1] to-[#1cc1a5]",
     requires: "profile",
-  },
-  {
-    id: "tracker",
-    label: "Tracker",
-    icon: Activity,
-    kind: "nav",
-    page: "timesheet",
-    gradient: PAGE_GRADIENTS.timesheet,
-    requires: "timesheet",
   },
   {
     id: "scan",

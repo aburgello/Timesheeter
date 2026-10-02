@@ -82,13 +82,12 @@ export const ALL_DEPARTMENTS = ["AM", "Digital", "Motion", "Operations", "PM", "
 // MANAGEMENT_IDS (lib/access.js), who get it and the Job Book added on top of
 // whatever their department lists — see pageIdsFor. The Job Book is otherwise
 // the Project Managers' alone, so Operations is down to its timesheets.
-// The Timesheeter (Tracker) is Motion-only for now — a deliberate temporary
-// narrowing while it settles, not a statement about who it's for. Every other
-// department reaches its time through Timesheets (legacy) instead. Undo by
-// putting "timesheet" back in the lists below and dropping the redirect in
-// App.jsx that stops a stale #timesheet link rendering it anyway.
+// The Timesheeter (Tracker) is hidden for everyone: every department reaches
+// its time through Timesheets (legacy). The page's code is kept, not deleted.
+// Undo by putting "timesheet" back in the lists below and back in App.jsx's
+// VALID_PAGES, which is what stops a stale #timesheet link rendering it.
 export const DEPARTMENT_PAGES = {
-  Motion: ["timesheet", "todayslist", "canvas", "legacy", "profile"],
+  Motion: ["todayslist", "canvas", "legacy", "profile"],
   Print: ["todayslist", "canvas", "legacy", "profile"],
   AM: ["todayslist", "canvas", "legacy", "profile"],
   Digital: ["todayslist", "canvas", "legacy", "profile"],
@@ -96,9 +95,8 @@ export const DEPARTMENT_PAGES = {
   Operations: ["legacy", "profile"],
 };
 
-// No "timesheet" here either: this is what an untagged profile sees while the
-// department loads, and showing a page then taking it away reads worse than
-// the Tracker appearing a moment late for the Motion members who keep it.
+// What an untagged profile sees, and what everyone sees while the department
+// loads.
 export const DEFAULT_PAGE_IDS = ["todayslist", "canvas", "legacy", "profile"];
 
 // The team board (todayslist) is one page whose identity follows the viewer's
