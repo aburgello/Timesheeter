@@ -1717,7 +1717,7 @@ function SettingsSection({ onSave }) {
   const [status, setStatus] = useState({ checked: false, connected: false });
   const [disconnecting, setDisconnecting] = useState(false);
   const [dark, setDark] = useState(isDarkMode);
-  const { defaultCategory, groupMultiCountry, setPrefs } = useTimesheetPrefs();
+  const { defaultCategory, groupMultiCountry, funMode, setPrefs } = useTimesheetPrefs();
 
   const checkStatus = useCallback(() => {
     setStatus({ checked: false, connected: false });
@@ -1886,6 +1886,32 @@ function SettingsSection({ onSave }) {
             <span
               className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                 groupMultiCountry ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="p-5 flex items-center gap-4 border-b border-[#dce4ec]">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-[#122027]">Fun mode</p>
+            <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
+              The playful extras, like the coins that fly when you add or
+              remove time. Switch it off for a plain timesheet. Nothing about
+              your times changes either way.
+            </p>
+          </div>
+          <button
+            onClick={() => setPrefs({ funMode: !funMode })}
+            role="switch"
+            aria-checked={funMode}
+            aria-label="Fun mode"
+            className={`relative w-12 h-7 rounded-full shrink-0 transition-colors ${
+              funMode ? "bg-[#12a0e1]" : "bg-slate-200"
+            }`}
+          >
+            <span
+              className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                funMode ? "translate-x-5" : "translate-x-0"
               }`}
             />
           </button>

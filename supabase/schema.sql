@@ -271,6 +271,9 @@ create table public.profiles (
   -- migrations/20260812120000_timesheet_prefs_per_member.sql.
   default_category text,
   group_multi_country boolean not null default false,
+  -- The playful extras on the timesheet (stepper coins); one switch for all of
+  -- them. See migrations/20261002145735_profiles_fun_mode.sql.
+  fun_mode boolean not null default true,
   -- Per-member grant, NOT a preference: guarded by the guard_can_debug_pull
   -- trigger so a member cannot set it on themselves through profiles_write.
   -- See migrations/20260814100000_profiles_can_debug_pull.sql.

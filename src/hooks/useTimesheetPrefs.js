@@ -11,12 +11,18 @@ const CHANGED_EVENT = "xyi:timesheet-prefs-changed";
 //                      fall back to its PRINT/REVISION keyword guess.
 //   groupMultiCountry  merge rows that differ only by market into one entry.
 //
+// And one about how the timesheet behaves for them:
+//
+//   funMode            the playful extras (the coins a time stepper throws).
+//                      On unless switched off; everything of that kind checks
+//                      this one flag, so there is a single place to say no.
+//
 // Stored on profiles (see migrations/20260812120000_timesheet_prefs_per_member.sql)
 // because both describe the person, not the browser — on localStorage alone
 // they would reset on a second machine. localStorage is still used here as a
 // first-frame cache so a pull triggered before the profile row resolves doesn't
 // silently run with the wrong preference.
-const EMPTY = { defaultCategory: null, groupMultiCountry: false };
+const EMPTY = { defaultCategory: null, groupMultiCountry: false, funMode: true };
 
 function readCache() {
   try {
@@ -26,6 +32,8 @@ function readCache() {
     return {
       defaultCategory: parsed?.defaultCategory ?? null,
       groupMultiCountry: !!parsed?.groupMultiCountry,
+      // Absent from a cache written before the switch existed: that's on.
+      funMode: parsed?.funMode !== false,
     };
   } catch {
     // A malformed cache is not worth failing a page load over — the profile
@@ -58,7 +66,7 @@ export function useTimesheetPrefs() {
     let cancelled = false;
     supabase
       .from("profiles")
-      .select("default_category, group_multi_country")
+      .select("default_category, group_multi_country, fun_mode")
       .eq("wrike_user_id", uid)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -66,6 +74,7 @@ export function useTimesheetPrefs() {
         const next = {
           defaultCategory: data.default_category ?? null,
           groupMultiCountry: !!data.group_multi_country,
+          funMode: data.fun_mode !== false,
         };
         localStorage.setItem(CACHE_KEY, JSON.stringify(next));
         setPrefsState(next);
@@ -97,6 +106,7 @@ export function useTimesheetPrefs() {
       .update({
         default_category: next.defaultCategory,
         group_multi_country: next.groupMultiCountry,
+        fun_mode: next.funMode,
       })
       .eq("wrike_user_id", uid);
   }, []);

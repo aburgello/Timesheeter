@@ -298,7 +298,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // How this member wants pulled rows to arrive — their default category and
   // whether markets get merged into one entry. Stored on their profile, so
   // these follow them between machines; see hooks/useTimesheetPrefs.js.
-  const { defaultCategory, groupMultiCountry, setPrefs } = useTimesheetPrefs();
+  const { defaultCategory, groupMultiCountry, funMode, setPrefs } = useTimesheetPrefs();
 
   // useLegacyRows is initialised after showToast below
 
@@ -3732,7 +3732,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     <TableSearchableSelect
                       stepper
                       maxSeconds={maxTimeSpentFor(row)}
-                      onStep={(direction, cell) => coinDrop(cell, timeTotalRef.current, direction)}
+                      onStep={(direction, cell) => funMode && coinDrop(cell, timeTotalRef.current, direction)}
                       onOverMax={() =>
                         showToast("Time spent stops at 7:30 for the day. Put anything over in Add. time.")
                       }
@@ -3752,7 +3752,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   <td className="p-2 align-middle w-[112px] text-center">
                     <TableSearchableSelect
                       stepper
-                      onStep={(direction, cell) => coinDrop(cell, addTotalRef.current, direction)}
+                      onStep={(direction, cell) => funMode && coinDrop(cell, addTotalRef.current, direction)}
                       options={TIME_OPTIONS}
                       value={row.additionalTime}
                       onChange={(val) =>
