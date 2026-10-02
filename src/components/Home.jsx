@@ -11,8 +11,9 @@ gsap.registerPlugin(useGSAP);
 
 // The menu rows come from the pages registry (src/lib/departments.js),
 // filtered by the member's department — Motion sees its five tools, PMs see
-// Administration/Job Book/Timesheets/Profile Hub, and departments without a
-// defined set fall back to the historic five.
+// Job Book/Timesheets/Profile Hub, and departments without a defined set fall
+// back to the historic four. The managers named in lib/access.js get
+// Administration and the Job Book on top of their department's rows.
 
 // Play the full entrance ceremony once per app session; returning to the
 // menu afterwards gets a shortened rise so daily navigation never drags.
@@ -48,7 +49,10 @@ function useFirstName() {
 export default function Home({ onNavigate, hasToken = true }) {
   const firstName = useFirstName();
   const department = useDepartment();
-  const sections = useMemo(() => pagesFor(department), [department]);
+  const sections = useMemo(
+    () => pagesFor(department, localStorage.getItem("wrike_user_id")),
+    [department]
+  );
   const containerRef = useRef(null);
   const headerRef = useRef(null);
   // Refs are keyed by section id (not index) because the row set can change

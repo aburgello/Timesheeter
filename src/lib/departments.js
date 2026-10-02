@@ -8,6 +8,7 @@ import {
   Briefcase,
 } from "lucide-react";
 import { PAGE_GRADIENTS } from "./pageGradients";
+import { isManager, MANAGER_PAGE_IDS } from "./access";
 
 // ── The pages registry ───────────────────────────────────────────────────────
 // Single source of truth for every top-level page: label, description (Home
@@ -73,11 +74,14 @@ export const ALL_DEPARTMENTS = ["AM", "Digital", "Motion", "Operations", "PM", "
 
 // ── Who sees what ────────────────────────────────────────────────────────────
 // Keyed by profiles.department (check constraint: PM | Motion | Digital |
-// AM | Operations | Print). Operations mirrors PM (job/management-focused,
-// no production board); AM and Digital mirror Motion/Print's own-board setup
-// (see boardLabelFor + TodaysList.js's usesDeptRoster) rather than falling
-// through to DEFAULT_PAGE_IDS, so every department now has an explicit,
+// AM | Operations | Print). AM and Digital mirror Motion/Print's own-board
+// setup (see boardLabelFor + TodaysList.js's usesDeptRoster) rather than
+// falling through to DEFAULT_PAGE_IDS, so every department has an explicit,
 // intentional set instead of an unconfigured default.
+// Administration is in no department's set: it belongs to the people named in
+// MANAGEMENT_IDS (lib/access.js), who get it and the Job Book added on top of
+// whatever their department lists — see pageIdsFor. The Job Book is otherwise
+// the Project Managers' alone, so Operations is down to its timesheets.
 // The Timesheeter (Tracker) is Motion-only for now — a deliberate temporary
 // narrowing while it settles, not a statement about who it's for. Every other
 // department reaches its time through Timesheets (legacy) instead. Undo by
@@ -88,8 +92,8 @@ export const DEPARTMENT_PAGES = {
   Print: ["todayslist", "canvas", "legacy", "profile"],
   AM: ["todayslist", "canvas", "legacy", "profile"],
   Digital: ["todayslist", "canvas", "legacy", "profile"],
-  PM: ["management", "jobbook", "legacy", "profile"],
-  Operations: ["management", "jobbook", "legacy", "profile"],
+  PM: ["jobbook", "legacy", "profile"],
+  Operations: ["legacy", "profile"],
 };
 
 // No "timesheet" here either: this is what an untagged profile sees while the
@@ -136,8 +140,14 @@ export function trackerSubtitleFor(department) {
     : "Timesheet Tracker";
 }
 
-export function pageIdsFor(department) {
-  return DEPARTMENT_PAGES[department] || DEFAULT_PAGE_IDS;
+// The pages a member can reach: their department's, led by the manager pages
+// for the people who have them. Everything that offers or opens a page (Home,
+// the Rail, the command palette, the quick-actions bubble, App's own guard)
+// asks this, so a page can't be hidden in one place and reachable in another.
+export function pageIdsFor(department, wrikeUserId) {
+  const ids = DEPARTMENT_PAGES[department] || DEFAULT_PAGE_IDS;
+  if (!isManager(wrikeUserId)) return ids;
+  return [...MANAGER_PAGE_IDS.filter((id) => !ids.includes(id)), ...ids];
 }
 
 // Returns the page object with any department-specific overrides applied
@@ -149,6 +159,6 @@ export function pageFor(id, department) {
   return PAGES[id];
 }
 
-export function pagesFor(department) {
-  return pageIdsFor(department).map((id) => pageFor(id, department));
+export function pagesFor(department, wrikeUserId) {
+  return pageIdsFor(department, wrikeUserId).map((id) => pageFor(id, department));
 }

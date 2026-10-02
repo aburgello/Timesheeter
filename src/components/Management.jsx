@@ -50,7 +50,7 @@ import StudioAnalytics from "./StudioAnalytics";
 // importing it from this lazy-loaded chunk would drag Administration into the
 // main bundle). Re-exported here for compatibility.
 export { MANAGEMENT_IDS } from "../lib/access";
-import { MANAGEMENT_IDS } from "../lib/access";
+import { MANAGEMENT_IDS, isManager } from "../lib/access";
 
 const OFFICES = ["LDN", "LA"];
 const PRINT_DIGITAL = ["Digital", "Print", "Both"];
@@ -6153,12 +6153,10 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Administration is a first-class page for PMs; the hardcoded allowlist
-  // remains as an admin override for everyone else.
-  const hasAccess =
-    department === "PM" ||
-    MANAGEMENT_IDS.length === 0 ||
-    MANAGEMENT_IDS.includes(wrikeUserId);
+  // Administration is the named managers' only (lib/access.js) — no
+  // department opens it. App already sends anyone else home; this is the page
+  // refusing on its own account, should it ever be mounted another way.
+  const hasAccess = isManager(wrikeUserId);
   if (!hasAccess) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center">

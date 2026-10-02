@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Home } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
-import { MANAGEMENT_IDS } from "../../lib/access";
 import { PAGE_GRADIENTS } from "../../lib/pageGradients";
 import { PAGES, pageIdsFor, pageFor } from "../../lib/departments";
 import { useDepartment } from "../../hooks/useDepartment";
@@ -11,8 +10,8 @@ import { useDepartment } from "../../hooks/useDepartment";
 // carry the full-bleed gradient treatment without competing with a nav bar
 // for the top of the screen. Hidden entirely on Home, same as the old nav.
 // Section icons come from the pages registry filtered by department (see
-// src/lib/departments.js), including Administration; only Profile gets its
-// own dedicated avatar slot at the foot of the rail.
+// src/lib/departments.js), including Administration for the managers who have
+// it; only Profile gets its own dedicated avatar slot at the foot of the rail.
 //
 // Below md the rail is a bottom bar instead: a fixed 80px-wide strip down the
 // side costs a phone a fifth of its width, and the hover flyout doesn't work
@@ -23,13 +22,7 @@ export default function Rail({ activePage, setActivePage }) {
   const [initials, setInitials] = useState("");
   const wrikeUserId = localStorage.getItem("wrike_user_id");
   const department = useDepartment();
-  // Administration rides in the main icon list alongside the other pages —
-  // present for departments whose set includes it (PMs) and for the
-  // hardcoded admin allowlist, appended if the department set omits it.
-  const railIds = pageIdsFor(department).filter((id) => id !== "profile");
-  const isAdmin =
-    MANAGEMENT_IDS.length === 0 || MANAGEMENT_IDS.includes(wrikeUserId);
-  if (isAdmin && !railIds.includes("management")) railIds.push("management");
+  const railIds = pageIdsFor(department, wrikeUserId).filter((id) => id !== "profile");
   const sections = railIds.map((id) => pageFor(id, department));
 
   useEffect(() => {

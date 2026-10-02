@@ -44,9 +44,9 @@ import { toggleDarkMode } from "./lib/theme";
 import Home from "./components/Home";
 import { useWrikeCache } from "./hooks/useWrikeCache";
 import { PRINT_HUB_RE } from "./lib/wrikeEnrich";
-import { PAGES, pagesFor, boardLabelFor } from "./lib/departments";
+import { pageIdsFor, pagesFor, boardLabelFor } from "./lib/departments";
 import { useDepartment } from "./hooks/useDepartment";
-import { MANAGEMENT_IDS } from "./lib/access";
+import { MANAGER_PAGE_IDS } from "./lib/access";
 import { setWrikeUserId } from "./lib/supabaseClient";
 import { startWrikeOAuth } from "./lib/wrikeApi";
 import { warmCountryFields } from "./lib/countryField";
@@ -287,12 +287,11 @@ export default function App() {
   // this member has — so a bookmark or a back-button entry for #timesheet would
   // still render the Tracker for a department that no longer lists it.
   //
-  // Kept narrow on purpose: a blanket "not in your department's pages → home"
-  // would also lock admins out of #management, which they reach without it
-  // being in any department list. And it waits for `department`, which is
-  // undefined until profiles loads — bouncing on that would send Motion home
-  // mid-load. Declared here rather than up with the other page effects because
-  // it reads `department`, which is a const above only from this line down.
+  // Kept narrow on purpose rather than a blanket "not in your pages → home",
+  // and it waits for `department`, which is undefined until profiles loads —
+  // bouncing on that would send Motion home mid-load. Declared here rather than
+  // up with the other page effects because it reads `department`, which is a
+  // const above only from this line down.
   useEffect(() => {
     if (department && department !== "Motion" && activePage === "timesheet") {
       window.location.hash = "";
@@ -300,20 +299,38 @@ export default function App() {
     }
   }, [department, activePage]);
 
+  // Same for Administration and the Job Book, which the menu only offers to the
+  // managers and (the Job Book) the Project Managers: hiding the row isn't
+  // enough when the address still opens the page. Administration is decided by
+  // who you are, so it bounces at once; the Job Book also depends on the
+  // department, so it waits for that to load — and shows the loading state
+  // meanwhile, see canOpen where the pages are mounted.
+  const wrikeUserId = localStorage.getItem("wrike_user_id");
+  const canOpen = (id) => pageIdsFor(department, wrikeUserId).includes(id);
+  const lockedOut =
+    MANAGER_PAGE_IDS.includes(activePage) &&
+    !canOpen(activePage) &&
+    (activePage === "management" || !!department);
+  useEffect(() => {
+    if (!lockedOut) return;
+    window.location.hash = "";
+    setActivePage("home");
+  }, [lockedOut]);
+
   // Warm this member's page chunks once the browser is idle, so the first
   // click on a Home row resolves from cache instead of hitting the network
   // mid-transition. import() dedupes, so re-runs (department resolving from
   // null → real value) are free.
   useEffect(() => {
     const prefetch = () =>
-      pagesFor(department).forEach((p) => PAGE_LOADERS[p.id]?.());
+      pagesFor(department, wrikeUserId).forEach((p) => PAGE_LOADERS[p.id]?.());
     if ("requestIdleCallback" in window) {
       const handle = window.requestIdleCallback(prefetch, { timeout: 4000 });
       return () => window.cancelIdleCallback(handle);
     }
     const t = setTimeout(prefetch, 2000);
     return () => clearTimeout(t);
-  }, [department]);
+  }, [department, wrikeUserId]);
 
   // Motion Board mounts on first visit (not at startup — its chunk shouldn't
   // load for members who never open it), then stays mounted so board state
@@ -427,7 +444,6 @@ export default function App() {
   };
 
   // Admin check
-  const wrikeUserId = localStorage.getItem("wrike_user_id");
   const isAdmin = wrikeUserId === ADMIN_WRIKE_ID;
 
   // type → icon bg/text colour
@@ -444,9 +460,7 @@ export default function App() {
   // gated the same way: Tracker exports only if they have the Tracker, board
   // sync only if they have the board, Wrike debug only for the admin.
   const PALETTE_ACTIONS = useMemo(() => {
-    const deptPages = pagesFor(department);
-    const canManage =
-      MANAGEMENT_IDS.length === 0 || MANAGEMENT_IDS.includes(wrikeUserId);
+    const deptPages = pagesFor(department, wrikeUserId);
     const hasPage = (id) => deptPages.some((p) => p.id === id);
 
     const nav = [
@@ -456,9 +470,6 @@ export default function App() {
         type: "Navigation", icon: p.icon, hint: String(i + 1),
       })),
     ];
-    if (canManage && !hasPage("management")) {
-      nav.push({ id: "nav-management", title: PAGES.management.label, desc: PAGES.management.desc, type: "Navigation", icon: Shield });
-    }
     if (isAdmin) {
       nav.push({ id: "nav-wriketest", title: "Wrike API", desc: "Debug: fetch and explore raw Wrike data", type: "Navigation", icon: Server });
     }
@@ -885,6 +896,7 @@ export default function App() {
       <QuickActions
         activePage={activePage}
         department={department}
+        wrikeUserId={wrikeUserId}
         onNavigate={(page, section) => {
           setProfileSection(section ?? null);
           setActivePage(page);
@@ -1039,10 +1051,10 @@ export default function App() {
                 setActiveSection={setProfileSection}
               />
             )}
-            {activePage === "management" && (
+            {activePage === "management" && canOpen("management") && (
               <Management wrikeUserId={wrikeUserId} department={department} wrikeData={globalWrikeData} />
             )}
-            {activePage === "jobbook" && <JobBook />}
+            {activePage === "jobbook" && (canOpen("jobbook") ? <JobBook /> : <PageLoading />)}
             </Suspense>
             </AppErrorBoundary>
           </motion.div>
