@@ -39,7 +39,7 @@ const toMerge = [
   normaliseLegacyRow(row({ territory: "Chile", timeSpent: "1:00" })),
 ];
 const merged = { ...mergeRows(toMerge), id: "merged" };
-// What did I work on?, with overtime as add. time.
+// Where did my day go?, with overtime as add. time.
 const suggested = row({ timeSpent: secondsToHM(0.75 * 3600), additionalTime: secondsToHM(0.5 * 3600) });
 
 const cases = {
@@ -50,7 +50,7 @@ const cases = {
   "Duplicate": duplicate,
   "Merge": merged,
   "Merge's Undo (first original)": toMerge[0],
-  "What did I work on?": suggested,
+  "Where did my day go?": suggested,
 };
 const expected = {
   "Wrike Pull": ["0:07", "none"],
@@ -60,7 +60,7 @@ const expected = {
   "Duplicate": ["none", "none"],
   "Merge": ["1:30", "0:15"],
   "Merge's Undo (first original)": ["0:30", "0:15"],
-  "What did I work on?": ["0:45", "0:30"],
+  "Where did my day go?": ["0:45", "0:30"],
 };
 
 const added = {};

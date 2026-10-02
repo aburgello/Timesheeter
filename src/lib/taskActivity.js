@@ -1,6 +1,6 @@
 // Reads from wrike_task_activity: status changes and assignments the webhook
 // recorded, kept six weeks (migration 20260923181757). Only read when someone
-// opens "What did I work on?", and only for one day at a time.
+// opens "Where did my day go?", and only for one day at a time.
 import { supabase, whenIdentityReady } from "./supabaseClient";
 import { dayRangeUtc } from "../utils/commentActivity";
 

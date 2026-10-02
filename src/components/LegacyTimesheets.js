@@ -259,12 +259,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const CONSOL_PX = {
     "Job Number": 240, "Client": 140, "Film Title": 150, "Project Description": 220,
     "Country": 140, "Category": 180, "Client Amends": 72, "Notes": 140,
-    "3D": 48, "Time Spent": 92, "Add. Time": 88,
+    "3D": 48, "Time Spent": 112, "Add. Time": 112,
   };
-  // These four hold a checkbox or a short time dropdown, never prose. They're
-  // pinned at the width they need — no drag grip, and any wider width saved in
+  // These four hold a checkbox or a time stepper, never prose. They're pinned
+  // at the width they need — no drag grip, and any wider width saved in
   // storage is ignored — so squeezing only clips the control ("none" became
-  // "n…") without buying the text columns much room.
+  // "n…") without buying the text columns much room. The time columns are the
+  // width of a minus, a time and a plus.
   const CONSOL_FIXED = new Set(["Client Amends", "3D", "Time Spent", "Add. Time"]);
   const CONSOL_COLS = COLUMNS.map((c, i) => ({
     key: `c${i}`,
@@ -440,20 +441,40 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   }, []);
 
   // --- Per-day hour totals ---
-  const getDayTotal = (day) =>
+  // Normal and additional time apart, so the day's footer can show each.
+  // hmToHours (not parseFloat) — timeSpent may be "H:MM" (Wrike pulls,
+  // unrounded) or a decimal string (manual TIME_OPTIONS picks); it reads
+  // "none" and empty as 0.
+  const getDaySplit = (day) =>
     rows
       .filter((r) => r.dayOfWeek === day)
-      .reduce((sum, r) => {
-        // hmToHours (not parseFloat) — timeSpent may be "H:MM" (Wrike pulls,
-        // unrounded) or a decimal string (manual TIME_OPTIONS picks)
-        const t =
-          r.timeSpent === "none" || !r.timeSpent ? 0 : hmToHours(r.timeSpent);
-        const a =
-          r.additionalTime === "none" || !r.additionalTime
-            ? 0
-            : hmToHours(r.additionalTime);
-        return sum + t + a;
-      }, 0);
+      .reduce(
+        (sum, r) => ({
+          regular: sum.regular + hmToHours(r.timeSpent),
+          extra: sum.extra + hmToHours(r.additionalTime),
+        }),
+        { regular: 0, extra: 0 }
+      );
+  const getDayTotal = (day) => {
+    const { regular, extra } = getDaySplit(day);
+    return regular + extra;
+  };
+
+  // A day's normal time stops at 7:30, across every job on it; anything worked
+  // past that belongs in Add. Time, which has no ceiling. The same figure
+  // "Where did my day go?" holds its suggestions to.
+  const NORMAL_DAY_SECONDS = 7.5 * 3600;
+  // The most a row's Time Spent can be raised to: what the day's other rows
+  // leave of the 7:30, on the 0:15 grid. Never less than the row already
+  // holds — a pull or a merge can put a day over, and that time has to stay
+  // editable downwards rather than being cut the moment the cell is touched.
+  const maxTimeSpentFor = (row) => {
+    const others = rows
+      .filter((r) => r.dayOfWeek === row.dayOfWeek && r.id !== row.id)
+      .reduce((sum, r) => sum + hmToHours(r.timeSpent) * 3600, 0);
+    const room = Math.floor((NORMAL_DAY_SECONDS - others) / 900 + 1e-6) * 900;
+    return Math.max(Math.round(hmToHours(row.timeSpent) * 3600), room, 0);
+  };
 
   // Formats a decimal-hours total as "H:MM" — decimal hours (e.g. "4.17h" for
   // 4h10m) read like hundredths to a human, so display the same H:MM shape
@@ -1728,7 +1749,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // folder tree and country fields load first because rowFieldsFromTask reads
   // them. A ref keeps this one function for the modal's lifetime, so a
   // re-render here doesn't make it load the day again.
-  // What did I work on? needs two things this page loads in its first sync:
+  // Where did my day go? needs two things this page loads in its first sync:
   // your tasks, and each status's group (Active / Completed / ...), which is
   // how a hand-off is told from a close. Opened before that sync finished, it
   // read every "moved to Delivered" on your subtasks as a new hand-off and
@@ -1749,7 +1770,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           }
         }
       } catch (err) {
-        console.warn("[what did I work on] workflows unavailable:", err.message);
+        console.warn("[where did my day go] workflows unavailable:", err.message);
       }
     }
     return (synced || activeWrikeDataRef.current).map((t) => t.id);
@@ -3701,8 +3722,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     />
                   </td>
 
-                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[90px] text-center">
+                  <td className="p-2 border-r border-[#f0f4f8] align-middle w-[112px] text-center">
                     <TableSearchableSelect
+                      stepper
+                      maxSeconds={maxTimeSpentFor(row)}
+                      onOverMax={() =>
+                        showToast("Time spent stops at 7:30 for the day. Put anything over in Add. time.")
+                      }
                       options={TIME_OPTIONS}
                       value={row.timeSpent}
                       onChange={(val) =>
@@ -3716,8 +3742,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       disabled={!rowsAreEditable}
                     />
                   </td>
-                  <td className="p-2 align-middle w-[90px] text-center">
+                  <td className="p-2 align-middle w-[112px] text-center">
                     <TableSearchableSelect
+                      stepper
                       options={TIME_OPTIONS}
                       value={row.additionalTime}
                       onChange={(val) =>
@@ -3771,6 +3798,23 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             <span className="uppercase tracking-widest text-[10px] font-black text-slate-400">{activeDay} total</span>
             <span className="tabular-nums">
               {currentDayRows.length} {currentDayRows.length === 1 ? "entry" : "entries"}
+            </span>
+            <span
+              className={`tabular-nums ${getDaySplit(activeDay).regular * 3600 > NORMAL_DAY_SECONDS + 1 ? "text-amber-600" : ""}`}
+              title={
+                getDaySplit(activeDay).regular * 3600 > NORMAL_DAY_SECONDS + 1
+                  ? "Over 7:30 of normal time. Move the rest to Add. time."
+                  : undefined
+              }
+            >
+              Time spent{" "}
+              <span className={getDaySplit(activeDay).regular * 3600 > NORMAL_DAY_SECONDS + 1 ? "" : "text-[#122027]"}>
+                {formatDayTotal(getDaySplit(activeDay).regular)}
+              </span>{" "}
+              of 7:30
+            </span>
+            <span className="tabular-nums">
+              Add. time <span className="text-[#122027]">{formatDayTotal(getDaySplit(activeDay).extra)}</span>
             </span>
             <span className="tabular-nums text-[#122027] text-sm font-black">
               {formatDayTotal(getDayTotal(activeDay))}h
@@ -3902,7 +3946,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
             >
               <MessagesSquare className="w-4 h-4" />
-              What Did I Work On?
+              Where Did My Day Go?
             </button>
           </div>
           <div className="flex gap-3 flex-wrap">

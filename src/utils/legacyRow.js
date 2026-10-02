@@ -19,7 +19,7 @@ export const normaliseLegacyRow = (row) => ({
   // seconds are ALWAYS derived from the text, never taken from the row: a
   // Duplicate copies its source's seconds and then blanks the time, and
   // keeping those made a copy that showed "none" add its source's time to the
-  // header and to the timesheet. Rows added by a pull, What did I work on? or
+  // header and to the timesheet. Rows added by a pull, Where did my day go? or
   // Merge had no add. time seconds at all, and counted none until a reload.
   rawSeconds: parseTimeToSeconds(row.timeSpent),
   additionalSeconds: parseTimeToSeconds(row.additionalTime),

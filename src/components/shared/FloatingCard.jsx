@@ -1,7 +1,7 @@
 import React, { cloneElement, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-// The dark hover card: the comment previews on the "What did I work on?"
+// The dark hover card: the comment previews on the "Where did my day go?"
 // timeline, and the labels on icon-only buttons. One look for both.
 //
 // Pinned next to `rect` (a DOM rect), above it when there's room and below

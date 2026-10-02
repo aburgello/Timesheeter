@@ -27,7 +27,7 @@ import { hmToHours, getCurrentWeekStart } from "../../hooks/useLegacyRows";
 import { secondsToHM } from "../../utils/timeHelpers";
 import { isoToday, toIsoDate } from "../../utils/dates";
 
-// "What did I work on?" — suggests timesheet rows from your Wrike activity:
+// "Where did my day go?" — suggests timesheet rows from your Wrike activity:
 // the tasks you were handed (assigned, or moved into a new status by someone
 // else) and the comments you posted. See utils/commentActivity.js for how that
 // becomes time.
@@ -43,7 +43,15 @@ import { isoToday, toIsoDate } from "../../utils/dates";
 const LANE_COLOURS = ["#38bdf8", "#f59e0b", "#a78bfa", "#34d399", "#fb7185", "#facc15", "#2dd4bf", "#f472b6"];
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+// A day's normal time: Time Spent stops here, across every job on the day, and
+// whatever was worked past it belongs in Add. Time, which has no ceiling. It's
+// what stops a day's suggestions adding up to 8:00 of normal time by accident.
+const NORMAL_DAY_HOURS = 7.5;
+
 const hm = (hours) => secondsToHM(hours * 3600, "0:00");
+// Down to the 0:15 grid, so a cap left by an off-grid row on the sheet (a pull
+// can log 1:10) is still a value the stepper can land on.
+const toGrid = (hours) => Math.floor(hours * 4 + 1e-6) / 4;
 const clock = (minute) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 const plural = (n, word) => `${n} ${word}${n !== 1 ? "s" : ""}`;
 // How much of an estimate isn't on the sheet yet, on the 0.25 grid. Under
@@ -110,7 +118,7 @@ export default function CommentTrailModal({
           // History is a bonus: if it can't be read, fall back to comments
           // only rather than showing nothing.
           historyStart().catch((err) => {
-            console.warn("[what did I work on] status history unavailable:", err.message);
+            console.warn("[where did my day go] status history unavailable:", err.message);
             return null;
           }),
           // Your tasks and the status groups, once the page's sync has them.
@@ -149,7 +157,7 @@ export default function CommentTrailModal({
           },
         }));
       } catch (err) {
-        console.error("[what did I work on]", err);
+        console.error("[where did my day go]", err);
         setByDay((p) => ({
           ...p,
           [d.iso]: {
@@ -317,19 +325,34 @@ export default function CommentTrailModal({
       };
     });
 
-    const loggedTotal = dayRows.reduce(
-      (s, r) => s + hmToHours(r.timeSpent) + hmToHours(r.additionalTime),
-      0
-    );
+    // Normal and additional time are counted apart, here and on the sheet.
+    const loggedRegular = dayRows.reduce((s, r) => s + hmToHours(r.timeSpent), 0);
+    const loggedExtra = dayRows.reduce((s, r) => s + hmToHours(r.additionalTime), 0);
+
+    // Share out what's left of the day's normal time. Ticked rows keep theirs
+    // (they were only ever stepped up to the room there was); an unticked row
+    // shows no more than is still free, so ticking it can't go over.
+    let room = toGrid(Math.max(0, NORMAL_DAY_HOURS - loggedRegular));
+    for (const s of suggestions) {
+      if (!s.on) continue;
+      s.hours = Math.min(s.hours, room);
+      room -= s.hours;
+    }
+    for (const s of suggestions) {
+      s.maxHours = s.on ? s.hours + room : room;
+      if (!s.on) s.hours = Math.min(s.hours, room);
+    }
+
     return {
       suggestions,
+      loggedRegular,
+      loggedExtra,
       intervals,
       hasHistory: state.hasHistory,
       since: state.since,
       commentCount: taskComments.length,
       folderOnly: state.comments.length - taskComments.length,
       estTotal: suggestions.reduce((s, x) => s + (x.est || 0), 0),
-      loggedTotal,
       missing: suggestions.filter((s) => s.standing !== "covered"),
     };
   }, [state, rows, day, edits, rowFieldsFromTask, wrikeUserId]);
@@ -337,7 +360,10 @@ export default function CommentTrailModal({
   const edit = (key, patch) => setEdits((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
 
   const picked = view ? view.suggestions.filter((s) => s.on && s.hours + s.extra > 0) : [];
-  const pickedTotal = picked.reduce((s, x) => s + x.hours + x.extra, 0);
+  const pickedRegular = picked.reduce((s, x) => s + x.hours, 0);
+  const pickedExtra = picked.reduce((s, x) => s + x.extra, 0);
+  // The day's normal time once the ticked rows are added.
+  const dayRegular = view ? view.loggedRegular + pickedRegular : 0;
 
   const handleAdd = () => {
     if (!picked.length || isFrozen) return;
@@ -369,7 +395,7 @@ export default function CommentTrailModal({
       picked.forEach((s) => delete next[s.key]);
       return next;
     });
-    setAdded({ n: newRows.length, hours: pickedTotal, day: day.name });
+    setAdded({ n: newRows.length, hours: pickedRegular, extra: pickedExtra, day: day.name });
   };
 
   useEffect(() => {
@@ -398,7 +424,7 @@ export default function CommentTrailModal({
             </div>
             <div className="min-w-0">
               <h2 id="comment-trail-title" className="text-base font-bold text-white">
-                What did I work on?
+                Where did my day go?
               </h2>
               <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
                 Suggestions from your Wrike activity: the tasks you were handed and the comments you posted.
@@ -481,7 +507,10 @@ export default function CommentTrailModal({
                     <Stat value={view.suggestions.length} label="tasks you commented on" />
                   </>
                 )}
-                <Stat value={hm(view.loggedTotal)} label={`on the timesheets for ${day.name}`} />
+                <Stat
+                  value={hm(view.loggedRegular)}
+                  label={`on the timesheets for ${day.name}${view.loggedExtra > 0 ? `, plus ${hm(view.loggedExtra)} add. time` : ""}`}
+                />
                 {view.hasHistory ? (
                   <Stat
                     value={view.missing.length ? hm(view.missing.reduce((s, x) => s + x.gap, 0)) : "—"}
@@ -534,7 +563,8 @@ export default function CommentTrailModal({
             {added ? (
               <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
                 <CheckCircle className="w-4 h-4" />
-                Added {plural(added.n, "row")} ({hm(added.hours)}) to {added.day}
+                Added {plural(added.n, "row")} ({hm(added.hours)}
+                {added.extra > 0 ? `, plus ${hm(added.extra)} add. time` : ""}) to {added.day}
               </span>
             ) : isFrozen ? (
               <span className="flex items-center gap-1.5 text-amber-400">
@@ -542,9 +572,19 @@ export default function CommentTrailModal({
                 {day.name} is locked. Unlock the day to add rows.
               </span>
             ) : view && picked.length ? (
-              <span>
-                <b className="text-white">{plural(picked.length, "row")}</b> ·{" "}
-                <b className="text-white font-mono">{hm(pickedTotal)}</b> to add to {day.name}
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                <span>
+                  <b className="text-white">{plural(picked.length, "row")}</b> to add to {day.name}
+                </span>
+                <span>
+                  Time <b className="text-white font-mono">{hm(pickedRegular)}</b>
+                </span>
+                <span>
+                  Add. time <b className="text-white font-mono">{hm(pickedExtra)}</b>
+                </span>
+                <span className={dayRegular >= NORMAL_DAY_HOURS ? "text-amber-400" : "text-slate-500"}>
+                  {day.name}'s normal time: <span className="font-mono">{hm(dayRegular)}</span> of {hm(NORMAL_DAY_HOURS)}
+                </span>
               </span>
             ) : view && view.suggestions.length && !view.missing.length ? (
               <span>Everything you worked on is already on the timesheets for {day.name}.</span>
@@ -848,6 +888,8 @@ function Suggestion({ s, frozen, edit, jump }) {
   // Show the Add. Time control when overtime is suggested or already set;
   // otherwise it's one click away.
   const showExtra = s.estExtra > 0 || s.extra > 0;
+  // The day's normal time is used up, by the sheet or by the rows ticked here.
+  const full = !s.locked && s.hours >= s.maxHours;
 
   return (
     <li
@@ -861,7 +903,9 @@ function Suggestion({ s, frozen, edit, jump }) {
         id={`ct-${s.key}`}
         checked={s.on}
         disabled={s.locked || frozen}
-        onChange={(e) => edit(s.key, { on: e.target.checked })}
+        // Ticking keeps the time shown, which already fits the day's normal
+        // time; left to the default it could grow back once ticked.
+        onChange={(e) => edit(s.key, e.target.checked ? { on: true, hours: s.hours } : { on: false })}
         label={`Include ${s.title}`}
       />
       <div className="min-w-0">
@@ -910,6 +954,8 @@ function Suggestion({ s, frozen, edit, jump }) {
             <Stepper
               label={showExtra ? "Time" : null}
               value={s.hours}
+              max={s.maxHours}
+              maxTitle={`${hm(NORMAL_DAY_HOURS)} of normal time is the most a day takes. Anything over goes in add. time.`}
               frozen={frozen}
               plusRef={plusRef}
               onChange={(hours) => edit(s.key, { hours, on: hours + s.extra > 0 })}
@@ -919,11 +965,11 @@ function Suggestion({ s, frozen, edit, jump }) {
                 label="Add. time"
                 value={s.extra}
                 frozen={frozen}
-                onChange={(extra) => edit(s.key, { extra, on: s.hours + extra > 0 })}
+                onChange={(extra) => edit(s.key, { extra, hours: s.hours, on: s.hours + extra > 0 })}
               />
             ) : (
               <button
-                onClick={() => edit(s.key, { extra: 0.25, on: true })}
+                onClick={() => edit(s.key, { extra: 0.25, hours: s.hours, on: true })}
                 disabled={frozen}
                 className="text-[10px] font-bold text-slate-500 hover:text-[#38bdf8] disabled:opacity-40"
               >
@@ -933,6 +979,11 @@ function Suggestion({ s, frozen, edit, jump }) {
           </>
         )}
         <span className="max-w-[15rem] text-[10px] text-slate-500 text-right max-sm:text-left">{hint}</span>
+        {full && (
+          <span className="max-w-[15rem] text-[10px] text-amber-400/80 text-right max-sm:text-left">
+            The day's {hm(NORMAL_DAY_HOURS)} of normal time is used. Anything more goes in add. time
+          </span>
+        )}
         {s.estExtra > 0 && (
           <span className="max-w-[15rem] text-[10px] text-amber-400/80 text-right max-sm:text-left">
             {hm(s.estExtra)} of it after 18:00, as add. time
@@ -944,8 +995,11 @@ function Suggestion({ s, frozen, edit, jump }) {
 }
 
 // A time in 0:15 steps. The empty value reads 0:00, greyed: a dash next to
-// the minus button looked like a second minus.
-function Stepper({ label, value, frozen, onChange, plusRef }) {
+// the minus button looked like a second minus. `max` is where plus stops
+// (normal time's share of the day); without one it keeps going, as add. time
+// does.
+function Stepper({ label, value, frozen, onChange, plusRef, max = Infinity, maxTitle }) {
+  const atMax = value >= max;
   return (
     <div className="flex items-center gap-2">
       {label && <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>}
@@ -963,8 +1017,9 @@ function Stepper({ label, value, frozen, onChange, plusRef }) {
         </output>
         <button
           ref={plusRef}
-          onClick={() => onChange(Math.min(12, value + 0.25))}
-          disabled={frozen}
+          onClick={() => onChange(Math.min(max, value + 0.25))}
+          disabled={frozen || atMax}
+          title={atMax && !frozen ? maxTitle : undefined}
           aria-label={`More ${(label || "time").toLowerCase()}`}
           className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-40"
         >

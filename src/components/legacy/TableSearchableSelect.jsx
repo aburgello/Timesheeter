@@ -2,10 +2,13 @@
 // Self-contained: only reads its own props and internal state, no closure
 // over LegacyTimesheet's component state.
 import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Minus, Plus } from "lucide-react";
 import { layoutRect, layoutViewport } from "../../utils/zoom";
 import { isUnset } from "../../constants";
-import { parseTimeToHours } from "../../utils/timeHelpers";
+import { parseTimeToHours, parseTimeToSeconds, secondsToHM } from "../../utils/timeHelpers";
+
+const STEP_SECONDS = 15 * 60;
+const MAX_SECONDS = 24 * 3600; // the last entry in TIME_OPTIONS
 
 // --- MODERN SEARCHABLE SELECT FOR TABLE ROWS ---
 export default function TableSearchableSelect({
@@ -39,15 +42,77 @@ export default function TableSearchableSelect({
   // without, and a person scanning the table shouldn't have to learn two
   // different signals for one kind of gap.
   needsAttention = false,
+  // Time fields only: a minus and a plus either side of the value, moving it
+  // 0:15 at a time — the same control "Where did my day go?" uses. The value
+  // between them is still this select, so the list and typing a time both
+  // work as before.
+  stepper = false,
+  // Time fields only: the most this one may hold, in seconds. Plus stops
+  // there, the list ends there, and a typed time over it is brought back down
+  // (onOverMax tells the caller, so it can say why).
+  maxSeconds = null,
+  onOverMax,
 }) {
   const isOpen = activeDropdown === dropdownId && !disabled;
   const [searchTerm, setSearchTerm] = useState(value || "");
   const wrapperRef = useRef(null);
   const [fixedStyle, setFixedStyle] = useState({});
 
+  // `disabled` too: a step still waiting to be saved when the day is locked is
+  // turned away by the caller, and the cell has to go back to the saved value.
   useEffect(() => {
     setSearchTerm(value || "");
-  }, [value]);
+  }, [value, disabled]);
+
+  // Steps show at once but are saved together, a moment after the last click.
+  // Saving each one sent a request per click, and five quick clicks are five
+  // requests that can land out of order and leave an earlier time stored.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const pendingStep = useRef(null);
+  const stepTimer = useRef(null);
+  const flushStep = () => {
+    clearTimeout(stepTimer.current);
+    if (pendingStep.current === null) return;
+    const next = pendingStep.current;
+    pendingStep.current = null;
+    onChangeRef.current(next);
+  };
+  // Leaving the day (or the page) mid-wait still saves the step.
+  useEffect(() => flushStep, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const ceiling = isTime && maxSeconds !== null ? Math.min(MAX_SECONDS, maxSeconds) : MAX_SECONDS;
+  // Every way a value leaves this select goes through here, so the ceiling
+  // holds whether the time was stepped, picked or typed.
+  const commit = (next) => {
+    if (isTime && maxSeconds !== null && parseTimeToSeconds(next) > ceiling) {
+      const capped = secondsToHM(ceiling);
+      setSearchTerm(capped);
+      onOverMax?.();
+      onChange(capped);
+      return;
+    }
+    onChange(next);
+  };
+
+  const showStepper = stepper && isTime && !disabled;
+  const seconds = parseTimeToSeconds(pendingStep.current ?? value);
+  // From an off-grid time (a pull can log 1:10) a step lands on the grid first:
+  // 1:10 goes up to 1:15 and down to 1:00.
+  const step = (direction) => {
+    const onGrid =
+      direction > 0
+        ? Math.floor(seconds / STEP_SECONDS) * STEP_SECONDS + STEP_SECONDS
+        : Math.ceil(seconds / STEP_SECONDS) * STEP_SECONDS - STEP_SECONDS;
+    const next = secondsToHM(Math.min(ceiling, Math.max(0, onGrid)));
+    pendingStep.current = next;
+    setSearchTerm(next);
+    setActiveDropdown(null);
+    clearTimeout(stepTimer.current);
+    stepTimer.current = setTimeout(flushStep, 400);
+  };
+  const stepButtonClass =
+    "w-6 self-stretch shrink-0 flex items-center justify-center text-slate-400 hover:text-[#12a0e1] hover:bg-[#12a0e1]/10 disabled:opacity-30 disabled:hover:text-slate-400 disabled:hover:bg-transparent transition-colors focus:outline-none focus-visible:bg-[#12a0e1]/15 focus-visible:text-[#12a0e1]";
 
   // Compute fixed position on open so the dropdown escapes any overflow container.
   // useLayoutEffect fires before paint so the dropdown never renders at position 0,0.
@@ -93,6 +158,7 @@ export default function TableSearchableSelect({
   }, [isOpen, isTime, isCountry, isCategory, isDarkModal]);
 
   const filteredOptions = options.filter((opt) => {
+    if (isTime && maxSeconds !== null && parseTimeToSeconds(opt) > ceiling) return false;
     if (searchTerm === value) return true;
     const term = searchTerm.toLowerCase();
     // Times are listed H:MM; anyone typing decimal hours ("1.5") out of habit
@@ -157,7 +223,7 @@ export default function TableSearchableSelect({
           onMouseDown={(e) => {
             e.stopPropagation();
             setActiveDropdown(null);
-            onChange(searchTerm);
+            commit(searchTerm);
           }}
         />
       )}
@@ -174,6 +240,8 @@ export default function TableSearchableSelect({
             ? `border-rose-400 ring-2 ring-rose-400/15 ${
                 isDarkModal ? "bg-rose-500/5" : "bg-rose-50/60"
               }`
+            : showStepper
+            ? "border-[#dce4ec] hover:border-slate-300 bg-white overflow-hidden"
             : `border-transparent ${
                 isDarkModal
                   ? "hover:border-[#384252] hover:bg-[#1e2530]"
@@ -181,6 +249,17 @@ export default function TableSearchableSelect({
               }`
         }`}
       >
+        {showStepper && (
+          <button
+            type="button"
+            onClick={() => step(-1)}
+            disabled={seconds <= 0}
+            aria-label="15 minutes less"
+            className={`${stepButtonClass} rounded-l-[11px]`}
+          >
+            <Minus className="w-3 h-3" strokeWidth={2.5} />
+          </button>
+        )}
         {getPrefix && getPrefix(searchTerm) && (
           <span
             className={`pl-2.5 text-sm leading-none ${
@@ -204,7 +283,7 @@ export default function TableSearchableSelect({
           disabled={disabled}
           placeholder={placeholder}
           title={[searchTerm, hint].filter(Boolean).join("\n")}
-          className={`w-full py-2 px-2.5 bg-transparent text-[12px] font-semibold outline-none truncate ${
+          className={`w-full min-w-0 py-2 ${showStepper ? "px-0 tabular-nums" : "px-2.5"} bg-transparent text-[12px] font-semibold outline-none truncate ${
             isDarkModal
               ? "text-slate-100 placeholder:text-slate-600"
               : "text-slate-800 placeholder:text-slate-400"
@@ -214,20 +293,32 @@ export default function TableSearchableSelect({
             isTime ? "text-center" : ""
           } ${disabled ? "cursor-not-allowed" : ""}`}
         />
-        <ChevronDown
-          className={`w-3.5 h-3.5 mr-2 shrink-0 transition-transform duration-200 ${
-            isOpen ? "rotate-180" : ""
-          } ${
-            disabled
-              ? "text-slate-300"
-              : isDarkModal
-              ? "text-slate-500 hover:text-slate-400 cursor-pointer"
-              : "text-slate-400 cursor-pointer"
-          }`}
-          onClick={() =>
-            !disabled && setActiveDropdown(isOpen ? null : dropdownId)
-          }
-        />
+        {showStepper ? (
+          <button
+            type="button"
+            onClick={() => step(1)}
+            disabled={seconds >= ceiling}
+            aria-label="15 minutes more"
+            className={`${stepButtonClass} rounded-r-[11px]`}
+          >
+            <Plus className="w-3 h-3" strokeWidth={2.5} />
+          </button>
+        ) : (
+          <ChevronDown
+            className={`w-3.5 h-3.5 mr-2 shrink-0 transition-transform duration-200 ${
+              isOpen ? "rotate-180" : ""
+            } ${
+              disabled
+                ? "text-slate-300"
+                : isDarkModal
+                ? "text-slate-500 hover:text-slate-400 cursor-pointer"
+                : "text-slate-400 cursor-pointer"
+            }`}
+            onClick={() =>
+              !disabled && setActiveDropdown(isOpen ? null : dropdownId)
+            }
+          />
+        )}
       </div>
 
       {isOpen && (
@@ -294,7 +385,7 @@ export default function TableSearchableSelect({
                           key={i}
                           onClick={() => {
                             setSearchTerm(opt);
-                            onChange(opt);
+                            commit(opt);
                             setActiveDropdown(null);
                           }}
                           className={`w-full text-left px-3 py-2 text-[11px] font-semibold transition-[background-color,color] rounded-xl flex items-start leading-tight ${
@@ -342,7 +433,7 @@ export default function TableSearchableSelect({
                       key={i}
                       onClick={() => {
                         setSearchTerm(opt);
-                        onChange(opt);
+                        commit(opt);
                         setActiveDropdown(null);
                       }}
                       className={`w-full text-left py-2 text-[11px] font-semibold transition-[background-color,color] rounded-xl flex items-center ${
