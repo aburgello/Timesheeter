@@ -54,6 +54,7 @@ import { getFolderCountries, getFolderFamily, buildChildToParents, jobFolderDesc
 import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
 import { countryFieldIds, warmCountryFields } from "../lib/countryField";
 import { secondsToHM } from "../utils/timeHelpers";
+import { coinDrop } from "../utils/coinDrop";
 import { COLUMNS, DAYS, TIME_OPTIONS, getDarkTagStyle } from "./legacy/legacyConstants";
 import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
 import TableSearchableSelect from "./legacy/TableSearchableSelect";
@@ -284,6 +285,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     { fitTo: consolScrollRef, keepFirst: true, keepLast: true }
   );
   const consolTotal = CONSOL_COLS.reduce((s, c) => s + consolWidths[c.key], 0);
+  // The day's totals sit under the two time columns, so they take their widths.
+  const widthOf = (label) => consolWidths[CONSOL_COLS.find((c) => c.label === label).key];
+  // Where a stepped quarter-hour lands: each column's figure in the day footer.
+  const timeTotalRef = useRef(null);
+  const addTotalRef = useRef(null);
 
   const [activeDay, setActiveDay] = useState(() => {
     return localStorage.getItem("xyi_legacy_activeDay") || "Monday";
@@ -3726,6 +3732,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     <TableSearchableSelect
                       stepper
                       maxSeconds={maxTimeSpentFor(row)}
+                      onStep={(direction, cell) => coinDrop(cell, timeTotalRef.current, direction)}
                       onOverMax={() =>
                         showToast("Time spent stops at 7:30 for the day. Put anything over in Add. time.")
                       }
@@ -3745,6 +3752,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   <td className="p-2 align-middle w-[112px] text-center">
                     <TableSearchableSelect
                       stepper
+                      onStep={(direction, cell) => coinDrop(cell, addTotalRef.current, direction)}
                       options={TIME_OPTIONS}
                       value={row.additionalTime}
                       onChange={(val) =>
@@ -3792,35 +3800,49 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           )}
         </div>
 
-        {/* Day totals — visible in the table, not only on the tab */}
-        {currentDayRows.length > 0 && (
-          <div className="px-4 py-2.5 border-t border-[#dce4ec] bg-white flex flex-wrap items-center justify-end gap-x-6 gap-y-1 text-[11px] font-bold text-[#768994]">
-            <span className="uppercase tracking-widest text-[10px] font-black text-slate-400">{activeDay} total</span>
-            <span className="tabular-nums">
-              {currentDayRows.length} {currentDayRows.length === 1 ? "entry" : "entries"}
-            </span>
-            <span
-              className={`tabular-nums ${getDaySplit(activeDay).regular * 3600 > NORMAL_DAY_SECONDS + 1 ? "text-amber-600" : ""}`}
-              title={
-                getDaySplit(activeDay).regular * 3600 > NORMAL_DAY_SECONDS + 1
-                  ? "Over 7:30 of normal time. Move the rest to Add. time."
-                  : undefined
-              }
-            >
-              Time spent{" "}
-              <span className={getDaySplit(activeDay).regular * 3600 > NORMAL_DAY_SECONDS + 1 ? "" : "text-[#122027]"}>
-                {formatDayTotal(getDaySplit(activeDay).regular)}
-              </span>{" "}
-              of 7:30
-            </span>
-            <span className="tabular-nums">
-              Add. time <span className="text-[#122027]">{formatDayTotal(getDaySplit(activeDay).extra)}</span>
-            </span>
-            <span className="tabular-nums text-[#122027] text-sm font-black">
-              {formatDayTotal(getDayTotal(activeDay))}h
-            </span>
-          </div>
-        )}
+        {/* Day totals — visible in the table, not only on the tab. Each time
+            column adds up underneath itself, and the two meet in the day's
+            total below, at the right edge where the columns end. */}
+        {currentDayRows.length > 0 && (() => {
+          const { regular, extra } = getDaySplit(activeDay);
+          const over = regular * 3600 > NORMAL_DAY_SECONDS + 1;
+          return (
+            <div className="border-t border-[#dce4ec] bg-white text-[11px] font-bold text-[#768994]">
+              <div className="flex items-stretch justify-end">
+                <span className="px-3 py-2 tabular-nums">
+                  {currentDayRows.length} {currentDayRows.length === 1 ? "entry" : "entries"}
+                </span>
+                <span
+                  style={{ width: widthOf("Time Spent") }}
+                  title={over ? "Over 7:30 of normal time. Move the rest to Add. time." : "Time spent"}
+                  className={`shrink-0 py-2 text-center tabular-nums border-l border-[#f0f4f8] ${
+                    over ? "text-amber-600" : "text-[#122027]"
+                  }`}
+                >
+                  <span ref={timeTotalRef} className="inline-block">{formatDayTotal(regular)}h</span>
+                </span>
+                <span
+                  style={{ width: widthOf("Add. Time") }}
+                  title="Add. time"
+                  className="shrink-0 py-2 text-center tabular-nums border-l border-[#f0f4f8] text-[#122027]"
+                >
+                  <span ref={addTotalRef} className="inline-block">{formatDayTotal(extra)}h</span>
+                </span>
+              </div>
+              <div className="flex items-center justify-end border-t border-[#f0f4f8]">
+                <span className="px-3 uppercase tracking-widest text-[10px] font-black text-slate-400">
+                  {activeDay} total
+                </span>
+                <span
+                  style={{ width: widthOf("Add. Time") }}
+                  className="shrink-0 py-2 text-center tabular-nums text-[#122027] text-sm font-black"
+                >
+                  {formatDayTotal(regular + extra)}h
+                </span>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Batch-edit bar. Replaces the tongue while rows are ticked rather
             than stacking above it: they occupy the same spot, and two floating

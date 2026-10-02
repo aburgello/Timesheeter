@@ -52,6 +52,9 @@ export default function TableSearchableSelect({
   // (onOverMax tells the caller, so it can say why).
   maxSeconds = null,
   onOverMax,
+  // Told about each step that moved the value: (direction, the cell's element).
+  // The grid uses it to drop a coin into the day's total.
+  onStep,
 }) {
   const isOpen = activeDropdown === dropdownId && !disabled;
   const [searchTerm, setSearchTerm] = useState(value || "");
@@ -105,6 +108,7 @@ export default function TableSearchableSelect({
         ? Math.floor(seconds / STEP_SECONDS) * STEP_SECONDS + STEP_SECONDS
         : Math.ceil(seconds / STEP_SECONDS) * STEP_SECONDS - STEP_SECONDS;
     const next = secondsToHM(Math.min(ceiling, Math.max(0, onGrid)));
+    if (parseTimeToSeconds(next) !== seconds) onStep?.(direction, wrapperRef.current);
     pendingStep.current = next;
     setSearchTerm(next);
     setActiveDropdown(null);
