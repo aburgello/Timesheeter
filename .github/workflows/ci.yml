@@ -1,0 +1,50 @@
+# Runs on every pull request and every push to main. Nothing deploys from here:
+# deploying is still `npm run deploy`, by hand. This only answers "is this change
+# safe to merge?" so that question stops depending on someone remembering to
+# run the tests locally.
+#
+# Deliberately NOT run here: `npm run scan:diff`. It compares the scanner's
+# output against the live Wrike folder tree, which changes every day as people
+# add folders, so it would fail for reasons that have nothing to do with the
+# code being reviewed. Run it by hand before merging any change to
+# src/lib/wrikeCampaign.js or src/lib/studios.js (see HANDOVER.md).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Lint (errors fail, warnings are reported)
+        run: npm run lint
+
+      - name: Bookmarklet matches its source
+        run: npm run check:bookmarklet
+
+      - name: Production build
+        run: npm run build
