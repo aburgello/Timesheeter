@@ -7,7 +7,7 @@
 // writes one, and the app's own export deliberately emits one), and quoted
 // fields containing commas or line breaks.
 export function parseCsv(text) {
-  const src = String(text || "").replace(/^﻿/, "");
+  const src = String(text || "").replace(/^\uFEFF/, "")  // strip a UTF-8 byte-order mark;
   const rows = [];
   let row = [];
   let field = "";

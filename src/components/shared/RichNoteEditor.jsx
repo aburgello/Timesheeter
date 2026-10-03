@@ -856,8 +856,6 @@ function NoteEditor({
     return () => { wrap.removeEventListener("scroll", clear); ro.disconnect(); };
   }, []);
 
-  if (!editor) return null;
-
   const filteredSlash = slash
     ? SLASH_COMMANDS.filter((c) => !slash.query || c.kw.includes(slash.query))
     : [];
@@ -916,6 +914,14 @@ function NoteEditor({
     slashRangeRef.current = { from: pos, to: pos };
     setSlash({ top: toFixed(coords.bottom), left: toFixed(coords.left), query: "", index: 0 });
   }, [editor, blockUnderPointer]);
+
+  // Below every hook, not above them. This used to sit before
+  // onEditorContextMenu's useCallback, so a render with no editor yet would
+  // call one hook fewer than the render after it, and React treats a changed
+  // hook count as a crash. It only worked because Tiptap happens to create the
+  // editor on the first render. Nothing above reads `editor` while rendering:
+  // the handlers use it when they're called, and the callback checks for it.
+  if (!editor) return null;
 
   return (
     <div

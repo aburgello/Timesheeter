@@ -10,7 +10,10 @@
     "preview": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",
     "scan:diff": "esbuild tests/scanRegression.mjs --bundle --platform=node --format=esm --outfile=node_modules/.cache/scanRegression.mjs --log-level=error && node node_modules/.cache/scanRegression.mjs",
-    "scan:accept": "npm run scan:diff -- --write"
+    "scan:accept": "npm run scan:diff -- --write",
+    "lint": "eslint .",
+    "check:bookmarklet": "node scripts/check-bookmarklet.mjs",
+    "check": "npm test && npm run lint && npm run check:bookmarklet && npm run build"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
@@ -49,13 +52,21 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.43.0",
+    "@eslint/js": "^9.39.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.19",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^15.15.0",
     "postcss": "^8.4.39",
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^3.4.4",
     "tailwindcss-animate": "^1.0.7",
     "vite": "^6.0.0",
     "wrangler": "^4.107.0"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

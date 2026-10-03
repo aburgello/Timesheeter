@@ -794,7 +794,7 @@ export const MOTION_TEAM_NAME_MAP = {
 // that, so decoration can't break roster membership.
 export const normalizeName = (s) =>
   (s || "")
-    .replace(/[\p{Extended_Pictographic}‍️⃣]/gu, "")
+    .replace(/[\p{Extended_Pictographic}\u200D\uFE0F\u20E3]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -882,7 +882,6 @@ export const REGION_ALIASES = {
   ARG: "Argentina",
   ARM: "Armenia",
   AUS: "Australia",
-  AUT: "Austria",
   AZE: "Azerbaijan",
   BIH: "Bosnia",
   BOL: "Bolivia",
@@ -893,7 +892,6 @@ export const REGION_ALIASES = {
   EST: "Estonia",
   GBR: "UK",
   GEO: "Georgia",
-  GRE: "Greece",
   HKG: "Hong Kong",
   HUN: "Hungary",
   IDN: "Indonesia",
@@ -914,7 +912,6 @@ export const REGION_ALIASES = {
   MKD: "Macedonia",
   MNG: "Mongolia",
   MYS: "Malaysia",
-  NED: "Netherlands",
   NPL: "Nepal",
   NZL: "New Zealand",
   PAK: "Pakistan",
