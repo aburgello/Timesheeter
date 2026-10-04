@@ -31,7 +31,20 @@ import TaskDetailModal, { FilePreviewLightbox } from "./TaskDetailModal";
 
 gsap.registerPlugin(useGSAP);
 
-// Lane colours, assigned by position in the (alphabetical) roster. Each
+// Lane colours people have chosen, by Wrike id. Anyone in any department can
+// have one; everyone else gets the next colour from LANE_PALETTE below. These
+// seven were picked by hand by the Motion team.
+const CHOSEN_LANES = {
+  KUAWDLVN: { gradient: "from-blue-500 to-indigo-600",   ink: "light", dot: "bg-blue-500" },    // Antonio Burgello
+  KUAUPGMO: { gradient: "from-purple-500 to-violet-600", ink: "light", dot: "bg-purple-500" },  // Aaron Gunasingham
+  KUAWDLV3: { gradient: "from-fuchsia-500 to-pink-600",  ink: "light", dot: "bg-fuchsia-500" }, // Jacqui Harrington
+  KUAQLONJ: { gradient: "from-emerald-600 to-teal-600",  ink: "light", dot: "bg-emerald-600" }, // Maria Cerrato
+  KUAQGSK5: { gradient: "from-cyan-600 to-sky-600",      ink: "light", dot: "bg-cyan-600" },    // Nicholas Horsford
+  KUAQK77L: { gradient: "from-orange-600 to-red-600",    ink: "light", dot: "bg-orange-600" },  // Luke Trott
+  KUAQLOPG: { gradient: "from-red-600 to-rose-600",      ink: "light", dot: "bg-red-600" },     // Turk Kayadelen
+};
+
+// Lane colours for everyone without a chosen one, in roster (alphabetical) order. Each
 // gradient keeps white display-size type at ≥3:1 on its left edge; the two
 // that can't carry white use dark ink, the same rule Home applies to its
 // amber row.
@@ -77,7 +90,8 @@ function useDepartmentTeam(department) {
         const firstOf = (p) => (p.first_name || "").trim();
         const firstNameCount = {};
         rows.forEach((p) => { firstNameCount[firstOf(p)] = (firstNameCount[firstOf(p)] || 0) + 1; });
-        rows.forEach((p, i) => {
+        let unchosen = 0;
+        rows.forEach((p) => {
           const base = firstOf(p) && firstNameCount[firstOf(p)] === 1
             ? firstOf(p)
             : cleanFullName(p.first_name, p.last_name, p.wrike_user_id);
@@ -86,7 +100,7 @@ function useDepartmentTeam(department) {
           while (seen.has(label)) label = `${base} (${n++})`;
           seen.add(label);
           members.push(label);
-          lanes[label] = LANE_PALETTE[i % LANE_PALETTE.length];
+          lanes[label] = CHOSEN_LANES[p.wrike_user_id] || LANE_PALETTE[unchosen++ % LANE_PALETTE.length];
           wrikeIdToMember[p.wrike_user_id] = label;
           teamWrikeIds.push(p.wrike_user_id);
         });
