@@ -4,6 +4,7 @@
 // still the entry point and re-exports what other screens import.
 import HubRow from "../shared/HubRow";
 import { NAV_GROUPS } from "./nav";
+import { SystemStatusCard } from "./SystemStatusCard";
 
 // ── Administration hub (level 0) ────────────────────────────────────────────
 export function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
@@ -77,6 +78,8 @@ export function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
           );
         })}
       </div>
+
+      <SystemStatusCard />
 
     </div>
   );

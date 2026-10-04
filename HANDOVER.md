@@ -218,9 +218,13 @@ silently fail.
   on someone's screen, you'll only hear about it from them. Adding an error
   service (Sentry's free tier is enough) is the next step, but it needs an
   account created by whoever owns the project.
+- **System status**, at the bottom of the Administration page, shows when
+  Wrike last synced, when the folder and people lists were refreshed, the last
+  live update, and whether Wrike still has the webhook active. Amber means
+  stale during working hours; red means the webhook is missing or suspended,
+  and the card offers to register it again.
 - **The Wrike webhook** can be suspended by Wrike without anyone noticing,
-  because the fifteen-minute sync carries on. If boards feel slow to update,
-  re-register it from Admin.
+  because the fifteen-minute sync carries on. The status card above shows it.
 - **Backups.** Check in the Supabase dashboard that backups (ideally
   point-in-time recovery) are on, and try a restore into a scratch project
   once, so you know it works before you need it.
