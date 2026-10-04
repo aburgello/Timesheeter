@@ -70,7 +70,9 @@ in its own local storage so the page loads quickly next time. To keep that copy
 current it asks only for what changed since it last looked: the database stamps
 each row with `cached_at` when its content changes, and records every task
 removed from the cache in `wrike_tasks_cache_removed`, so removals reach every
-browser too (code in `src/lib/sharedTaskSync.js`). Once a day the
+browser too (code in `src/lib/sharedTaskSync.js`). Once a week each browser
+also compares its list of task ids with the server's and fixes any difference
+either way, as a safety net. Once a day the
 sync also refreshes the folder tree, the list of people and the list of
 workflow statuses, and stores those in `wrike_sync_meta` under a single row
 named `shared`. The day is counted from the last refresh of those lists

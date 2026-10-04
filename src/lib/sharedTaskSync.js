@@ -11,9 +11,9 @@
 // here means "everything written since tracking began".
 export const TRACKING_START = "2000-01-01T00:00:00Z";
 
-// Removal records are kept 30 days (see the migration). A cursor older than
-// this may have missed some, so the caller re-checks every id instead.
-export const REMOVALS_KEPT_MS = 25 * 24 * 60 * 60 * 1000;
+// How often a browser runs reconcileWithServer. Weekly is well inside the
+// 30 days removal records are kept, and catches anything else that slipped.
+export const RECONCILE_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 // A write that was in flight when we last looked can commit with a timestamp
 // just behind the cursor. Writes are short, so a few seconds of overlap covers
@@ -69,13 +69,23 @@ export async function pullSharedChanges(supabase, cursor) {
   return { tasks: rows.map((r) => r.task_data), removedIds: removed.map((r) => r.id), cursor: next };
 }
 
-// Local ids the server no longer has. The fallback for removals a browser
-// can't catch up on: its first run with tracking, or a cursor older than the
-// removal records. Ids only, so ~400 KB for the whole cache.
-export async function idsGoneFromServer(supabase, localIds) {
-  const rows = await selectAll(supabase, "wrike_tasks_cache", "id");
-  const server = new Set(rows.map((r) => r.id));
-  return localIds.filter((id) => !server.has(id));
+// Compares this browser's ids with the server's, both ways: ids the server no
+// longer has (to drop) and rows the server has that this browser never got (to
+// add). The catch-up can't see either for rows written before the change log
+// existed. Ids cost ~400 KB for the whole cache; only missing rows are fetched.
+export async function reconcileWithServer(supabase, localIds) {
+  const serverIds = (await selectAll(supabase, "wrike_tasks_cache", "id")).map((r) => r.id);
+  const server = new Set(serverIds);
+  const local = new Set(localIds);
+  const goneIds = localIds.filter((id) => !server.has(id));
+  const missingIds = serverIds.filter((id) => !local.has(id));
+  const missingTasks = [];
+  for (let i = 0; i < missingIds.length; i += 200) {
+    const chunk = missingIds.slice(i, i + 200);
+    const rows = await selectAll(supabase, "wrike_tasks_cache", "id,task_data", (q) => q.in("id", chunk));
+    missingTasks.push(...rows.map((r) => r.task_data));
+  }
+  return { goneIds, missingTasks };
 }
 
 // Claims webhook events for this tab. Returns the Set of event ids it won, or

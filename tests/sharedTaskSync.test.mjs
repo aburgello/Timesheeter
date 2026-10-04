@@ -6,7 +6,7 @@ import {
   hasChangeTracking,
   pullAll,
   pullSharedChanges,
-  idsGoneFromServer,
+  reconcileWithServer,
   claimWebhookEvents,
 } from "../src/lib/sharedTaskSync.js";
 import { idsWorthFetching } from "../src/lib/wrikeWebhookSubscription.js";
@@ -20,6 +20,7 @@ function fakeSupabase(tables, { missingColumn = null, claims = new Set(), rpcErr
     const q = {
       select(c) { columns = c; return q; },
       gt(col, val) { filters.push((r) => String(r[col]) > String(val)); return q; },
+      in(col, vals) { filters.push((r) => vals.includes(r[col])); return q; },
       order() { return q; },
       limit(n) { limit = n; return q; },
       then(resolve) {
@@ -106,10 +107,23 @@ const row = (id, cached_at) => ({ id, cached_at, task_data: { id, title: `T ${id
   check("catch-up: pre-tracking rows skipped", r.tasks.map((t) => t.id), ["POST"]);
 }
 
-// The id check finds local rows the server no longer has.
+// The id check works both ways: local rows the server no longer has, and
+// server rows this browser never got (written before the change log existed,
+// so no catch-up will ever bring them).
 {
-  const sb = fakeSupabase({ wrike_tasks_cache: [row("A", TRACKING_START), row("B", TRACKING_START)] });
-  check("id check: stale local ids", await idsGoneFromServer(sb, ["A", "B", "STALE"]), ["STALE"]);
+  const sb = fakeSupabase({
+    wrike_tasks_cache: [row("A", TRACKING_START), row("B", TRACKING_START), row("NEVER_GOT", TRACKING_START)],
+  });
+  const r = await reconcileWithServer(sb, ["A", "B", "STALE"]);
+  check("id check: stale local ids", r.goneIds, ["STALE"]);
+  check("id check: rows this browser never got", r.missingTasks.map((t) => t.id), ["NEVER_GOT"]);
+}
+
+// Many missing rows are fetched in chunks, all of them.
+{
+  const rows = Array.from({ length: 1650 }, (_, i) => row(`M${String(i).padStart(5, "0")}`, TRACKING_START));
+  const r = await reconcileWithServer(fakeSupabase({ wrike_tasks_cache: rows }), []);
+  check("id check: every missing row fetched", r.missingTasks.length, 1650);
 }
 
 // Claiming: each event is won exactly once.

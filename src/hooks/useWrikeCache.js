@@ -12,11 +12,11 @@ import {
 } from "../lib/localTaskCache";
 import {
   TRACKING_START,
-  REMOVALS_KEPT_MS,
+  RECONCILE_EVERY_MS,
   hasChangeTracking,
   pullAll,
   pullSharedChanges,
-  idsGoneFromServer,
+  reconcileWithServer,
   claimWebhookEvents,
 } from "../lib/sharedTaskSync";
 import {
@@ -228,29 +228,38 @@ async function updatedDateCatchUp(hasLocal) {
 }
 
 // Catch-up from the cache's own change log (see sharedTaskSync.js): rows
-// written and ids removed since this browser last looked. Throws on failure;
-// the caller then falls back to updatedDateCatchUp.
+// written and ids removed since this browser last looked, plus a weekly
+// two-way id check against the server. Throws on failure; the caller then
+// falls back to updatedDateCatchUp.
+const RECONCILED_AT_KEY = "xyi_cache_reconciled_at";
+
 async function changeLogCatchUp(local) {
   if (!local.length) {
     const { tasks, cursor } = await pullAll(supabase);
+    localStorage.setItem(RECONCILED_AT_KEY, String(Date.now()));
     return { pulled: tasks, removedIds: [], cursor, full: true };
   }
   let cursor = await getServerCursor();
   let pulled = [];
-  let checkIds = false;
   if (!cursor) {
     // First run with the change log: the old catch-up covers what changed
-    // before it existed, and an id check clears out rows removed back then.
+    // before it existed.
     pulled = await updatedDateCatchUp(true);
     cursor = TRACKING_START;
-    checkIds = true;
-  } else if (Date.now() - Date.parse(cursor) > REMOVALS_KEPT_MS) {
-    checkIds = true;
   }
   const changes = await pullSharedChanges(supabase, cursor);
   const removedIds = [...changes.removedIds];
-  if (checkIds) removedIds.push(...(await idsGoneFromServer(supabase, local.map((t) => t.id))));
-  return { pulled: [...pulled, ...changes.tasks], removedIds, cursor: changes.cursor, full: false };
+  pulled.push(...changes.tasks);
+
+  const lastReconciled = Number(localStorage.getItem(RECONCILED_AT_KEY)) || 0;
+  if (Date.now() - lastReconciled > RECONCILE_EVERY_MS) {
+    const { goneIds, missingTasks } = await reconcileWithServer(supabase, local.map((t) => t.id));
+    console.log(`[WrikeCache] id check: ${goneIds.length} stale, ${missingTasks.length} missing`);
+    removedIds.push(...goneIds);
+    pulled.push(...missingTasks);
+    localStorage.setItem(RECONCILED_AT_KEY, String(Date.now()));
+  }
+  return { pulled, removedIds, cursor: changes.cursor, full: false };
 }
 
 // Incoming copy wins, but a parsed MATRIX table is never lost to a sparser copy.
