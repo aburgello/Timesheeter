@@ -18,7 +18,7 @@ import {
   selectAll,
 } from "../lib/supabaseClient";
 import { fetchContactTimelogs } from "../lib/wrikeApi";
-import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
+import { subscribeToWrikeTaskEvents, idsWorthFetching } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import {
   RefreshCw,
@@ -717,18 +717,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     warmCountryFields();
   }, [ensureFolderTree]);
 
-  // Near-instant updates: a webhook event only carries a changed task's id,
-  // so batches of ids (debounced, see wrikeWebhookSubscription.js) get
-  // refetched and merged into localWrikeTasks here — cheap, one small
-  // request per edit rather than the bulk two-query sync "Sync My Jobs" does.
+  // Ids currently listed, for the webhook handler below (state would be stale there).
+  const shownIdsRef = useRef(new Set());
+  useEffect(() => { shownIdsRef.current = new Set(localWrikeTasks.map((t) => t.id)); }, [localWrikeTasks]);
+
+  // Live updates from Wrike webhooks, merged into localWrikeTasks. Only tasks
+  // already listed, or newly created or assigned, are fetched; nothing else can
+  // change this list, and "Sync my jobs" catches anything subtler. Uses
+  // fetchTasksByIds, shared with the other subscribers, so concurrent requests
+  // for a task collapse into one.
   useEffect(() => {
     if (!wrikeUserId) return;
-    // Share fetchTasksByIds with the other webhook subscribers rather than
-    // issuing a bespoke request: it collapses all of them onto one fetch per
-    // changed task, and it degrades fields per-task on Wrike's field-visibility
-    // 400s (which this handler used to just swallow, silently dropping the
-    // edit). Its field set is a superset of what enrichLegacyTask reads.
-    const handleWebhookTaskIds = async (ids) => {
+    const handleWebhookTaskIds = async (allIds, events) => {
+      const ids = idsWorthFetching(allIds, events, shownIdsRef.current);
       if (!ids.length) return;
       const changed = await fetchTasksByIds(ids);
       if (!changed.length) return;

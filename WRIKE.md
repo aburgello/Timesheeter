@@ -66,7 +66,11 @@ on a full refresh), keeps only the ones relevant to the Motion team, works out
 what film, client and market each one belongs to (see "Making sense of a task"
 below), and writes the results into a Supabase table called
 `wrike_tasks_cache`. Every browser reads from that table, and also keeps a copy
-in its own local storage so the page loads quickly next time. Once a day the
+in its own local storage so the page loads quickly next time. To keep that copy
+current it asks only for what changed since it last looked: the database stamps
+each row with `cached_at` when its content changes, and records every task
+removed from the cache in `wrike_tasks_cache_removed`, so removals reach every
+browser too (code in `src/lib/sharedTaskSync.js`). Once a day the
 sync also refreshes the folder tree, the list of people and the list of
 workflow statuses, and stores those in `wrike_sync_meta` under a single row
 named `shared`. The day is counted from the last refresh of those lists
@@ -85,11 +89,21 @@ to watch a task move, so Wrike is also set up to notify us the moment a task
 changes. Wrike calls the Worker at `/api/wrike/webhook`. The Worker checks the
 message is genuinely from Wrike (it's signed with a shared secret) and writes a
 small record into two tables. `wrike_webhook_events` holds just "task X
-changed", is kept for 24 hours, and is broadcast live to every open browser,
-which then fetches that one task fresh. `wrike_task_activity` holds the detail
+changed", is kept for 24 hours, and is broadcast live to every open browser.
+`wrike_task_activity` holds the detail
 (who changed the status, to what, who got assigned) for six weeks. It exists
 because Wrike's API has no status history, and "What did I work on?" needs to
 know when work on a task actually started.
+
+Every open tab hears every change, but only one of them acts on it for the
+shared cache. Each tab "claims" the events it heard (`claim_wrike_webhook_events`,
+which lets exactly one claimant win each event). The winner fetches the task
+from Wrike, updates the shared cache, and removes the task from the cache if
+Wrike reported it deleted. The other tabs pick up the result from the cache a
+few seconds later instead of calling Wrike themselves. Separately, the
+Legacy, Profile and Motion Board pages fetch a changed task only if it's
+already on their list, or the change could add it (a new task, a new
+assignment, and for the Motion Board a new date or status).
 
 One rule matters a lot here: the Worker always answers Wrike with "OK", even
 when something on our side has gone wrong. If Wrike gets errors back, it
@@ -338,6 +352,9 @@ say when and how.
   Wrike, the webhook receiver, the jobs feed and the Toolbox panel endpoints.
 - `src/hooks/useWrikeCache.js`: the shared fifteen-minute sync and the live
   webhook updates.
+- `src/lib/sharedTaskSync.js`: catching a browser up with the shared cache
+  (changes and removals since it last looked), and claiming webhook events so
+  only one tab acts on each.
 - `src/lib/wrikeEnrich.js`: working out film, studio, market and description
   for a task, for the board and timesheets.
 - `src/lib/studios.js`: the list of studios and how folder names are matched to

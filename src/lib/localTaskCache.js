@@ -113,3 +113,57 @@ export async function advanceLocalCursor(tasks) {
     /* non-fatal */
   }
 }
+
+// The cursor into the shared cache's own change log (cached_at/removed_at; see
+// src/lib/sharedTaskSync.js). Separate from the updatedDate cursor above, which
+// only the fallback path uses.
+const SERVER_CURSOR_KEY = "server_cursor";
+
+export async function getServerCursor() {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const req = db.transaction(META, "readonly").objectStore(META).get(SERVER_CURSOR_KEY);
+      req.onsuccess = () => { db.close(); resolve(req.result || null); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  } catch {
+    return null;
+  }
+}
+
+// Never moves backwards: two catch-ups finishing out of order keep the later.
+export async function setServerCursor(cursor) {
+  if (!cursor) return;
+  try {
+    const db = await openDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(META, "readwrite");
+      const store = tx.objectStore(META);
+      const req = store.get(SERVER_CURSOR_KEY);
+      req.onsuccess = () => {
+        if (!req.result || Date.parse(cursor) > Date.parse(req.result)) store.put(cursor, SERVER_CURSOR_KEY);
+      };
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  } catch {
+    /* non-fatal */
+  }
+}
+
+// Empties the task mirror before a full download, so rows the server no longer
+// has can't survive in it.
+export async function clearLocalTasks() {
+  try {
+    const db = await openDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(TASKS, "readwrite");
+      tx.objectStore(TASKS).clear();
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  } catch {
+    /* non-fatal */
+  }
+}

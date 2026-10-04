@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { enrichTasks, buildChildToParents } from "../lib/wrikeEnrich";
-import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
+import { subscribeToWrikeTaskEvents, idsWorthFetching } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "./useWrikeCache";
 import { fetchAllFolders } from "../lib/wrikeCampaign";
 import { motionTeamShortName, normalizeName } from "../constants";
@@ -182,7 +182,19 @@ export function useMotionBoardTasks(externalTeamIds) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalKey]);
 
-  const handleTaskIds = useCallback(async (ids) => {
+  // Ids on the board, for the webhook handler below (state would be stale there).
+  const shownIdsRef = useRef(new Set());
+  useEffect(() => { shownIdsRef.current = new Set(boardTasks.map((t) => t.id)); }, [boardTasks]);
+
+  // A task joins the board by being created, assigned, re-dated or re-opened,
+  // so only those events (or tasks already on it) are worth a Wrike fetch.
+  const handleTaskIds = useCallback(async (allIds, events) => {
+    const ids = idsWorthFetching(allIds, events, shownIdsRef.current, [
+      "TaskCreated",
+      "TaskResponsiblesAdded",
+      "TaskDatesChanged",
+      "TaskStatusChanged",
+    ]);
     if (!ids.length) return;
     const ctx = ctxRef.current;
     const raw = await fetchTasksByIds(ids);

@@ -6,7 +6,19 @@ import {
   removeLocalTasks,
   getLocalCursor,
   advanceLocalCursor,
+  getServerCursor,
+  setServerCursor,
+  clearLocalTasks,
 } from "../lib/localTaskCache";
+import {
+  TRACKING_START,
+  REMOVALS_KEPT_MS,
+  hasChangeTracking,
+  pullAll,
+  pullSharedChanges,
+  idsGoneFromServer,
+  claimWebhookEvents,
+} from "../lib/sharedTaskSync";
 import {
   enrichTasks,
   filterToMotionTeam,
@@ -185,6 +197,73 @@ function deriveFolderCampaigns(folderDictionary) {
 }
 
 // ---------------------------------------------------------------------------
+// Catching up with the shared cache on load
+// ---------------------------------------------------------------------------
+// The older catch-up: rows whose Wrike updatedDate passed the local cursor
+// (everything when there's no local copy). Misses removals and rows rewritten
+// without a Wrike change, so it's only the fallback now.
+async function updatedDateCatchUp(hasLocal) {
+  const cursor = hasLocal ? await getLocalCursor() : null;
+  const sinceOverlap = cursor
+    ? new Date(new Date(cursor).getTime() - CURSOR_OVERLAP_MS).toISOString()
+    : null;
+  let pulled = [];
+  const PAGE = 1000;
+  let page = 0;
+  while (true) {
+    // .range() needs an ORDER BY, or pages overlap and skip rows.
+    let q = supabase
+      .from("wrike_tasks_cache")
+      .select("task_data")
+      .order("id")
+      .range(page * PAGE, (page + 1) * PAGE - 1);
+    if (sinceOverlap) q = q.gt("updated_date", sinceOverlap);
+    const { data, error } = await q;
+    if (error || !data?.length) break;
+    pulled = [...pulled, ...data.map((r) => r.task_data)];
+    if (data.length < PAGE) break;
+    page++;
+  }
+  return pulled;
+}
+
+// Catch-up from the cache's own change log (see sharedTaskSync.js): rows
+// written and ids removed since this browser last looked. Throws on failure;
+// the caller then falls back to updatedDateCatchUp.
+async function changeLogCatchUp(local) {
+  if (!local.length) {
+    const { tasks, cursor } = await pullAll(supabase);
+    return { pulled: tasks, removedIds: [], cursor, full: true };
+  }
+  let cursor = await getServerCursor();
+  let pulled = [];
+  let checkIds = false;
+  if (!cursor) {
+    // First run with the change log: the old catch-up covers what changed
+    // before it existed, and an id check clears out rows removed back then.
+    pulled = await updatedDateCatchUp(true);
+    cursor = TRACKING_START;
+    checkIds = true;
+  } else if (Date.now() - Date.parse(cursor) > REMOVALS_KEPT_MS) {
+    checkIds = true;
+  }
+  const changes = await pullSharedChanges(supabase, cursor);
+  const removedIds = [...changes.removedIds];
+  if (checkIds) removedIds.push(...(await idsGoneFromServer(supabase, local.map((t) => t.id))));
+  return { pulled: [...pulled, ...changes.tasks], removedIds, cursor: changes.cursor, full: false };
+}
+
+// Incoming copy wins, but a parsed MATRIX table is never lost to a sparser copy.
+function mergeIncoming(map, t) {
+  const existing = map.get(t.id);
+  if (existing?.tableHtml && !t.tableHtml) {
+    map.set(t.id, { ...t, tableHtml: existing.tableHtml, notesText: t.notesText || existing.notesText });
+  } else {
+    map.set(t.id, t);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main hook
 // ---------------------------------------------------------------------------
 export function useWrikeCache() {
@@ -233,49 +312,37 @@ export function useWrikeCache() {
         if (fc.length) setFolderCampaigns(fc);
       } catch { /* ignore */ }
 
-      // 2) Delta-pull changed rows from Supabase (full pull only on cold start)
-      const cursor = local.length ? await getLocalCursor() : null;
-      const sinceOverlap = cursor
-        ? new Date(new Date(cursor).getTime() - CURSOR_OVERLAP_MS).toISOString()
-        : null;
-      let pulled = [];
-      const PAGE = 1000;
-      let page = 0;
-      while (true) {
-        // .order("id") is load-bearing: .range() pagination without an ORDER
-        // BY is non-deterministic in Postgres — pages overlapped and skipped,
-        // silently dropping thousands of tasks from what the app saw.
-        let q = supabase
-          .from("wrike_tasks_cache")
-          .select("task_data")
-          .order("id")
-          .range(page * PAGE, (page + 1) * PAGE - 1);
-        if (sinceOverlap) q = q.gt("updated_date", sinceOverlap);
-        const { data, error } = await q;
-        if (error || !data?.length) break;
-        pulled = [...pulled, ...data.map((r) => r.task_data)];
-        if (data.length < PAGE) break;
-        page++;
+      // 2) Catch up with the shared cache: from its change log when the
+      // database has one, else by Wrike's updatedDate as before.
+      let result = null;
+      if (await hasChangeTracking(supabase)) {
+        try {
+          result = await changeLogCatchUp(local);
+        } catch (e) {
+          console.warn("[WrikeCache] change-log catch-up failed, using updatedDate:", e.message);
+        }
       }
+      if (!result) {
+        result = { pulled: await updatedDateCatchUp(local.length > 0), removedIds: [], cursor: null, full: !local.length };
+      }
+      const { pulled, removedIds } = result;
       console.log(
-        `[WrikeCache] hydrate: ${local.length} local, ${pulled.length} pulled ${cursor ? "(delta)" : "(cold start)"}`
+        `[WrikeCache] hydrate: ${local.length} local, ${pulled.length} pulled, ${removedIds.length} removed ` +
+        `${result.full ? "(cold start)" : "(delta)"}${result.cursor ? "" : " [updatedDate]"}`
       );
 
-      if (pulled.length) {
-        for (const t of pulled) {
-          const existing = map.get(t.id);
-          // Incoming row wins, but never lose a parsed MATRIX table to a
-          // sparser copy of the same task.
-          if (existing?.tableHtml && !t.tableHtml) {
-            map.set(t.id, { ...t, tableHtml: existing.tableHtml, notesText: t.notesText || existing.notesText });
-          } else {
-            map.set(t.id, t);
-          }
-        }
+      // A complete download replaces the mirror, so nothing the server no
+      // longer has survives in it. Only for the change-log path, whose full
+      // pull throws rather than return part of the table.
+      if (result.full && result.cursor) await clearLocalTasks();
+      removedIds.forEach((id) => map.delete(id));
+      pulled.forEach((t) => mergeIncoming(map, t));
+      if (pulled.length || removedIds.length) {
         setTasks([...map.values()]);
-        // Cold start mirrors everything; delta runs only write what changed
-        await saveLocalTasks(cursor ? pulled.map((t) => map.get(t.id)) : [...map.values()]);
+        await saveLocalTasks(result.full ? [...map.values()] : pulled.map((t) => map.get(t.id)));
+        await removeLocalTasks(removedIds);
       }
+      if (result.cursor) await setServerCursor(result.cursor);
       const loaded = [...map.values()];
       await advanceLocalCursor(loaded);
       localStorage.setItem(CACHE_FORMAT_KEY, CACHE_FORMAT);
@@ -729,7 +796,68 @@ export function useWrikeCache() {
   // The Worker writes a row to wrike_webhook_events per changed task. Fetch those
   // tasks and run them through the same filter and enrichment as sync(). The
   // 15-minute sync covers missed webhooks and times when no tab is open.
-  const handleWebhookTaskIds = useCallback(async (ids) => {
+  // Pull what other tabs have written to the shared cache since this browser
+  // last looked. Used instead of fetching from Wrike for webhook events another
+  // tab claimed.
+  const catchUpFromSharedCache = useCallback(async () => {
+    const cursor = await getServerCursor();
+    if (!cursor) return;
+    const { tasks: changed, removedIds, cursor: next } = await pullSharedChanges(supabase, cursor);
+    if (changed.length || removedIds.length) {
+      setTasks((prev) => {
+        const map = new Map(prev.map((t) => [t.id, t]));
+        removedIds.forEach((id) => map.delete(id));
+        changed.forEach((t) => mergeIncoming(map, t));
+        return [...map.values()];
+      });
+      await saveLocalTasks(changed);
+      await removeLocalTasks(removedIds);
+    }
+    await setServerCursor(next);
+  }, []);
+
+  // Debounced: a quiet spell of 8s, or at most a minute during a busy one, so
+  // a steady stream of events costs one small read a minute, not one per event.
+  const catchUpTimer = useRef(null);
+  const catchUpFirstAsked = useRef(0);
+  const scheduleCatchUp = useCallback(() => {
+    const now = Date.now();
+    if (!catchUpTimer.current) catchUpFirstAsked.current = now;
+    clearTimeout(catchUpTimer.current);
+    const wait = Math.min(8000, Math.max(0, catchUpFirstAsked.current + 60000 - now));
+    catchUpTimer.current = setTimeout(() => {
+      catchUpTimer.current = null;
+      catchUpFromSharedCache().catch((e) => console.warn("[WrikeCache] shared cache catch-up failed", e));
+    }, wait);
+  }, [catchUpFromSharedCache]);
+  useEffect(() => () => clearTimeout(catchUpTimer.current), []);
+
+  const handleWebhookTaskIds = useCallback(async (allIds, events = []) => {
+    if (!allIds.length) return;
+
+    // Every open tab gets every event. Only the tab that claims an event
+    // fetches from Wrike and writes the shared cache; the rest catch up from
+    // the cache. Without claiming (older database, or no event ids), every tab
+    // handles everything, as before.
+    let ids = allIds;
+    let deletedIds = [];
+    const claimed = events.length ? await claimWebhookEvents(supabase, events.map((e) => e.id)) : null;
+    if (claimed) {
+      const won = events.filter((e) => claimed.has(Number(e.id)));
+      if (won.length < events.length) scheduleCatchUp();
+      deletedIds = [...new Set(won.filter((e) => e.event_type === "TaskDeleted").map((e) => e.task_id))];
+      ids = [...new Set(won.map((e) => e.task_id))].filter((id) => !deletedIds.includes(id));
+    }
+
+    // Deleted in Wrike: remove from the shared cache (which records the
+    // removal for other browsers) and from here.
+    if (deletedIds.length) {
+      for (let i = 0; i < deletedIds.length; i += 200) {
+        await supabase.from("wrike_tasks_cache").delete().in("id", deletedIds.slice(i, i + 200));
+      }
+      await removeLocalTasks(deletedIds);
+      setTasks((prev) => prev.filter((t) => !deletedIds.includes(t.id)));
+    }
     if (!ids.length) return;
 
     let ctx = enrichCtxRef.current;
@@ -808,7 +936,7 @@ export function useWrikeCache() {
       return [...map.values()];
     });
     console.log(`[WrikeCache] realtime: updated ${enriched.length}, purged ${droppedIds.length} task(s) from webhook event(s)`);
-  }, [wrikeUserId]);
+  }, [wrikeUserId, scheduleCatchUp]);
 
   useEffect(() => {
     if (!wrikeUserId) return;
