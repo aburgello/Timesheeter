@@ -12,9 +12,8 @@ import { isManager, MANAGER_PAGE_IDS } from "./access";
 
 // ── The pages registry ───────────────────────────────────────────────────────
 // Single source of truth for every top-level page: label, description (Home
-// row hover copy), icon, and gradient identity. Home's menu, the Rail, and
-// the command palette all derive from this — a rename here renames it
-// everywhere.
+// row hover copy), icon, and gradient identity. Home's menu and the Rail
+// derive from this, so a rename here renames it everywhere.
 export const PAGES = {
   timesheet: {
     id: "timesheet",
@@ -131,7 +130,7 @@ export function trackerSubtitleFor(department) {
 
 // The pages a member can reach: their department's, led by the manager pages
 // for the people who have them. Everything that offers or opens a page (Home,
-// the Rail, the command palette, the quick-actions bubble, App's own guard)
+// the Rail, the quick-actions bubble, App's own guard)
 // asks this, so a page can't be hidden in one place and reachable in another.
 export function pageIdsFor(department, wrikeUserId) {
   const ids = department ? settingsFor(department).pages : UNTAGGED_PAGE_IDS;

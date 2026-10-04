@@ -1,6 +1,6 @@
 // ── Dark mode ────────────────────────────────────────────────────────────────
-// One place that owns the dark-theme class, so every entry point (Settings,
-// the App command palette, the Canvas palette) agrees on what "dark" means.
+// One place that owns the dark-theme class, so every caller agrees on what
+// "dark" means. The toggle is in Profile › Settings.
 //
 // The class belongs on <html>, not <body>: Timesheeter.css's base rule is
 // `html.dark-theme, html.dark-theme body { … }`, which sets the page's own

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabaseClient";
-import { toggleDarkMode } from "../lib/theme";
 import { useColumnResize } from "../lib/useColumnResize";
 import { getFilmName, belongsToFilm, PRINT_HUB_RE } from "../lib/wrikeEnrich";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
@@ -20,7 +19,6 @@ import { FILM_MAPPINGS } from "../constants.js";
 import { docToPlainText, docToHtml, docHasText, escapeHtml } from "../utils/tiptapText";
 import {
   Layout,
-  Sparkles,
   X,
   ExternalLink,
   Plus,
@@ -36,9 +34,6 @@ import {
   Bold,
   Italic,
   Search,
-  Command,
-  Zap,
-  Moon,
   Pin,
   Globe,
   Upload,
@@ -2910,9 +2905,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
   ];
   const { widths: filmWidths, resizeHandle: filmHandle } = useColumnResize("canvas-filmmap-cols", FILM_TABLE_COLS);
 
-  // --- COMMAND PALETTE STATE ---
-  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
-  const [paletteSearch, setPaletteSearch] = useState("");
 
   // --- ACCORDION ANIMATION & SCROLL STATE ---
   const [expandedCampId, setExpandedCampId] = useState(null);
@@ -3157,25 +3149,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
       await supabase.from("canvas_covers").upsert({ id: 1, covers });
     }, 500);
   }, [covers]);
-
-  // --- GLOBAL KEYBOARD LISTENER (CMD+K) ---
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setIsPaletteOpen((prev) => !prev);
-      }
-      if (e.key === "Escape") {
-        setIsPaletteOpen(false);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  useEffect(() => {
-    if (!isPaletteOpen) setPaletteSearch("");
-  }, [isPaletteOpen]);
 
   // --- ESCAPE KEY TO CLOSE CAMPAIGN MODAL ---
   useEffect(() => {
@@ -3428,96 +3401,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
       setStudioOverrides(map);
     })();
   }, [campaigns]);
-
-  // --- COMMAND PALETTE SEARCH ENGINE WITH ACTIONS ---
-  const paletteResults = React.useMemo(() => {
-    if (!paletteSearch.trim()) return [];
-    const query = paletteSearch.toLowerCase();
-    const results = [];
-
-    const globalActions = [
-      {
-        id: "action-new",
-        title: "Create New Campaign",
-        matchType: "Action",
-        icon: Plus,
-      },
-      {
-        id: "action-copy",
-        title: "Copy Canvas JSON to Clipboard",
-        matchType: "Action",
-        icon: Copy,
-      },
-      {
-        id: "action-dark",
-        title: "Toggle Dark Theme",
-        matchType: "Action",
-        icon: Moon,
-      },
-      {
-        id: "action-sync",
-        title: "Trigger API Sync",
-        matchType: "Action",
-        icon: Zap,
-      },
-    ];
-
-    globalActions.forEach((action) => {
-      if (action.title.toLowerCase().includes(query)) {
-        results.push(action);
-      }
-    });
-
-    campaigns.forEach((camp) => {
-      let matched = false;
-      let matchType = "";
-
-      if (camp.title.toLowerCase().includes(query)) {
-        matched = true;
-        matchType = "Found in Title";
-      } else if (camp.notes.some((n) => n.text.toLowerCase().includes(query))) {
-        matched = true;
-        matchType = "Found in Notes";
-      } else if (
-        camp.links.some(
-          (l) =>
-            l.title.toLowerCase().includes(query) ||
-            l.url.toLowerCase().includes(query)
-        )
-      ) {
-        matched = true;
-        matchType = "Found in Folder Links";
-      }
-
-      if (matched) {
-        results.push({ ...camp, matchType });
-      }
-    });
-
-    return results;
-  }, [paletteSearch, campaigns]);
-
-  const handleSelectPaletteResult = (result) => {
-    setIsPaletteOpen(false);
-    setPaletteSearch("");
-
-    if (result.matchType === "Action") {
-      if (result.id === "action-new") setIsModalOpen(true);
-      if (result.id === "action-copy") {
-        navigator.clipboard.writeText(JSON.stringify(campaigns, null, 2));
-        triggerToast("Canvas data copied to clipboard!", "success");
-      }
-      if (result.id === "action-dark") {
-        toggleDarkMode();
-      }
-      if (result.id === "action-sync") {
-        triggerToast("Wrike Sync triggered! (Placeholder)");
-      }
-      return;
-    }
-
-    handleToggleCamp(result.id);
-  };
 
   // --- REBUILT "BREATHE" ACCORDION TOGGLE (WITH ANCHORING) ---
   const handleToggleCamp = (id) => {
@@ -3957,116 +3840,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
         .wrike-matrix-render a { color: #c2410d; font-weight: 700; text-decoration: underline; }
       `}</style>
 
-      {/* --- COMMAND PALETTE OVERLAY (z-300) --- */}
-      {isPaletteOpen && (
-        <div
-          className="fixed inset-0 z-[300] flex items-start justify-center pt-[15vh] p-4 bg-[#122027]/60 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={() => setIsPaletteOpen(false)}
-        >
-          <div
-            className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl flex flex-col border border-[#dce4ec] overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-4 border-b border-[#dce4ec] flex items-center gap-3 bg-slate-50/50">
-              <Search className="w-6 h-6 text-[#c2410d]" />
-              <input
-                autoFocus
-                type="text"
-                value={paletteSearch}
-                onChange={(e) => setPaletteSearch(e.target.value)}
-                placeholder="Search campaigns, notes, or quick actions..."
-                className="flex-1 bg-transparent text-lg font-medium text-[#122027] outline-none placeholder:text-[#768994]"
-              />
-              <div className="text-[10px] font-black text-[#768994] bg-white px-2 py-1 rounded-md border border-[#dce4ec] shadow-sm">
-                ESC
-              </div>
-            </div>
-
-            <div className="max-h-[60vh] overflow-y-auto custom-scrollbar p-2">
-              {!paletteSearch.trim() ? (
-                <div className="p-10 text-center text-[#768994] flex flex-col items-center gap-2">
-                  <Command className="w-8 h-8 opacity-30" />
-                  <p className="text-sm font-medium">
-                    Search for campaigns or trigger global actions...
-                  </p>
-                </div>
-              ) : paletteResults.length === 0 ? (
-                <div className="p-10 text-center text-[#768994] flex flex-col items-center gap-2">
-                  <Search className="w-8 h-8 opacity-30" />
-                  <p className="text-sm font-medium">
-                    No matches found for "{paletteSearch}"
-                  </p>
-                </div>
-              ) : (
-                paletteResults.map((result) => {
-                  const isAction = result.matchType === "Action";
-                  const ActionIcon = result.icon;
-                  const cover = !isAction
-                    ? covers[result.id] || CAMPAIGN_COVERS[result.id]
-                    : null;
-
-                  return (
-                    <button
-                      key={result.id}
-                      onClick={() => handleSelectPaletteResult(result)}
-                      className="w-full text-left p-4 hover:bg-slate-50 rounded-2xl flex items-center justify-between group transition-colors"
-                    >
-                      <div className="flex items-center gap-4">
-                        <div
-                          className={`w-12 h-12 rounded-[1rem] overflow-hidden shadow-sm shrink-0 flex items-center justify-center border border-slate-100/50 ${
-                            isAction ? "bg-amber-100 text-amber-600" : ""
-                          }`}
-                          style={{
-                            background: !isAction
-                              ? cover
-                                ? "#fff"
-                                : generateGradient(result.title)
-                              : undefined,
-                          }}
-                        >
-                          {isAction ? (
-                            <ActionIcon className="w-6 h-6" />
-                          ) : cover ? (
-                            <img
-                              src={cover}
-                              className="w-full h-full object-cover"
-                              alt=""
-                            />
-                          ) : (
-                            <Film className="w-5 h-5 text-white opacity-90" />
-                          )}
-                        </div>
-                        <div>
-                          <h4 className="text-base font-black text-[#122027] group-hover:text-[#c2410d] tracking-tight transition-colors">
-                            {result.title}
-                          </h4>
-                          <p
-                            className={`text-[11px] font-bold mt-0.5 flex items-center gap-1.5 uppercase tracking-widest ${
-                              isAction ? "text-amber-500" : "text-[#768994]"
-                            }`}
-                          >
-                            {isAction ? (
-                              <Zap className="w-3 h-3" />
-                            ) : (
-                              <Sparkles className="w-3 h-3 text-[#1cc1a5]" />
-                            )}
-                            {result.matchType}
-                          </p>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-black uppercase tracking-widest text-[#768994] bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg group-hover:text-[#c2410d] group-hover:border-[#c2410d]/30 group-hover:bg-[#c2410d]/5 transition-colors flex items-center gap-1.5 shadow-sm">
-                        {isAction ? "Run" : "Jump"}{" "}
-                        <Layout className="w-3.5 h-3.5" />
-                      </span>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* --- FILM MAPPINGS PANEL (admin only) --- */}
       {showMappingsPanel && (() => {
         const hardcoded = FILM_MAPPINGS || {};
@@ -4147,9 +3920,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
       })()}
 
       <PageHeader pageId="canvas" icon={Layout} title="Campaign Canvas" subtitle="Visual Command Centre for active campaigns">
-        <span className="hidden md:flex items-center gap-1 bg-white/15 border border-white/20 px-2.5 py-1 rounded-md text-[10px] font-black tracking-widest text-white/85">
-          <Command className="w-3 h-3" /> Global Cmd + K Menu
-        </span>
         {isAdmin && (
           <>
             <button

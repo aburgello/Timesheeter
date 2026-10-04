@@ -337,7 +337,6 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
                       icon={ClipboardList}
                       title="Staff Timesheet Completion"
                       body="A live list of which staff haven't submitted their timesheet for a given week, so it's obvious at a glance who still needs to."
-                      note="Buildable from submitted tasks vs the staff roster — flagged as the next report to build."
                     />
                   )}
                   {activeTab === "people"     && <PeopleSection />}

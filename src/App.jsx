@@ -9,25 +9,9 @@ import React, {
 } from "react";
 import { motion, AnimatePresence, MotionConfig } from "framer-motion";
 import {
-  Home as HomeIcon,
-  Activity,
-  Timer,
-  LayoutList,
-  Layout,
-  Server,
-  Moon,
-  Copy,
-  Zap,
-  Command,
-  Search,
-  FileDown,
-  Trash2,
-  RefreshCw,
   Key,
   Bell,
   Shield,
-  Users,
-  Briefcase,
   CheckCircle2,
   X,
 } from "lucide-react";
@@ -39,12 +23,10 @@ import ToastHost from "./components/shared/ToastHost";
 import ConfirmHost from "./components/shared/ConfirmHost";
 import DepartmentPreviewBanner from "./components/shared/DepartmentPreviewBanner";
 import { notify } from "./lib/toast";
-import { confirmAction } from "./lib/confirm";
-import { toggleDarkMode } from "./lib/theme";
 import Home from "./components/Home";
 import { useWrikeCache } from "./hooks/useWrikeCache";
 import { PRINT_HUB_RE } from "./lib/wrikeEnrich";
-import { pageIdsFor, pagesFor, boardLabelFor } from "./lib/departments";
+import { pageIdsFor, pagesFor } from "./lib/departments";
 import { useDepartment } from "./hooks/useDepartment";
 import { MANAGER_PAGE_IDS } from "./lib/access";
 import { setWrikeUserId } from "./lib/supabaseClient";
@@ -382,33 +364,6 @@ export default function App() {
     );
   }, [globalWrikeData]);
 
-  // --- Global command palette ---
-  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
-  const [paletteSearch, setPaletteSearch] = useState("");
-  const [paletteStatus, setPaletteStatus] = useState(null);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const searchRef = useRef(null);
-
-  const closePalette = () => {
-    setIsPaletteOpen(false);
-    setPaletteSearch("");
-    setPaletteStatus(null);
-    setSelectedIndex(0);
-  };
-
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setIsPaletteOpen((prev) => !prev);
-        if (!isPaletteOpen) setSelectedIndex(0);
-      }
-      if (e.key === "Escape") closePalette();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isPaletteOpen]);
-
   // 5:30pm reminder check
   useEffect(() => {
     const check = () => {
@@ -436,180 +391,6 @@ export default function App() {
 
   // Admin check
   const isAdmin = wrikeUserId === ADMIN_WRIKE_ID;
-
-  // type → icon bg/text colour
-  const TYPE_STYLES = {
-    Navigation: "bg-indigo-50 text-indigo-600 border-indigo-100",
-    Data: "bg-emerald-50 text-emerald-600 border-emerald-100",
-    System: "bg-purple-50 text-purple-600 border-purple-100",
-    Timer: "bg-amber-50 text-amber-600 border-amber-100",
-  };
-
-  // Palette entries derive from the same department registry Home and the
-  // Rail use, so the palette only ever offers pages this member can actually
-  // reach — and follows renames (e.g. Print Board) automatically. Actions are
-  // gated the same way: Tracker exports only if they have the Tracker, board
-  // sync only if they have the board, Wrike debug only for the admin.
-  const PALETTE_ACTIONS = useMemo(() => {
-    const deptPages = pagesFor(department, wrikeUserId);
-    const hasPage = (id) => deptPages.some((p) => p.id === id);
-
-    const nav = [
-      { id: "nav-home", title: "Home", desc: "Back to the landing page", type: "Navigation", icon: HomeIcon },
-      ...deptPages.map((p, i) => ({
-        id: `nav-${p.id}`, title: p.label, desc: p.desc,
-        type: "Navigation", icon: p.icon, hint: String(i + 1),
-      })),
-    ];
-    if (isAdmin) {
-      nav.push({ id: "nav-wriketest", title: "Wrike API", desc: "Debug: fetch and explore raw Wrike data", type: "Navigation", icon: Server });
-    }
-
-    const actions = [];
-    if (!hasToken) {
-      actions.push({ id: "action-connect", title: "Connect Wrike", desc: "Link your Wrike account to pull tasks & timelogs", type: "System", icon: Key });
-    }
-    if (hasPage("todayslist")) {
-      actions.push({ id: "action-sync", title: "Sync Wrike Statuses", desc: `Go to ${boardLabelFor(department)} → Sync`, type: "Data", icon: Zap });
-    }
-    if (hasPage("timesheet")) {
-      actions.push(
-        { id: "action-copy-ts", title: "Copy Me!", desc: "Copy your Tracker week, ready to paste into your timesheet bookmark", type: "Data", icon: Copy },
-        { id: "action-csv", title: "Download CSV", desc: "Export your Tracker week as a CSV file", type: "Data", icon: FileDown },
-      );
-    }
-    actions.push({ id: "action-dark", title: "Toggle Dark Mode", desc: "Switch between light and dark", type: "System", icon: Moon });
-    if (hasPage("timesheet")) {
-      actions.push({ id: "action-clear", title: "Clear Week's Data", desc: "Delete this week's Tracker tasks", type: "System", icon: Trash2 });
-    }
-    return [...nav, ...actions];
-  }, [department, wrikeUserId, isAdmin, hasToken]);
-
-  const paletteResults = useMemo(() => {
-    const query = paletteSearch.toLowerCase();
-    if (!query) return PALETTE_ACTIONS;
-    return PALETTE_ACTIONS.filter(
-      (a) =>
-        a.title.toLowerCase().includes(query) ||
-        a.desc.toLowerCase().includes(query) ||
-        a.type.toLowerCase().includes(query)
-    );
-  }, [paletteSearch, PALETTE_ACTIONS]);
-
-  const handlePaletteKeyDown = (e) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setSelectedIndex((i) => Math.min(i + 1, paletteResults.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelectedIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" && paletteResults[selectedIndex]) {
-      handleExecuteAction(paletteResults[selectedIndex]);
-    } else if (!paletteSearch && /^[1-9]$/.test(e.key)) {
-      // The numbered kbd hints are real shortcuts: with an empty search box,
-      // pressing a digit jumps straight to that nav entry.
-      const hinted = paletteResults.find((a) => a.hint === e.key);
-      if (hinted) {
-        e.preventDefault();
-        handleExecuteAction(hinted);
-      }
-    }
-  };
-
-  // Reset selection when search changes
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [paletteSearch]);
-
-  const flashStatus = (msg) => {
-    setPaletteStatus(msg);
-    setTimeout(closePalette, 900);
-  };
-
-  const handleExecuteAction = (action) => {
-    if (action.id.startsWith("nav-")) {
-      setActivePage(action.id.replace("nav-", ""));
-      closePalette();
-    } else if (action.id === "action-dark") {
-      toggleDarkMode();
-      closePalette();
-    } else if (action.id === "action-copy-ts") {
-      const data = localStorage.getItem("xyi_timesheet_tasks_v5");
-      if (data) {
-        navigator.clipboard.writeText(
-          JSON.stringify({
-            version: 5,
-            exportDate: new Date().toISOString(),
-            rawTasks: JSON.parse(data),
-          })
-        );
-        flashStatus("✓ JSON copied to clipboard");
-      } else {
-        flashStatus("No timesheet data found");
-      }
-    } else if (action.id === "action-csv") {
-      const data = localStorage.getItem("xyi_timesheet_tasks_v5");
-      if (!data) {
-        flashStatus("No timesheet data found");
-        return;
-      }
-      const tasks = JSON.parse(data);
-      const fmtSecs = (s) => {
-        const h = Math.floor(s / 3600);
-        const m = Math.floor((s % 3600) / 60);
-        return `${h}h ${m}m`;
-      };
-      const headers = [
-        "Day",
-        "Date",
-        "Job",
-        "Territory",
-        "Category",
-        "Time",
-        "Notes",
-      ];
-      const rows = tasks.map((t) => [
-        t.dayOfWeek ?? "",
-        t.date ?? "",
-        t.jobNumber ?? "",
-        t.territory ?? "",
-        t.category ?? "",
-        fmtSecs((t.rawSeconds ?? 0) + (t.additionalSeconds ?? 0)),
-        (t.notes ?? "").replace(/"/g, '""'),
-      ]);
-      const csv = [headers, ...rows]
-        .map((r) => r.map((c) => `"${c}"`).join(","))
-        .join("\n");
-      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Timesheet_${new Date().toISOString().split("T")[0]}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      flashStatus("✓ CSV downloaded");
-    } else if (action.id === "action-sync") {
-      setActivePage("todayslist");
-      closePalette();
-    } else if (action.id === "action-connect") {
-      closePalette();
-      startWrikeOAuth();
-    } else if (action.id === "action-clear") {
-      closePalette();
-      confirmAction({
-        title: "Clear the week's data?",
-        message: "Every logged task for the week will be deleted. This can't be undone.",
-        confirmLabel: "Delete all",
-        danger: true,
-      }).then((ok) => {
-        if (ok) {
-          localStorage.removeItem("xyi_timesheet_tasks_v5");
-          window.location.reload();
-        }
-      });
-    }
-  };
 
   return (
     <MotionConfig reducedMotion="user">
@@ -758,124 +539,6 @@ export default function App() {
             >
               Add in Profile →
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* Command palette */}
-      {isPaletteOpen && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-start justify-center pt-[15vh] p-4 bg-[#122027]/60 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={closePalette}
-        >
-          <div
-            className="bg-white rounded-3xl w-full max-w-xl shadow-2xl flex flex-col border border-[#dce4ec] overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Search bar */}
-            <div className="p-4 border-b border-[#dce4ec] flex items-center gap-3 bg-slate-50/50">
-              <Command className="w-5 h-5 text-[#12a0e1] shrink-0" />
-              <input
-                ref={searchRef}
-                autoFocus
-                type="text"
-                value={paletteSearch}
-                onChange={(e) => setPaletteSearch(e.target.value)}
-                onKeyDown={handlePaletteKeyDown}
-                placeholder="Search commands…"
-                className="flex-1 bg-transparent text-base font-medium text-[#122027] outline-none placeholder:text-[#768994]"
-              />
-              <kbd className="text-[10px] font-black text-[#768994] bg-white px-2 py-1 rounded-md border border-[#dce4ec] shadow-sm">
-                ESC
-              </kbd>
-            </div>
-
-            {/* Status flash */}
-            {paletteStatus ? (
-              <div className="p-6 text-center text-sm font-bold text-[#1cc1a5]">
-                {paletteStatus}
-              </div>
-            ) : (
-              <div className="max-h-[60vh] overflow-y-auto p-2">
-                {paletteResults.length === 0 ? (
-                  <div className="p-10 text-center text-[#768994] flex flex-col items-center gap-2">
-                    <Search className="w-7 h-7 opacity-30" />
-                    <p className="text-sm font-medium">
-                      No results for "{paletteSearch}"
-                    </p>
-                  </div>
-                ) : (
-                  paletteResults.map((result, i) => {
-                    const Icon = result.icon;
-                    const iconStyle =
-                      TYPE_STYLES[result.type] ??
-                      "bg-slate-50 text-slate-500 border-slate-100";
-                    const isSelected = i === selectedIndex;
-                    return (
-                      <button
-                        key={result.id}
-                        onClick={() => handleExecuteAction(result)}
-                        onMouseEnter={() => setSelectedIndex(i)}
-                        className={`w-full text-left px-3 py-3 rounded-xl flex items-center gap-3 transition-colors ${
-                          isSelected ? "bg-slate-100" : "hover:bg-slate-50"
-                        }`}
-                      >
-                        <div
-                          className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 ${iconStyle}`}
-                        >
-                          <Icon className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-black text-[#122027] tracking-tight">
-                            {result.title}
-                          </p>
-                          <p className="text-[11px] text-[#768994] font-medium truncate">
-                            {result.desc}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {result.hint && (
-                            <kbd className="text-[10px] font-black text-[#768994] bg-white px-1.5 py-0.5 rounded border border-[#dce4ec]">
-                              {result.hint}
-                            </kbd>
-                          )}
-                          <span
-                            className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${iconStyle}`}
-                          >
-                            {result.type}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            )}
-
-            {/* Footer hints */}
-            {!paletteStatus && (
-              <div className="px-4 py-2.5 border-t border-[#dce4ec] bg-slate-50/50 flex items-center gap-4 text-[10px] font-bold text-[#768994]">
-                <span>
-                  <kbd className="bg-white border border-[#dce4ec] px-1.5 py-0.5 rounded text-[9px]">
-                    ↑↓
-                  </kbd>{" "}
-                  Navigate
-                </span>
-                <span>
-                  <kbd className="bg-white border border-[#dce4ec] px-1.5 py-0.5 rounded text-[9px]">
-                    ↵
-                  </kbd>{" "}
-                  Execute
-                </span>
-                <span>
-                  <kbd className="bg-white border border-[#dce4ec] px-1.5 py-0.5 rounded text-[9px]">
-                    ESC
-                  </kbd>{" "}
-                  Close
-                </span>
-                <span className="ml-auto opacity-50">Space = timer toggle</span>
-              </div>
-            )}
           </div>
         </div>
       )}
