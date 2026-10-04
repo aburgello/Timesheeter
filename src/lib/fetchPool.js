@@ -1,22 +1,14 @@
 // Bounded-concurrency fetching for the Wrike proxy.
 //
-// Wrike rate-limits per account, and the proxy passes a 429 straight through
-// untouched. A `Promise.all(tasks.map(fetch))` therefore works fine while the
-// list is short and collapses the moment it isn't: every request leaves at
-// once, Wrike refuses most of them, and — because the budget is shared across
-// the whole account — it takes down whatever else was mid-flight too. That is
-// what turned a board with a few hundred assigned tasks into a wall of 429s
-// that also killed the Job Book's folder scan.
-//
-// Two things fix it, and both are needed. A cap on how many requests are in
-// flight keeps the burst under the limit; retrying a 429 handles the case where
-// somebody else's traffic has already spent the budget.
+// Wrike's rate limit is per account and the proxy passes 429s straight through,
+// so firing every request at once gets most of them refused and starves
+// everything else in flight. Two fixes, both needed: cap how many requests are
+// in flight, and retry a 429 when someone else has spent the budget.
 
 /**
- * Map `fn` over `items` with at most `limit` calls in flight at once.
- * Results come back in the original order. Never rejects on an individual
- * failure — `fn` is expected to handle its own errors — so one bad item cannot
- * discard every result that already succeeded, which is what Promise.all does.
+ * Map `fn` over `items` with at most `limit` calls in flight.
+ * Results keep the input order. Never rejects on one item (`fn` handles its own
+ * errors), so one failure can't throw away the results that succeeded.
  */
 export async function mapPool(items, limit, fn) {
   const list = [...items];
@@ -24,8 +16,7 @@ export async function mapPool(items, limit, fn) {
   const width = Math.max(1, Math.min(limit, list.length));
   let next = 0;
 
-  // Each worker pulls the next index rather than taking a fixed slice, so one
-  // slow request doesn't hold up a whole share of the queue behind it.
+  // Workers pull the next index, so one slow request doesn't hold up a fixed share.
   const worker = async () => {
     while (true) {
       const i = next++;
@@ -40,22 +31,13 @@ export async function mapPool(items, limit, fn) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// How long one attempt may take before it is abandoned.
-//
-// Nothing in this app used to time out. `signal` existed on fetchRetrying and
-// no caller ever passed one, so a request that simply never answered hung for
-// ever — and every one of those surfaced to the user as a spinner that span
-// until they gave up, with no error and nothing in the console. A stalled
-// database three layers away and a dead Wrike endpoint looked identical, and
-// both looked like the app was broken.
-//
-// Cloudflare cuts a Worker request off at 30s, so anything past that is never
-// coming back regardless.
+// How long one attempt may take before it's abandoned. Without a timeout a
+// request that never answers is an endless spinner with no error. Cloudflare
+// cuts Worker requests off at 30s anyway.
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-// One attempt's signal: the caller's cancellation and our deadline, combined.
-// Written by hand rather than with AbortSignal.any so this keeps working on
-// runtimes that predate it.
+// The caller's cancellation and our deadline combined. Hand-written rather than
+// AbortSignal.any so it works on older runtimes.
 function withDeadline(signal, timeoutMs) {
   if (!timeoutMs) return { signal, cleanup: () => {} };
   const controller = new AbortController();
@@ -79,17 +61,12 @@ function withDeadline(signal, timeoutMs) {
 }
 
 /**
- * fetch() that waits and retries when the server says it is over budget.
+ * fetch() that waits and retries when the server is over budget (429 or 5xx).
  *
- * Honours Retry-After when present — the server knows better than any backoff
- * curve we invent — and otherwise backs off exponentially from `baseDelay`.
- * Returns the last Response either way, so callers see the 429 rather than an
- * exception if it never clears.
- *
- * An attempt that does not answer within `timeoutMs` is abandoned and retried
- * like any other transient failure, and once the budget is spent it throws
- * rather than hanging. A caller that cancels deliberately is final — that is
- * not a failure to retry.
+ * Honours Retry-After, otherwise backs off exponentially from `baseDelay`.
+ * Returns the last Response if it never clears, so callers see the 429.
+ * An attempt slower than `timeoutMs` is retried like any transient failure, and
+ * throws once retries run out. A caller's own cancel is final.
  */
 export async function fetchRetrying(
   url,
@@ -108,7 +85,6 @@ export async function fetchRetrying(
     }
 
     if (failure) {
-      // The caller pulled the plug — respect it rather than retrying behind them.
       if (signal?.aborted) throw failure;
       if (attempt >= retries) {
         throw new Error(
@@ -119,17 +95,12 @@ export async function fetchRetrying(
       continue;
     }
 
-    // A response with no numeric status isn't something to interpret — a test
-    // double, or a fetch replacement returning a bare object. Hand it straight
-    // back. Testing `status < 500` alone would send it down the RETRY path,
-    // because `undefined < 500` is false, and then crash reaching for
-    // headers it doesn't have.
+    // A response with no numeric status (a test double, say) is returned as-is.
+    // `undefined < 500` is false, so it would otherwise be retried and crash.
     const status = Number(res?.status);
     if (!Number.isFinite(status)) return res;
 
-    // 429 is the one worth waiting out. A 5xx gets the same treatment because
-    // Wrike returns 503 under load, which is the same problem wearing a
-    // different number.
+    // Wrike answers 503 under load, so 5xx is retried like a 429.
     if (status !== 429 && status < 500) return res;
     if (attempt >= retries) return res;
 

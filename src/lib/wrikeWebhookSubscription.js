@@ -2,12 +2,10 @@ import { supabase } from "./supabaseClient";
 
 const DEBOUNCE_MS = 2000;
 
-// Subscribes to wrike_webhook_events inserts (written by worker/index.js's
-// Wrike webhook receiver) and calls onTaskIds with a deduplicated batch of
-// changed task IDs, debounced so a burst of edits to the same/nearby tasks
-// coalesces into one call instead of firing per-event.
-//
-// Returns an unsubscribe function — call it from a useEffect cleanup.
+// Calls onTaskIds with the ids of tasks Wrike reported as changed (rows the
+// Worker's webhook receiver inserts into wrike_webhook_events), de-duplicated
+// and debounced so a burst of edits is one call. Returns the unsubscribe
+// function for a useEffect cleanup.
 export function subscribeToWrikeTaskEvents(onTaskIds) {
   let pendingIds = new Set();
   let debounceTimer = null;

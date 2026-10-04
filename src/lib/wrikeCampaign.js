@@ -1,16 +1,9 @@
-// Bulk Campaign ↔ Wrike write layer.
+// Job Book ↔ Wrike: scanning the folder tree and writing to it. All calls go
+// through the Worker proxy at /api/wrike/*, which attaches the member's token.
 //
-// Every call goes through the Worker proxy at /api/wrike/* (worker/index.js),
-// which attaches the member's OAuth token — the browser never sees it. The
-// proxy is a generic pass-through for any method, so GET/PUT/POST to any Wrike
-// path work here without worker changes.
-//
-// Design rule for this module: **plan** functions are read-only (safe to run
-// any time — they only GET) and return a preview of exactly what an **apply**
-// would change; **apply** functions are the only ones that write. The UI always
-// runs plan → shows the preview → and writes only on an explicit confirm. This
-// is what makes the feature safe to ship without being able to test the live
-// Wrike auth locally: nothing mutates Wrike until a human approves the plan.
+// Rule for this module: **plan** functions only read and return a preview of
+// exactly what the matching **apply** would change; only apply functions write.
+// The UI shows the plan and writes only after an explicit confirm.
 
 import { fetchRetrying } from "./fetchPool";
 import { STUDIO_KEYWORDS_FLAT, STUDIO_CLIENT } from "./studios";
@@ -19,12 +12,8 @@ const WRIKE = "/api/wrike";
 
 // ── Low-level GET helpers ─────────────────────────────────────────────────────
 
-// fetchRetrying, not bare fetch: Wrike's rate limit is per ACCOUNT, so a scan
-// can be refused because of traffic it had nothing to do with — the board
-// loading attachments for a few hundred tasks, say. Treating that 429 as a
-// hard failure aborted the whole scan and reported it as "Scan failed" with a
-// Wrike URL, which reads like the request was malformed rather than merely
-// early. Waiting the limit out costs a second and usually succeeds.
+// fetchRetrying, not fetch: the rate limit is per account, so other people's
+// traffic can 429 a scan. Waiting it out beats failing the whole scan.
 async function wrikeGet(path) {
   const res = await fetchRetrying(`${WRIKE}${path}`);
   if (!res.ok) {
@@ -42,9 +31,7 @@ async function wrikeGetAll(path) {
   do {
     const sep = path.includes("?") ? "&" : "?";
     const url = token ? `${WRIKE}${path}${sep}nextPageToken=${token}` : `${WRIKE}${path}`;
-    // Paged reads are the most exposed of all: a scan that has already fetched
-    // nine pages should not throw the lot away because the tenth arrived while
-    // the account was momentarily over budget.
+    // Retried per page, so one 429 late in a long listing doesn't lose the rest.
     const res = await fetchRetrying(url);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -59,10 +46,9 @@ async function wrikeGetAll(path) {
 
 // ── Custom-field discovery ────────────────────────────────────────────────────
 
-// Find the "Job Number" custom field by title (we don't hardcode its ID — it's
-// discovered at runtime so this keeps working across workspaces / if the field
-// is recreated). Matching is progressively looser so a field literally called
-// "Job Number" wins, but "Job No." / "Job Code" still resolve.
+// Find the "Job Number" custom field by title rather than a hardcoded id, so it
+// survives the field being recreated. Exact "Job Number" wins; looser matches
+// ("Job No.", "Job Code") are fallbacks.
 export async function discoverJobNumberField() {
   const fields = await wrikeGet("/customfields");
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -75,11 +61,9 @@ export async function discoverJobNumberField() {
   return field ? { id: field.id, title: field.title } : null;
 }
 
-// The per-slot price carried on each JOBNUMBER folder in the studio templates.
-// Discovered by title like the Job Number field above, for the same reason.
-// Note it's permissioned to project managers in Wrike, so a member without
-// that visibility gets no field back — callers must treat "not found" as
-// "leave the cost empty", never as an error.
+// The per-slot price on each JOBNUMBER template folder, found by title like Job
+// Number. Only project managers can see it in Wrike, so "not found" means "leave
+// the cost empty", never an error.
 export async function discoverItemPriceField() {
   const fields = await wrikeGet("/customfields");
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -109,21 +93,13 @@ export async function fetchFolderItemPrice(folderId, fieldId) {
 
 // ── Folder / project discovery ────────────────────────────────────────────────
 
-// Pull the whole flat folder list once (id, title, childIds) so callers can walk
-// the tree locally without N round-trips.
+// The whole flat folder list (id, title, childIds), so callers can walk the tree
+// locally. Throws rather than return part of it.
 //
-// Recycle-bin filtering: the FolderTree default mode returns the workspace AND
-// the recycle bin (its root + every recycled descendant) in one flat list — so
-// a *deleted* copy of a film shows up here indistinguishable from the live one
-// unless we filter it out. Wrike tags every tree node with a `scope`: workspace
-// nodes are WsRoot/WsFolder, recycled ones are RbRoot/RbFolder/RbTask. `scope`
-// comes back on its own (like `project` does on the by-id endpoint) — it just
-// can't be named in `fields=` (that 400s "'scope' not allowed"; only childIds is
-// requestable there). We drop every Rb* node at this single source so no
-// downstream matcher (findFilmLocation, findStudioFolder, template lookup,
-// planFilmSync) can ever resolve to something sitting in the recycle bin.
-// Scope-less rows are kept, so if Wrike ever stops returning scope we degrade to
-// the old behaviour rather than nuking the whole tree.
+// Drops the recycle bin: Wrike's folder list includes it, and a deleted copy of a
+// film is otherwise indistinguishable from the live one. Recycled nodes have a
+// `scope` starting "Rb" (it comes back by default but can't be asked for in
+// `fields=`). Rows without a scope are kept.
 export async function fetchAllFolders() {
   const FF = encodeURIComponent("[childIds]");
   const rows = await wrikeGetAll(`/folders?fields=${FF}`);
@@ -139,11 +115,9 @@ export async function fetchAllFolders() {
   return byId;
 }
 
-// Which of the given folder ids are Wrike Projects (item type "Project"). The
-// by-id folder endpoint returns full Folder objects, which carry `project` by
-// DEFAULT — like `scope`, it's not requestable via fields= (that 400s
-// "'project' not allowed"), it just comes back on its own. Batched into chunks
-// of 100 (Wrike's per-request id cap). Returns [{ id, title }] for projects only.
+// Which of the given folder ids are Wrike Projects, as [{ id, title }]. The by-id
+// folder endpoint returns `project` by default (it can't be named in `fields=`).
+// Batched 100 at a time, Wrike's per-request id cap.
 export async function fetchFolderProjects(folderIds) {
   const ids = (folderIds || []).filter(Boolean);
   if (!ids.length) return [];
@@ -158,10 +132,8 @@ export async function fetchFolderProjects(folderIds) {
 
 const norm = (s) => (s || "").toUpperCase().replace(/[_\s]+/g, " ").trim();
 
-// Locate a studio's root folder (e.g. "Paramount") — a sibling of Universal /
-// SONY inside the STUDIO space's root, per the workspace layout. We match a
-// folder whose title is exactly the studio name (normalised), preferring one
-// that actually contains child projects so we don't pick an empty namesake.
+// A studio's root folder ("Paramount"): a folder titled exactly the studio name,
+// preferring one that has children over an empty namesake.
 export function findStudioFolder(byId, studioName) {
   const wanted = norm(studioName);
   const matches = Object.values(byId).filter((f) => norm(f.title) === wanted);
@@ -171,8 +143,8 @@ export function findStudioFolder(byId, studioName) {
   return matches[0];
 }
 
-// Every folder id in the subtree rooted at rootId (inclusive). Used by the
-// template-write guard: we never write into any of these ids.
+// Every folder id under rootId, inclusive. The template-write guard never writes
+// into these.
 export function collectSubtreeIds(byId, rootId, seen = new Set()) {
   if (!rootId || seen.has(rootId)) return seen;
   seen.add(rootId);
@@ -181,43 +153,24 @@ export function collectSubtreeIds(byId, rootId, seen = new Set()) {
   return seen;
 }
 
-// Studio keywords and the client each maps to now come from studios.js, which
-// the enricher reads too. They used to be two hand-maintained lists that had
-// drifted apart in both directions -- the enricher knew marvel/pixar/lucasfilm/
-// columbia/tristar/mgm/wbros/wb and this one knew none of them; this one knew
-// Lionsgate and XYi and the enricher knew neither -- so the scan could propose
-// a client the enricher would never derive.
-//
-// Note this file still matches with its own rule (word boundaries on the raw
-// title, below) rather than studios.js's separator-aware one. That difference
-// is deliberate and load-bearing, and the reason is bigger than it looks.
-//
-// Measured against the cached tree: adopting the separator-aware rule here
-// would newly treat 63 folders as studio nodes -- _Universal_MASTER,
-// _Paramount_MASTER_TEMPLATES, _Sony_MASTER_TEMPLATES, _Universal House Job,
-// _XYi IN HOUSE DIGITAL and the like. Those 63 have 7,209 descendants between
-// them, of which 2,780 are job-code folders.
-//
-// That matters because describeChain locates the studio node and then takes its
-// CHILD as the film. Moving the studio node down the chain moves the film with
-// it, so this would change the proposed film on the majority of job folders in
-// the account. Not a refactor -- a re-scan of the whole book. The LIST is
-// shared; the matching stays separate until someone runs that scan and reads
-// the review.
+// Studio keywords and their clients come from studios.js, shared with the
+// enricher. The MATCHING rule here is deliberately still this file's own (word
+// boundaries on the raw title). studios.js's separator-aware rule would make 63
+// more folders (_Universal_MASTER, _Sony_MASTER_TEMPLATES, …) count as studios,
+// and describeChain takes the studio's child as the film, so it would change
+// the proposed film on most job folders. Only switch after running the scan
+// regression (npm run scan:diff) and reading the result.
 const STUDIO_KEYWORDS = STUDIO_KEYWORDS_FLAT;
 
 const deUnderscore = (s) => (s || "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
 
-// Region qualifiers that mark a regional studio folder (e.g. "UNIVERSAL AUSTRALIA")
-// as a variant of a base studio ("UNIVERSAL"). Used both to pick a sensible
-// default territory (findFilmLocation) and to label scanned jobs by region.
+// Region qualifiers that mark a regional studio folder ("UNIVERSAL AUSTRALIA") as
+// a variant of a base studio. Used for default territories and to label jobs.
 const REGION_QUALIFIER = /\b(AUSTRALIA|UK|US|USA|NEW MEDIA|INTERNATIONAL|INTL|EU|EMEA|APAC|CANADA|GERMANY|FRANCE|SPAIN|ITALY|JAPAN|KOREA|LATAM|NORDIC|BENELUX)\b/i;
 
-// The same slot exists under several studio folders — "Sky VIP" under UNIVERSAL
-// UK is a different job from the one under UNIVERSAL — and the timesheet site
-// distinguishes them by prefixing the description with a short region code
-// ("UK - Sky VIP Assets", "NM - Digital - Packshots"). Without this every
-// territory's copy of a slot scans in under one indistinguishable label.
+// The same slot exists under several studio folders and is a different job in
+// each. The timesheet site tells them apart by a region prefix on the
+// description ("UK - Sky VIP Assets"), so the scan adds the same prefix.
 const REGION_SHORT = {
   AUSTRALIA: "AUS", UK: "UK", US: "US", USA: "US", "NEW MEDIA": "NM",
   INTERNATIONAL: "INT", INTL: "INT", EU: "EU", EMEA: "EMEA", APAC: "APAC",
@@ -225,10 +178,8 @@ const REGION_SHORT = {
   JAPAN: "JPN", KOREA: "KOR", LATAM: "LATAM", NORDIC: "NORDIC", BENELUX: "BENELUX",
 };
 
-// A studio folder with no qualifier ("UNIVERSAL") is the international arm —
-// that's the site's convention ("INT - DOOH Outdoor Campaign") and Management's
-// own STUDIO_CLIENT map agrees ("Universal International"). XYi is excluded: its
-// internal jobs have no territory at all.
+// A studio folder with no qualifier is the international arm ("INT - …" on the
+// timesheet site). XYi's internal jobs have no territory.
 const regionOf = (studioTitle, studioKw) => {
   const m = REGION_QUALIFIER.exec(studioTitle || "");
   if (!m) {
@@ -245,32 +196,21 @@ const regionOf = (studioTitle, studioKw) => {
 };
 
 // Scan the whole visible folder tree and return one candidate Job Book row per
-// unique XY code found.
+// XY code.
 //
-// Real job folders live at STUDIO space → <Studio> (e.g. SONY) → <Film> (e.g.
-// "Focker In-Law") → <Job> ("XY025563_Germany_Launch_Assets"). So for every
-// folder whose title carries an XY code we:
-//   • take the code (XY025563),
-//   • read the description from the folder-title suffix after the code
-//     ("_Germany_Launch_Assets" → "Germany Launch Assets"),
-//   • climb the ancestry to the studio folder → derive client, and take the
-//     child-of-studio on that path as the film ("Focker In-Law"),
-//   • assemble the canonical Job Book line "Film : CODE, Description".
-// Folders that are ALREADY in canonical "Film : CODE, Desc" shape are taken
-// verbatim instead of reassembled. `totalFolders` is returned so the caller can
-// tell an empty result (pattern miss) apart from a dead/blocked fetch (0 folders).
+// Job folders live at <Studio> › <Film> › <Job> ("XY025563_Germany_Launch_Assets").
+// For each, the code and description come from the folder title, the client
+// from the studio found by climbing, and the film from the folder between studio
+// and job. Titles already in "Film : CODE, Desc" form are taken as they are.
+// `totalFolders` tells an empty result apart from a failed fetch.
 export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   const KEYWORDS = studioKeywords || STUDIO_KEYWORDS;
   const byId = await fetchAllFolders();
   const totalFolders = Object.keys(byId).length;
 
-  // Upward parent map (fetchAllFolders only gives childIds, i.e. downward).
-  // ALL parents, not one: Wrike shares a single folder into several places — the
-  // whole territory feature in findFilmLocation depends on it. A last-writer-wins
-  // `parentOf[c] = f.id` map silently picks one arbitrary parent, so a film also
-  // filed under _Archive (or a master-template tree) climbs the wrong path and
-  // the job comes back archived, film-less and region-less — which hides it from
-  // the scan's default "Active only" view entirely.
+  // Upward map with ALL parents: Wrike shares one folder into several places
+  // (territories depend on it). Keeping one arbitrary parent sent jobs up an
+  // _Archive path and hid them from the "Active only" view.
   const parentsOf = {};
   Object.values(byId).forEach((f) =>
     (f.childIds || []).forEach((c) => { (parentsOf[c] || (parentsOf[c] = [])).push(f.id); })
@@ -278,22 +218,12 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
 
   const studioKwOf = (title) =>
     KEYWORDS.find((k) => new RegExp(`\\b${k}\\b`, "i").test(title || ""));
-  // An "archived" job is one filed under the studio's _Archive folder, a
-  // master-template tree, or _Old. Cheap, org-native active/inactive signal — no
-  // per-job status fetch, which job folders don't carry anyway (only Projects
-  // do). What this flags is hidden by the scan review's "Active only" tick.
+  // "Archived" = filed under the studio's _Archive, a master-template tree, or _Old
+  // (where New Media puts finished campaigns). The scan review's "Active only" tick
+  // hides these.
   //
-  // _Old belongs here even though it isn't spelled "archive": under
-  // "Universal - New Media" it is where finished campaigns go, holding year
-  // folders which hold the real films. Those jobs are real and correctly
-  // described — the scan resolves them to Wicked, Nosferatu, The Brutalist and
-  // so on (see isOrgFolder) — they are simply not work anyone is doing now, and
-  // they dominated the review with dozens of corrections nobody wanted to make.
-  //
-  // ANCHORED WHOLE, and on the underscore. "_Old" is the studio's container
-  // convention; "Old" without it is the 2021 M. Night Shyamalan film, a real
-  // campaign folder that must stay live. A substring test for "old" would take
-  // both, along with "Old Guard", "The Old Oak" and anything else.
+  // Anchored to the whole title "_Old": "Old" without the underscore is a real film
+  // folder, and a substring test would also catch "Old Guard" and the like.
   const isOldContainer = (title) => /^_old$/i.test((title || "").trim());
   const isArchiveNode = (title) =>
     /(^|[\s_])_?archive\b/i.test(title || "") ||
@@ -303,60 +233,28 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // A bare year / number (e.g. "2026") is an organisational folder, not a film.
   const isYearFolder = (title) => /^\d{2,4}$/.test((title || "").trim());
 
-  // Organisational, not a film. The studio's own convention marks these with a
-  // leading underscore, and it is followed without exception: of 665 such
-  // folders in the tree, every one is a container -- _Market, _Masters,
-  // _Title_Delivery, _Supplied, _House_Keeping, _Media_Approval, _TERRITORY,
-  // _BRIEF_TEMPLATES -- and not one is a film title.
-  //
-  // Skipping them matters because deUnderscore turns a folder name into a film
-  // name, so "_Old" became a film called "Old". Under Universal - New Media,
-  // "_Old" holds year folders which hold the real films (Wicked, The Brutalist,
-  // Nosferatu, Wolf Man), and the film loop below stopped at "_Old" because it
-  // only knew how to skip years. 47 Job Book rows across many different films
-  // collapsed onto the single film "Old" -- 81% of them with a generic
-  // description ("NM Titles", "Packshots FinalWindow"), spanning 15 months,
-  // where a real campaign spans a few. Their descriptions still name the films
-  // they belong to: BLB, WYD, DRP, PHS, HDG, JW4.
-  //
-  // This also picks up _zArchive, which isArchiveNode misses -- its pattern
-  // wants "archive" directly after the boundary, and "_zArchive" has a "z" in
-  // between.
+  // A leading underscore marks an organisational folder (_Market, _Masters,
+  // _Supplied, _Old, _zArchive …), never a film. Skipping them stops the film being
+  // read as "Old" for jobs under Universal - New Media › _Old › <year> › <film>.
   const isOrgFolder = (title) => /^_/.test((title || "").trim());
 
-  // The medium is not a film either. Caught by measuring the org-folder skip
-  // above against the real tree: for "UNIVERSAL › _Universal House Job ›
-  // Digital › <job>", skipping the container landed on "Digital", so seven job
-  // folders came back with the film "Digital" or "Print" — worse than the
-  // "Universal House Job" they had before. Skipping the medium too means those
-  // fall through to the child-of-studio fallback and stay as they were.
+  // The medium isn't a film either: under "_Universal House Job › Digital › <job>"
+  // skipping the container would otherwise land on "Digital".
   const isMediumFolder = (title) =>
     /^(digital|print)$/i.test(deUnderscore(title || ""));
 
-  // A house-job container is not something to skip past — it IS the answer.
-  //
-  // The other containers (_Old, _zArchive) hold real films further down, so
-  // skipping them finds one. House-job trees do not: they hold work types.
-  // Under "_Universal House Job > Print > Cards" the skip landed the film on
-  // "Cards", and under "_UK House Jobs > OLS - UK" on "OLS - UK" — three and
-  // one job code respectively, both worse than the container name they had.
-  // A house job has no film by definition, so the container is the best label
-  // available and the descent should stop there.
-  //
-  // Anchored at the END, and never on a job folder, because "Housekeeping For
-  // Beginners" is a real film and "XY018540_Digital_Housekeeping" is a job. A
-  // substring test for "housekeeping" would swallow both.
+  // A house-job container isn't skipped, it IS the answer: house jobs have no film,
+  // and descending further lands on work types ("Cards"). Anchored at the end and
+  // never on a job folder, because "Housekeeping For Beginners" is a real film.
   const isHouseJobFolder = (title) => {
     const t = deUnderscore(title || "");
     if (/^XY\d{5,6}/i.test(t)) return false;
     return /\b(house\s*jobs?|house\s*keeping|housekeeping)$/i.test(t);
   };
 
-  // Climb the full ancestry of a job folder. The film is the folder between the
-  // studio and the job — but studios often insert a "2026" year folder in
-  // between, so we take the DEEPEST non-year folder on that stretch (closest to
-  // the job) rather than blindly the child-of-studio, which would be the year.
   // Read one ancestry chain (job → … → root) into the fields a Job Book row needs.
+  // The film is the deepest real folder between studio and job, skipping year and
+  // organisational folders, not blindly the studio's child.
   const describeChain = (chain) => {
     const si = chain.findIndex((n) => n && studioKwOf(n.title));
     const studioKw = si >= 0 ? studioKwOf(chain[si].title) : "";
@@ -371,18 +269,14 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
           filmNode = chain[i]; break;
         }
       }
-      // Nothing but year/organisational folders between job and studio — fall
-      // back to the child-of-studio as before. That keeps the house jobs
-      // working: a job filed straight under "_Universal_House_Keeping" has no
-      // real film folder to find, and the fallback still names it rather than
-      // leaving the row film-less.
+      // Nothing usable between job and studio: fall back to the studio's child, which
+      // still names house jobs filed straight under a house-keeping folder.
       if (!filmNode) filmNode = chain[si - 1];
     }
     return {
       studioKw,
-      // The studio node's FULL title, not just the matched keyword: "UNIVERSAL UK"
-      // and "UNIVERSAL" both match `Universal`, and the qualifier is the only
-      // thing that tells the two territories' jobs apart.
+      // The studio node's FULL title: "UNIVERSAL UK" and "UNIVERSAL" both match
+      // `Universal`, and the qualifier is what separates their jobs.
       studioTitle: si >= 0 ? chain[si].title || "" : "",
       filmTitle: filmNode ? deUnderscore(filmNode.title) : "",
       archived: chain.some((n) => isArchiveNode(n && n.title)),
@@ -396,16 +290,12 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
   // order is live-and-placed > placed > live > whatever we got.
   const ancestryOf = (startId, folderTitle) => {
     const chains = [];
-    // Set when a walk stops because it ran out of budget rather than because it
-    // reached a root. The chain pushed in that case is a PARTIAL one, and a
-    // partial chain yields no film, no client and no region — which reads
-    // downstream exactly like a job that genuinely has none. Recording it is
-    // what lets the scan review say "could not establish" instead of "none".
+    // Set when a walk hits its limits before reaching a root. A partial chain gives
+    // no film, client or region, which would otherwise look like a job that genuinely
+    // has none, so the review can say "could not establish".
     let truncated = false;
     const walk = (id, chain, seen) => {
-      // Bounded: shared folders can fan out, and this runs per job code across
-      // the whole tree. Depth 40 matches the old climb; 24 paths is plenty to
-      // find a live one without letting a pathological tree stall the scan.
+      // Bounded, because shared folders fan out and this runs per job code.
       if (chain.length >= 40 || chains.length >= 24) { truncated = true; chains.push(chain); return; }
       const parents = (parentsOf[id] || []).filter((pid) => byId[pid] && !seen.has(pid));
       if (!parents.length) { chains.push(chain); return; }
@@ -415,9 +305,8 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     };
     walk(startId, [], new Set([startId]));
 
-    // Keep the node list beside each summary so the winning path can be
-    // recovered for the "Wrike: studio › film › folder" breadcrumb the scan
-    // review shows next to a correction.
+    // Keep the node list so the winning path can be shown as a breadcrumb in the
+    // scan review.
     const scored = chains.map((chain) => ({ ...describeChain(chain), chain }));
     const rank = (d) => (d.hasStudio ? 2 : 0) + (d.archived ? 0 : 1);
     const best = scored.reduce((a, b) => (rank(b) > rank(a) ? b : a), scored[0]);
@@ -434,22 +323,9 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
 
   const CODE = /XY\d{5,6}/i;
 
-  // Group every folder carrying a code, THEN choose — rather than taking the
-  // first one and skipping the rest.
-  //
-  // "First" used to mean the order Wrike's /folders endpoint happened to return
-  // rows in: byId is keyed by folder id, those ids are non-numeric strings, so
-  // JS iterates them in insertion order, and insertion order is just the API's
-  // page order. Wrike documents no ordering there, so a code sitting on both a
-  // live folder and an _Archive copy resolved to whichever Wrike listed first —
-  // and could resolve differently on the next scan. When the archive copy won,
-  // the job came back archived with the archive folder's ancestry for a film,
-  // and dropped out of the scan's default "Active only" view entirely.
-  //
-  // ancestryOf already knows how to rank: it scores every PATH out of one
-  // folder as (hasStudio ? 2 : 0) + (archived ? 0 : 1). The same score decides
-  // between FOLDERS here, so a live placed copy beats an archived one no matter
-  // what order they arrive in.
+  // Group every folder carrying a code, then choose with the same score ancestryOf
+  // uses (studio found, not archived). Taking the first one meant whichever Wrike
+  // happened to list first, so an _Archive copy could win and hide a live job.
   const foldersByCode = new Map();
   Object.values(byId).forEach((f) => {
     const title = (f.title || "").trim();
@@ -462,18 +338,15 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
 
   const folderRank = (d) => (d.hasStudio ? 2 : 0) + (d.archived ? 0 : 1);
 
-  // Codes that live on more than one folder, so the caller can surface the
-  // ambiguity instead of it being silently resolved. Two live folders under
-  // different studios sharing a code is a data problem in Wrike that no
-  // heuristic can settle — but it should be visible, not invisible.
+  // Codes on more than one folder, so the caller can show the ambiguity: two live
+  // folders sharing a code is a data problem no heuristic can settle.
   const contestedCodes = [];
 
   const out = [];
   foldersByCode.forEach((candidates, code) => {
     const described = candidates.map((c) => ({ ...c, ...ancestryOf(c.f.id, c.title) }));
 
-    // Best rank wins; ties break on folder id so a rescan always agrees with
-    // itself. Arbitrary, but deterministic — which the old order was not.
+    // Ties break on folder id so a rescan always agrees with itself.
     described.sort((a, b) => folderRank(b) - folderRank(a) || String(a.f.id).localeCompare(String(b.f.id)));
     const chosen = described[0];
 
@@ -489,9 +362,8 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
     const { studioKw, studioTitle, filmTitle: ancestorFilm, archived, folderPath,
             truncated: ancestryTruncated } = chosen;
     const region = regionOf(studioTitle, studioKw);
-    // "Universal Pictures UK" / "Universal Pictures International" — the client
-    // the Job Book and the timesheet site both name, rather than every region's
-    // jobs collapsing onto a bare "Universal Pictures".
+    // Region-specific client ("Universal Pictures UK"), as the Job Book and the
+    // timesheet site name it.
     const baseClient = studioKw ? STUDIO_CLIENT[studioKw.toLowerCase()] || studioKw : "";
     const client = baseClient && region ? `${baseClient} ${region.name}` : baseClient;
 
@@ -504,10 +376,8 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
         title.slice(title.indexOf(m[0]) + m[0].length).replace(/^[\s,–—-]+/, "")
       );
     } else {
-      // Underscore folder ("XY025563_Germany_Launch_Assets") — reassemble, and
-      // carry the region the folder lives under into the description the way
-      // the timesheet site writes it ("UK - Sky VIP"). Skipped when the folder
-      // already leads with a region code, so a rescan can't stack "UK - UK - ".
+      // Underscore folder: reassemble, prefixing the region the way the timesheet site
+      // does ("UK - Sky VIP"), unless the folder already starts with a region code.
       projectDescription = deUnderscore(
         title.slice(title.indexOf(m[0]) + m[0].length).replace(/^[\s,_–—-]+/, "")
       );
@@ -526,16 +396,8 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
                ancestryTruncated });
   });
 
-  // Pull each job folder's Wrike createdDate (the flat tree endpoint doesn't
-  // carry it; the by-id endpoint returns it by default). Batched 100 at a time.
-  // Never let this discard the scan. By the time we get here the whole tree has
-  // been fetched, inverted, walked and ranked — minutes of work and a large
-  // slice of the account's shared rate-limit budget — and wrikeGet throws on any
-  // non-OK response, so one 429 that outlived its retries used to throw all of
-  // it away for a date shown beside the row. createdDate is already optional
-  // downstream (`createdById[o.folderId] || null` below), which is the same call
-  // fetchFolderItemPrice makes for a permissioned price: never block staging a
-  // job on a lookup the job does not depend on.
+  // Each job folder's createdDate (the by-id endpoint has it, the tree doesn't),
+  // 100 at a time. Optional: a failure here must not throw away the whole scan.
   const ids = out.map((o) => o.folderId).filter(Boolean);
   const createdById = {};
   let createdDateBatchesFailed = 0;
@@ -553,44 +415,22 @@ export async function scanStudioJobNumbers({ studioKeywords } = {}) {
 
   out.sort((a, b) => a.code.localeCompare(b.code));
   out.totalFolders = totalFolders; // stashed on the array for the caller's diagnostics
-  // Codes found on more than one folder. The pick above is deterministic and
-  // prefers a live placed copy, but where two live folders genuinely share a
-  // code no heuristic can settle it — so hand the ambiguity to the caller
-  // rather than resolving it out of sight.
   out.contestedCodes = contestedCodes;
-  // Diagnostics the caller can show beside the scan, in the same spirit as
-  // contestedCodes: say what the scan could not establish rather than letting
-  // it read as established. `truncatedCodes` are jobs whose ancestry walk hit
-  // its own bounds, so their film/client/region reflect a partial climb and are
-  // not distinguishable, from the row alone, from a job that genuinely has none.
+  // Jobs whose ancestry walk hit its limits, so their film/client/region may be
+  // incomplete. Shown by the caller like contestedCodes.
   out.truncatedCodes = out.filter((o) => o.ancestryTruncated).map((o) => o.code);
   out.createdDateBatchesFailed = createdDateBatchesFailed;
   return out;
 }
 
-// Do two job descriptions describe the same job?
+// Do two job descriptions describe the same job? Used by the Job Book
+// reconciliation to tell "filed against a different job" (bad data) from "worded
+// differently" (every row).
 //
-// Used by the Job Book reconciliation to tell "this row was filed against a
-// different job" from "this row is worded differently", which look identical
-// to a string compare and could not matter more: the first is bad data, the
-// second is every row.
-//
-// Deliberately loose, in two ways:
-//
-//   • Punctuation, underscores and case are dropped. The same description
-//     arrives as "French_Canada_Assets" from a folder title and "French Canada
-//     Assets" once reassembled.
-//   • Containment counts as agreement, because the two sides legitimately
-//     carry different amounts of the same information. scanStudioJobNumbers
-//     prefixes the region the way the timesheet site writes it ("INT - French
-//     Canada Assets"); a description read straight off the folder at pull time
-//     has no region to prefix. Neither is wrong, and demanding equality would
-//     propose a rewrite for essentially every row in the book.
-//
-// Containment errs toward saying "these agree", so a short description that
-// happens to sit inside a longer one is missed rather than falsely rewritten.
-// That is the right direction to be wrong in: a missed correction costs a
-// scruffy label, a false one overwrites a description somebody chose.
+// Deliberately loose: punctuation, underscores and case are ignored, and one
+// containing the other counts as agreeing (the scan adds a region prefix that a
+// description read at pull time doesn't have). It errs toward "agree", because a
+// false disagreement would overwrite a description somebody chose.
 const descKey = (s) =>
   String(s || "")
     .toLowerCase()
@@ -605,8 +445,7 @@ export function descriptionsAgree(a, b) {
   return x === y || x.includes(y) || y.includes(x);
 }
 
-// Count JOBNUMBER folders anywhere beneath a node — used to score master-template
-// candidates (the real, populated template has the most).
+// Count JOBNUMBER folders beneath a node, to score master-template candidates.
 function countJobNumberFolders(byId, rootId, seen = new Set()) {
   if (seen.has(rootId)) return 0;
   seen.add(rootId);
@@ -617,10 +456,9 @@ function countJobNumberFolders(byId, rootId, seen = new Set()) {
   return n;
 }
 
-// Locate a studio's master-template root (e.g. "_Paramount_MASTER_TEMPLATES").
-// Same fuzzy match the fetch uses: title contains the studio AND "MASTER
-// TEMPLATE"; among candidates pick the one with the most JOBNUMBER folders,
-// penalising obvious duplicates (copy/archive), so we copy the real template.
+// A studio's master-template root ("_Paramount_MASTER_TEMPLATES"): title has the
+// studio and "MASTER TEMPLATE"; the most JOBNUMBER folders wins, and copies or
+// archives are penalised.
 export function findMasterTemplateFolder(byId, studioName) {
   const wanted = norm(studioName);
   const candidates = Object.values(byId).filter((f) => {
@@ -638,28 +476,17 @@ export function findMasterTemplateFolder(byId, studioName) {
   return best ? { id: best.folder.id, title: best.folder.title, jobCount: best.jobCount } : null;
 }
 
-// Which studio does this film live under? Films sit one level inside a studio
-// folder, so the film's parent IS its studio. Resolved from Wrike rather than
-// stored: the films table only keeps a title, and deriving it keeps working for
-// films added long before any of this existed.
+// Which studio a film lives under: the film project's parent folder, read from
+// Wrike (the films table only stores titles). Matched with norm(), since Wrike
+// uses underscores and the films table spaces.
 //
-// Matched with norm(), not raw equality — Wrike names projects with underscores
-// ("Fake_Film_Tryout") while the films table stores spaces ("Fake Film Tryout").
-//
-// The subtle part: a film pushed before job folders were renamed in place has a
-// folder named after the film INSIDE the film project, so the title matches
-// twice — the project under Paramount, and the wrapper under that project.
-// Picking the wrapper makes its parent (the project) look like the studio, and
-// we'd go hunting for a "Fake_Film_Tryout" master template. So prefer the match
-// whose parent is NOT itself the same film: the outermost one, sitting in its
-// real studio folder.
+// Older pushes left a folder named after the film INSIDE the film project, so the
+// title can match twice. Prefer the match whose parent isn't the same film.
 export function findFilmLocation(byId, filmTitle) {
   if (!(filmTitle || "").trim()) return null;
 
-  // childIds is the only link Wrike gives us, so invert it to walk upwards. A
-  // Wrike project can be shared into SEVERAL folders, so keep ALL parents, not
-  // just the first — that's what lets one film show up under multiple studio
-  // "territories" (UNIVERSAL, UNIVERSAL AUSTRALIA, …).
+  // Invert childIds to walk upwards, keeping ALL parents: one film project can be
+  // shared into several studio "territories" (UNIVERSAL, UNIVERSAL AUSTRALIA, …).
   const parentsOf = {};
   Object.values(byId).forEach((f) =>
     (f.childIds || []).forEach((c) => { (parentsOf[c] || (parentsOf[c] = [])).push(f.id); })
@@ -668,9 +495,8 @@ export function findFilmLocation(byId, filmTitle) {
   const isSameFilm = (t) => norm(t) === norm(filmTitle);
   const matches = Object.values(byId).filter((f) => isSameFilm(f.title));
 
-  // Every (film project × studio parent) pair, skipping same-film wrappers. One
-  // shared project yields several territories; separate per-region projects also
-  // collapse in here. De-duped by studio folder id.
+  // Every (film project × studio parent) pair, skipping same-film wrappers,
+  // de-duplicated by studio folder.
   const territories = [];
   const seen = new Set();
   for (const f of matches) {
@@ -687,10 +513,8 @@ export function findFilmLocation(byId, filmTitle) {
   }
   if (!territories.length) return null;
 
-  // Default to the base studio: prefer a parent WITHOUT a region qualifier, then
-  // the one whose project carries the most slot folders ("where the real stuff
-  // is"), then the shorter name. This is why "The Odyssey" defaults to UNIVERSAL,
-  // not UNIVERSAL AUSTRALIA.
+  // Default to the base studio: no region qualifier first, then the one with the
+  // most slot folders, then the shorter name.
   const slotCount = (id) => {
     let n = 0;
     const seenN = new Set();
@@ -711,24 +535,15 @@ export function findFilmLocation(byId, filmTitle) {
   return { ...primary, territories };
 }
 
-// Build a display tree of a film's OWN Wrike subtree — NOT the studio template.
-// This is the truthful view: an old campaign's folders have already been renamed
-// in place (JOBNUMBER_French_Canada_Assets → XY025623_French_Canada_Launch) and
-// have drifted from the template's slot set entirely, so the template can't be
-// reconciled against them — only the film itself tells you what exists.
+// A display tree of the film's OWN Wrike subtree, not the studio template: old
+// campaigns have renamed and drifted from the template, so only the film itself
+// says what exists. Slots are tagged from their live names: "XY#####_" is
+// allocated, "JOBNUMBER_" is still pending, so a numbered film can't be offered
+// for re-numbering.
 //
-// Every job-slot folder is tagged from its LIVE name, which is the source of
-// truth for allocation: a title starting "XY#####_" already carries a real job
-// number (allocated); one still "JOBNUMBER_" is a genuine pending slot. This is
-// what stops an already-numbered film from reading as "0 activated" and inviting
-// a duplicate re-number.
-//
-// Returns { filmProject, studio, studioFolder, territories, tree, hasSlots } —
-// hasSlots:false means the film has no job-slot folders yet (never pushed), so
-// the caller should fall back to the studio template. null means the film project
-// wasn't found in Wrike at all. `territories` lists every studio this film lives
-// under (for the territory swap); pass a studioFolderId to build a specific one
-// (otherwise the base studio picked by findFilmLocation wins).
+// Returns { filmProject, studio, studioFolder, territories, tree, hasSlots }, or
+// null if the film isn't in Wrike. hasSlots:false means never pushed (use the
+// studio template). Pass studioFolderId to pick a territory.
 export function buildFilmView(byId, filmTitle, studioFolderId) {
   const loc = findFilmLocation(byId, filmTitle);
   if (!loc?.filmProject) return null;
@@ -767,18 +582,15 @@ export function buildFilmView(byId, filmTitle, studioFolderId) {
 
 // ── Req 6: Film DB sync ───────────────────────────────────────────────────────
 
-// Read-only plan: which Wrike film projects are missing from the films table.
-// `existingTitles` is the set already in Supabase. We never delete films that
-// exist locally but not in Wrike — this is additive only, so a hand-added film
-// is never clobbered by the sync.
+// Read-only plan: Wrike film projects missing from the films table. Additive
+// only: films that exist only locally are never deleted.
 export async function planFilmSync(studioName, existingTitles) {
   const byId = await fetchAllFolders();
   const studioFolder = findStudioFolder(byId, studioName);
   if (!studioFolder) {
     return { error: `No “${studioName}” folder found in Wrike.`, studioFolder: null, toAdd: [] };
   }
-  // Wrike project folders are named with underscores (Angry_Birds_3_Movie) —
-  // present them as clean, spaced film titles.
+  // Wrike project names use underscores; show them as spaced film titles.
   const clean = (t) => (t || "").replace(/_/g, " ").replace(/\s+/g, " ").trim();
   const have = new Set([...existingTitles].map((t) => clean(t).toLowerCase()));
   const projects = await fetchFolderProjects(studioFolder.childIds);
@@ -798,19 +610,16 @@ export async function planFilmSync(studioName, existingTitles) {
 
 // ── Tasks beneath a folder + custom-field writes (reqs 1 & 2) ─────────────────
 
-// Every task AND subtask anywhere beneath a folder. Wrike's folder-tasks
-// endpoint recurses into descendant folders by default; subTasks=true pulls the
-// subtasks in too. We only request customFields (the field we compare/write) —
-// other optional fields (subTaskIds etc.) are deliberately omitted because
-// Wrike 400s when some of them are passed explicitly on list queries.
+// Every task and subtask anywhere beneath a folder (the endpoint recurses by
+// default; subTasks=true adds subtasks). Only customFields is requested: Wrike
+// 400s on some other optional fields in list queries.
 export async function fetchTasksUnderFolder(folderId) {
   const FF = encodeURIComponent("[customFields]");
   return wrikeGetAll(`/folders/${folderId}/tasks?fields=${FF}&subTasks=true&pageSize=1000`);
 }
 
-// Write the Job Number custom field on a single task. Wrike takes params in the
-// query string (like every other call this app makes), with the customFields
-// array JSON-encoded.
+// Write the Job Number field on one task. Params go in the query string, with
+// customFields JSON-encoded.
 async function putTaskJobNumber(taskId, fieldId, value) {
   const cf = encodeURIComponent(JSON.stringify([{ id: fieldId, value: String(value) }]));
   const res = await fetch(`${WRIKE}/tasks/${taskId}?customFields=${cf}`, { method: "PUT" });
@@ -820,10 +629,9 @@ async function putTaskJobNumber(taskId, fieldId, value) {
   }
 }
 
-// Read-only plan for req 1/2: which tasks under `folderId` don't yet carry
-// `jobNumber` in the field. Splitting already-set vs needs-set is what makes the
-// same call serve both the first propagation (req 1) and the later top-up of
-// newly-added items (req 2) — re-running only ever touches what's missing.
+// Read-only plan: tasks under `folderId` that don't yet carry `jobNumber`.
+// Splitting set from unset lets the same call do the first propagation and later
+// top-ups; a re-run only touches what's missing.
 export async function planPropagate(folderId, fieldId, jobNumber) {
   const tasks = await fetchTasksUnderFolder(folderId);
   const willSet = [];
@@ -836,10 +644,9 @@ export async function planPropagate(folderId, fieldId, jobNumber) {
   return { total: tasks.length, alreadySet, willSet };
 }
 
-// Apply the field to every task in `willSet`. Sequential (Wrike rate-limits
-// bursts), collecting per-task failures rather than aborting on the first —
-// callers surface the count so a couple of permission failures don't hide the
-// dozens that succeeded. onProgress(done, total) drives the progress bar.
+// Set the field on every task in `willSet`, one at a time (Wrike rate-limits
+// bursts), collecting failures instead of stopping at the first.
+// onProgress(done, total) drives the progress bar.
 export async function applyPropagate(willSet, fieldId, jobNumber, onProgress) {
   const ok = [];
   const failed = [];
@@ -855,9 +662,7 @@ export async function applyPropagate(willSet, fieldId, jobNumber, onProgress) {
   return { ok, failed };
 }
 
-// Set the Job Number custom field on a single FOLDER. Folders take customFields
-// exactly like tasks (PUT with the JSON-encoded array) — renaming only stamps
-// the title, so this is what actually fills the folder's own "Job Number" field.
+// Set the Job Number field on a folder itself (renaming only changes the title).
 export async function setFolderJobNumber(folderId, fieldId, value) {
   const cf = encodeURIComponent(JSON.stringify([{ id: fieldId, value: String(value) }]));
   const res = await fetch(`${WRIKE}/folders/${folderId}?customFields=${cf}`, { method: "PUT" });
@@ -867,16 +672,12 @@ export async function setFolderJobNumber(folderId, fieldId, value) {
   }
 }
 
-// Turn on Wrike-native field cascading for one field on a folder: Wrike then
-// pushes the folder's CURRENT value down to every subitem — nested folders AND
-// tasks, current AND any created later. This is exactly the UI's "Apply value to
-// all current and future subitems" button, so we set the folder value first
-// (setFolderJobNumber) and then call this.
+// Turn on Wrike's field cascading for one field on a folder, so the folder's
+// current value is pushed to every subitem, now and in future (the UI's "Apply
+// value to all current and future subitems"). Set the folder value first.
 //
-// Contract verified live against the account (the published reference is wrong):
-// the param is a SINGULAR `fieldId` plain-string query param, NOT a `fieldIds`
-// array — Wrike 400s "Parameter 'fieldIds' is not allowed" otherwise, and 200s
-// with { kind: "cascadingFieldSettings", data:[{ fieldId, … }] } on this shape.
+// Verified live, and different from Wrike's published reference: the param is a
+// singular `fieldId` string. `fieldIds` 400s.
 export async function triggerFieldCascade(folderId, fieldId) {
   const res = await fetch(`${WRIKE}/folders/${folderId}/cascading_field_settings?fieldId=${encodeURIComponent(fieldId)}`, { method: "POST" });
   if (!res.ok) {
@@ -887,25 +688,20 @@ export async function triggerFieldCascade(folderId, fieldId) {
 
 // ── Req 5: duplicate the whole studio template into Wrike ─────────────────────
 
-// Copy a folder (and its entire subtree — folders, tasks, subtasks) to a new
-// parent. copyDescriptions/copyCustomFields keep the template's content;
-// copyResponsibles is off so a duplicated template isn't auto-assigned to
-// whoever is on the template. Returns the new root folder's id.
+// Copy a folder and its whole subtree to a new parent, keeping descriptions and
+// custom-field values but not assignees. Returns the new root folder's id.
 export async function copyTemplateFolder({ sourceFolderId, parentId, title }) {
-  // Only the documented, accepted copy_folder params — Wrike 400s on anything
-  // else (copyAttachments / copyCustomStatuses are NOT valid params). We keep
-  // descriptions and custom-field VALUES, and deliberately don't copy
-  // responsibles so a duplicated template isn't auto-assigned to the template's
-  // people. No rescheduleMode/Date (must be paired; we're not shifting dates).
+  // Only the params Wrike accepts for copy_folder; anything else 400s
+  // (copyAttachments and copyCustomStatuses aren't valid). rescheduleMode/Date must
+  // be paired, and we don't shift dates.
   const params = new URLSearchParams({
     parent: parentId,
     title,
     copyDescriptions: "true",
     copyCustomFields: "true",
     copyResponsibles: "false",
-    // entryLimit is hard-capped at 250 by Wrike (values >250 are rejected). A
-    // tree bigger than this 403s "affected entry limit exceeded" — copyTemplateDeep
-    // catches that and splits the copy so the whole template still comes across.
+    // Wrike caps entryLimit at 250. A bigger tree 403s "affected entry limit
+    // exceeded", which copyTemplateDeep handles by splitting.
     entryLimit: "250",
   });
   const res = await fetch(`${WRIKE}/copy_folder/${sourceFolderId}?${params}`, { method: "POST" });
@@ -929,20 +725,18 @@ async function createFolder(parentId, title) {
   return json.data?.[0]?.id || null;
 }
 
-// Count tasks sitting DIRECTLY in a folder (not in its subfolders). When we have
-// to split a too-big folder we rebuild it empty and copy its child folders in —
-// which carries every subfolder's tasks, but not tasks pinned to the container
-// folder itself. We surface those so nothing is ever lost silently.
+// Tasks directly in a folder (not its subfolders). A split copy rebuilds the
+// folder empty and copies its children, which loses tasks pinned to the folder
+// itself, so they're counted and reported.
 async function fetchDirectTaskCount(folderId) {
   const rows = await wrikeGet(`/folders/${folderId}/tasks?descendants=false`);
   return rows.length;
 }
 
-// Copy a folder subtree of ANY size into `parentId`, working around Wrike's
-// 250-entry copy cap. Tries a whole-subtree copy first (fast, fully faithful);
-// only when that hits the entry limit does it rebuild the folder shell and
-// recurse into each child. `report` accumulates the new root id, how many copy
-// calls ran, and any container folders whose direct tasks couldn't be carried.
+// Copy a folder subtree of any size, working around the 250-entry cap: try one
+// whole copy, and only on the entry limit rebuild the folder and recurse into
+// its children. `report` collects the new root id, the number of copy calls,
+// and folders whose own tasks couldn't be carried.
 export async function copyTemplateDeep({ byId, sourceId, parentId, title, onProgress, report }) {
   report = report || { rootId: null, copies: 0, droppedTaskFolders: [] };
   onProgress?.(`Copying “${title}”…`);
@@ -952,8 +746,7 @@ export async function copyTemplateDeep({ byId, sourceId, parentId, title, onProg
     if (!report.rootId) report.rootId = id;
     return report;
   } catch (e) {
-    // Only the size limit is recoverable by splitting — anything else is a real
-    // failure and must propagate.
+    // Only the size limit is fixed by splitting; anything else is a real failure.
     if (!/entry limit/i.test(e.message)) throw e;
   }
   // Too big for one copy — rebuild this folder empty, then copy its children.
@@ -971,27 +764,18 @@ export async function copyTemplateDeep({ byId, sourceId, parentId, title, onProg
   return report;
 }
 
-// Strip a JOBNUMBER_ or XY#####_ prefix off a folder title, leaving the slot's
-// stable suffix (e.g. "French_Canada_Assets") that identifies it across renames.
+// Strip a JOBNUMBER_ or XY#####_ prefix, leaving the slot's stable suffix
+// ("French_Canada_Assets") that identifies it across renames.
 export function slotSuffix(title) {
   return (title || "").replace(/^(JOBNUMBER|XY\d+)_?/i, "");
 }
 
-// Map every job-slot folder under a root by its suffix. Rename-resilient: it
-// matches a folder whether it's still "JOBNUMBER_…" or already renamed to
-// "XY#####_…", so re-pushing/reconciling finds the same folder every time.
+// Every job-slot folder under a root, grouped by suffix, whether it's still
+// "JOBNUMBER_…" or already renamed to "XY#####_…".
 //
-// Returns an ARRAY per suffix, because a suffix does not identify a folder.
-// The Job Book deliberately allows one template slot to hold several jobs
-// (activateSlot stages another job of the same type on purpose), and each of
-// those needs its own folder — so "French_Canada_Assets" can legitimately name
-// both XY026047_French_Canada_Assets and XY026048_French_Canada_Assets.
-//
-// This used to be a plain assignment keyed on the suffix, which meant the
-// second folder silently overwrote the first and only one survived — whichever
-// the walk happened to reach last, i.e. dependent on the order Wrike returns
-// childIds. Combined with a rename that trusted the map, one job could be
-// handed another job's folder and rename it onto its own code.
+// An ARRAY per suffix: one template slot can hold several jobs, each with its
+// own folder (XY026047_French_Canada_Assets and XY026048_French_Canada_Assets).
+// Keying on the suffix alone let one job be handed another's folder.
 export async function mapSlotFoldersUnder(rootId) {
   const byId = await fetchAllFolders();
   const out = {};
@@ -1007,19 +791,12 @@ export async function mapSlotFoldersUnder(rootId) {
   return out;
 }
 
-// Which of a slot's folders belongs to this job.
-//
-//   1. A folder already carrying this job's own code — the re-push case.
-//      Matching it makes a repeat push a no-op instead of a rename.
-//   2. Otherwise an unclaimed folder still named "JOBNUMBER_…", i.e. a genuinely
-//      free slot.
-//
-// A folder already carrying a DIFFERENT job's code is never returned. That is
-// the whole point: it is somebody else's folder, and renaming it onto this code
-// destroys their allocation while leaving two folders answering to one code.
-// Returning null instead lets the caller report the job as needing a folder,
-// which is recoverable, rather than silently trading one job's work for
-// another's.
+// Which of a slot's folders belongs to this job:
+//   1. one already carrying this job's code (a re-push is then a no-op), else
+//   2. an unclaimed "JOBNUMBER_…" folder.
+// A folder carrying a DIFFERENT job's code is never returned: renaming it would
+// destroy that job's allocation. null lets the caller report the job as needing
+// a folder.
 export function pickSlotFolder(folders, code, claimedIds = new Set()) {
   const list = folders || [];
   const mine = list.find((f) => new RegExp(`^${code}_`, "i").test(f.title || ""));
@@ -1036,8 +813,8 @@ export async function renameFolder(folderId, title) {
   }
 }
 
-// After a copy, re-read the new tree and map each JOBNUMBER_ folder title to its
-// new folder id, so propagation (req 1) can target the right subtree per slot.
+// After a copy, map each JOBNUMBER_ folder title under the new tree to its id, so
+// propagation can target each slot.
 export async function mapJobNumberFoldersUnder(rootFolderId) {
   const byId = await fetchAllFolders();
   const out = {};

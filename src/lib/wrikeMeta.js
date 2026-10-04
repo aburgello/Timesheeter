@@ -1,24 +1,11 @@
-// The three workspace-wide lookup tables every enrichment reads: folders (for
-// climbing to a task's film, studio and market), contacts (assignee names, and
-// so Motion-team membership), and workflow statuses. Kept on the shared
-// wrike_sync_meta row by useWrikeCache and refreshed once a day.
+// The three workspace-wide lookup tables enrichment reads: folders (to climb to a
+// task's film, studio and market), contacts (assignee names, which decide
+// Motion-team membership) and workflow statuses. Stored on the shared
+// wrike_sync_meta row by useWrikeCache and refreshed daily.
 //
-// Each of the three is all-or-nothing. A list that fails to download in full
-// comes back as `previous`'s copy, never as whatever arrived before the
-// failure, and `complete` says whether all three were fresh.
-//
-// This used to keep partial results. The folder loop stopped at the first bad
-// page and returned the pages before it; the contact and workflow requests
-// weren't checked at all, so a 429 produced an empty dictionary. Whatever came
-// back was then written to the shared meta row, which every member's enrichment
-// reads, so one rate-limited refresh could blank everyone's contact names
-// (every assignee shows as "User", and the Motion-team filter, which matches on
-// those names, stops recognising anyone) until someone forced another refresh.
-//
-// Folders come from fetchAllFolders, the one folder-tree download, which
-// retries rate limits, throws rather than returning part of the tree, and
-// drops recycle-bin folders. There used to be five separate copies of that
-// loop, and three of them kept the recycle bin.
+// Each list is all-or-nothing: one that doesn't download in full keeps the
+// `previous` copy, and `complete` says whether all three are fresh. A partial or
+// empty list written to the shared row would break enrichment for everyone.
 import { fetchAllFolders } from "./wrikeCampaign";
 import { fetchRetrying } from "./fetchPool";
 
