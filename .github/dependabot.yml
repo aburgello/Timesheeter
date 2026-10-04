@@ -1,0 +1,24 @@
+# Small, regular dependency updates instead of one painful jump every few years.
+#
+# Grouped so a normal week produces one or two pull requests rather than twenty.
+# Major versions arrive separately because they're the ones that need reading:
+# a React, Vite or Tiptap major can change behaviour, and CI only catches what
+# the tests cover.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    labels: [dependencies]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies]

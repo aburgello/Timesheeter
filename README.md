@@ -1,5 +1,8 @@
 # XYi Timesheeter
 
+> Taking this project over? Start with **HANDOVER.md**, then **WRIKE.md** for
+> how data flows in from Wrike.
+
 A React timesheet tracker. This folder contains everything needed to run it
 locally and deploy it online for free.
 
