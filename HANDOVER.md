@@ -258,6 +258,9 @@ These were found during a review in October 2026 and haven't been resolved.
    who is making a request needs reworking so that it can't be influenced from
    the browser. The details have been passed on privately rather than written
    here, because this repository is public. Treat this as the first job.
+   Step one is in: on sign-in, the Worker's `/api/auth/link` records each
+   person's Wrike id on their database account, from their Wrike login. The
+   access rules switch over to it once everyone active has been recorded.
 2. **The repository is public** and contains the Supabase URL and anon key.
    Decide whether it should be private, and in a company-owned GitHub
    organisation.

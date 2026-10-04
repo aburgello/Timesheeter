@@ -64,6 +64,9 @@ export default {
     if (url.pathname === "/api/wrike/oauth/status") {
       return handleStatus(request, env);
     }
+    if (url.pathname === "/api/auth/link" && request.method === "POST") {
+      return handleAuthLink(request, env);
+    }
     if (url.pathname === "/api/wrike/webhook/register" && request.method === "POST") {
       return handleWebhookRegister(request, url, env);
     }
@@ -884,6 +887,64 @@ async function handleStatus(request, env) {
     return json({ error: "status_unavailable" }, { status: 503 });
   }
   return json({ connected: !!row, wrikeUserId: row?.wrike_user_id || null });
+}
+
+// Records the caller's Wrike id on their Supabase account, in app_metadata,
+// which only the server can write. The id comes from the Wrike session cookie,
+// never from the request body. The access rules don't read it yet; see
+// HANDOVER.md, Known issues 1.
+async function handleAuthLink(request, env) {
+  const session = parseCookies(request)[SESSION_COOKIE];
+  if (!session) return json({ error: "not_connected" }, { status: 401 });
+  const bearer = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!bearer) return json({ error: "no_supabase_session" }, { status: 401 });
+
+  let row;
+  try {
+    row = await getTokenRowBySession(env, session);
+  } catch (err) {
+    console.error("[auth-link] token lookup unavailable:", err.message);
+    return json({ error: "backend_unavailable" }, { status: 503 });
+  }
+  if (!row?.wrike_user_id) return json({ error: "not_connected" }, { status: 401 });
+
+  const authHeaders = { apikey: env.SUPABASE_SERVICE_ROLE_KEY };
+  let user;
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+      headers: { ...authHeaders, Authorization: `Bearer ${bearer}` },
+    });
+    if (res.status === 401 || res.status === 403) {
+      return json({ error: "invalid_supabase_session" }, { status: 401 });
+    }
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    user = await res.json();
+  } catch (err) {
+    console.error("[auth-link] user lookup failed:", err.message);
+    return json({ error: "backend_unavailable" }, { status: 503 });
+  }
+  if (!user?.id) return json({ error: "invalid_supabase_session" }, { status: 401 });
+  if (user.app_metadata?.wrike_user_id === row.wrike_user_id) {
+    return json({ ok: true, linked: false, wrikeUserId: row.wrike_user_id });
+  }
+
+  try {
+    // Supabase merges app_metadata keys, so the provider fields it keeps there survive.
+    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(user.id)}`, {
+      method: "PUT",
+      headers: {
+        ...authHeaders,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ app_metadata: { wrike_user_id: row.wrike_user_id } }),
+    });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+  } catch (err) {
+    console.error("[auth-link] update failed:", err.message);
+    return json({ error: "link_failed" }, { status: 502 });
+  }
+  return json({ ok: true, linked: true, wrikeUserId: row.wrike_user_id });
 }
 
 // One-time admin action: register an account-wide Wrike webhook pointed at
