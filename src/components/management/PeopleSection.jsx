@@ -1,5 +1,4 @@
-// People: departments, positions and per-person access such as
-// Debug Pull.
+// People: departments, positions, Administration access and leavers.
 //
 // Part of Administration. Split out of components/Management.jsx, which is
 // still the entry point and re-exports what other screens import.
@@ -146,6 +145,18 @@ export function PeopleSection() {
       setSyncMsg(`Sync failed: ${err.message}`);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Checked by the database: only an administrator can change it, and the last
+  // one can't be removed. A refused change is put back.
+  const toggleAdmin = async (p) => {
+    const is_admin = !p.is_admin;
+    setPeople(prev => prev.map(x => x.wrike_user_id === p.wrike_user_id ? { ...x, is_admin } : x));
+    const { error } = await supabase.from("profiles").update({ is_admin }).eq("wrike_user_id", p.wrike_user_id);
+    if (error) {
+      setPeople(prev => prev.map(x => x.wrike_user_id === p.wrike_user_id ? { ...x, is_admin: !is_admin } : x));
+      setSyncMsg(`Couldn't change Administration access: ${error.message}`);
     }
   };
 
@@ -297,6 +308,16 @@ export function PeopleSection() {
               options={["No position", ...positions.map(pos => pos.title)]}
             />
           </div>
+          {"is_admin" in p && !hasLeft(p) && (
+            <button onClick={() => toggleAdmin(p)}
+              aria-pressed={!!p.is_admin}
+              title={p.is_admin ? "Can open Administration. Click to remove." : "Give access to Administration"}
+              className={`shrink-0 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border ${p.is_admin
+                ? "border-[#12a0e1] bg-[#12a0e1] text-white hover:bg-[#0d8bc4]"
+                : "border-[#dce4ec] text-[#768994] hover:border-[#12a0e1] hover:text-[#122027]"}`}>
+              Admin
+            </button>
+          )}
           {/* Only once the database has profiles.left_at (see its migration). */}
           {"left_at" in p && (hasLeft(p) ? (
             <button onClick={() => updateField(p.wrike_user_id, { left_at: null })}

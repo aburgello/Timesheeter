@@ -199,12 +199,10 @@ The Supabase anon key is meant to be public. It's in every visitor's browser
 anyway. That only holds up if the database's access rules (row level security,
 in `schema.sql`) are what actually protect the data. See "Known issues" below.
 
-**Who can open Administration** is decided by a hardcoded list of Wrike IDs in
-`src/lib/access.js`. Giving someone access takes three changes, which have to
-match: that list, the `profiles_write` policy, and the `guard_can_debug_pull`
-trigger, both in a migration. The comment at the top of `access.js` explains
-why. Adding someone in only one place gives them the screens but writes that
-silently fail.
+**Who can open Administration** is the "Admin" button on each person's row in
+Administration › People (`profiles.is_admin`). Only an administrator can change
+it, the last one can't be removed, and someone marked as left loses it. The
+database enforces this; `src/lib/access.js` only decides what the app shows.
 
 
 ## Keeping an eye on it
@@ -249,7 +247,7 @@ silently fail.
   overwritten. For someone who has left but whose Wrike account is still
   active, press "Left" on their row. Leavers drop off team boards and the
   Toolbox panel but keep their timesheet history, and "Restore" undoes it. Also
-  check `src/lib/access.js` for Administration access. `src/lib/people.js`
+  check who has the Admin button ticked. `src/lib/people.js`
   lists Wrike accounts that aren't real people (shared inboxes, bots), which
   are kept out of people lists. Add any new ones there.
 
@@ -271,13 +269,11 @@ These were found during a review in October 2026 and haven't been resolved.
 3. **There are three copies of the repository** (`aburgelloxyi/TimeHub`,
    `xyidesign/timehub`, `aburgello/Timesheeter`) with different histories.
    Choose one as the real one and archive or mirror the others.
-4. **Access lists are hardcoded** (see above), so staff changes need a code
-   change and a deploy.
-5. **No error reporting from browsers** (see above).
-6. **The Toolbox panel borrows a person's Wrike login**: whichever connected
+4. **No error reporting from browsers** (see above).
+5. **The Toolbox panel borrows a person's Wrike login**: whichever connected
    person's token was refreshed most recently. If nobody stays connected, the
    panel stops working.
-7. **Frozen timesheet days are stored in the browser**, so they don't follow a
+6. **Frozen timesheet days are stored in the browser**, so they don't follow a
    person between computers.
-8. **Two very large files** remain, Canvas.js and LegacyTimesheets.js (see
+7. **Two very large files** remain, Canvas.js and LegacyTimesheets.js (see
    above), which make changes there riskier than they need to be.

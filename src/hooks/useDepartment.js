@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { rememberAdmin } from "../lib/access";
 
 const CACHE_KEY = "xyi_department";
 const PREVIEW_KEY = "xyi_department_preview";
@@ -41,17 +42,23 @@ export function useDepartment() {
     () => getDepartmentPreview() || localStorage.getItem(CACHE_KEY) || null
   );
 
+  const [, setAccessTick] = useState(0);
+
   useEffect(() => {
     const uid = localStorage.getItem("wrike_user_id");
     if (!uid) return;
     let cancelled = false;
     supabase
       .from("profiles")
-      .select("department")
+      .select("*")
       .eq("wrike_user_id", uid)
       .maybeSingle()
       .then(({ data }) => {
         if (cancelled) return;
+        // Administration access rides on the same read; the tick re-renders
+        // the pages offered if it changed.
+        rememberAdmin(uid, data);
+        setAccessTick((n) => n + 1);
         const dept = data?.department || null;
         if (dept) localStorage.setItem(CACHE_KEY, dept);
         else localStorage.removeItem(CACHE_KEY);
