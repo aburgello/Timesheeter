@@ -101,7 +101,7 @@ const log = (id, day) => ({ id, taskId: "T", trackedDate: `${day}T00:00:00`, hou
     () => respond(200, { data: [log("L1", "2026-10-02")] }),
     () => fetchContactTimelogs("U1", { from: "2026-10-01", to: "2026-10-03" })
   );
-  const sent = JSON.parse(decodeURIComponent(calls[0].split("trackedDate=")[1]));
+  const sent = JSON.parse(new URL(calls[0], "http://x").searchParams.get("trackedDate"));
   check("timelogs: padded range", sent, { start: "2026-09-30", end: "2026-10-04" });
   check("timelogs: one request", calls.length, 1);
   check("timelogs: returns the logs", result.map((l) => l.id), ["L1"]);
@@ -113,19 +113,38 @@ const log = (id, day) => ({ id, taskId: "T", trackedDate: `${day}T00:00:00`, hou
     () => respond(200, { data: [log("L1", "2027-01-01")] }),
     () => fetchContactTimelogs("U1", { from: "2027-01-01", to: "2027-01-01" })
   );
-  const sent = JSON.parse(decodeURIComponent(calls[0].split("trackedDate=")[1]));
+  const sent = JSON.parse(new URL(calls[0], "http://x").searchParams.get("trackedDate"));
   check("timelogs: padding crosses the year", sent, { start: "2026-12-31", end: "2027-01-02" });
 }
 
-// Pages are followed.
+const fullPage = (prefix) =>
+  Array.from({ length: 1000 }, (_, i) => log(`${prefix}${i}`, "2026-10-01"));
+
+// What happened live on 2026-10-04: Wrike sends a nextPageToken with a page
+// that isn't full, and the token-only follow-up is a 400. A short page is the
+// last one, so no second request is made at all.
 {
-  const { result } = await withFetch(
+  const { result, calls } = await withFetch(
+    (url) => url.includes("nextPageToken")
+      ? respond(400, { error: "invalid_request" })
+      : respond(200, { data: [log("L1", "2026-10-02")], nextPageToken: "AFQ25L" }),
+    () => fetchContactTimelogs("U1", { from: "2026-10-02", to: "2026-10-04" })
+  );
+  check("timelogs: short page with a token is the last page", calls.length, 1);
+  check("timelogs: and its logs are returned", result.map((l) => l.id), ["L1"]);
+  check("timelogs: asks for the largest page", calls[0].includes("&pageSize=1000"), true);
+}
+
+// A genuinely full page is followed, with the filter restated alongside the token.
+{
+  const { result, calls } = await withFetch(
     (url) => url.includes("nextPageToken")
       ? respond(200, { data: [log("L2", "2026-10-02")] })
-      : respond(200, { data: [log("L1", "2026-10-01")], nextPageToken: "P2" }),
+      : respond(200, { data: fullPage("A"), nextPageToken: "P2" }),
     () => fetchContactTimelogs("U1", { from: "2026-10-01", to: "2026-10-02" })
   );
-  check("timelogs: follows pages", result.map((l) => l.id), ["L1", "L2"]);
+  check("timelogs: follows a full page", result.length, 1001);
+  check("timelogs: next page restates the filter", calls[1].includes("trackedDate=") && calls[1].includes("nextPageToken=P2"), true);
 }
 
 // Wrike refuses the filter: the old unfiltered request is made instead.
@@ -145,7 +164,7 @@ const log = (id, day) => ({ id, taskId: "T", trackedDate: `${day}T00:00:00`, hou
   const { result } = await withFetch(
     (url) => {
       if (url.includes("nextPageToken")) return respond(500, {});
-      if (url.includes("trackedDate=")) return respond(200, { data: [log("L1", "2026-10-01")], nextPageToken: "P2" });
+      if (url.includes("trackedDate=")) return respond(200, { data: fullPage("A"), nextPageToken: "P2" });
       return respond(200, { data: [log("L1", "2026-10-01"), log("L2", "2026-10-02")] });
     },
     () => fetchContactTimelogs("U1", { from: "2026-10-01", to: "2026-10-02" })
@@ -172,7 +191,7 @@ const log = (id, day) => ({ id, taskId: "T", trackedDate: `${day}T00:00:00`, hou
     () => fetchContactTimelogs("U1", { from: "2026-08-01", to: "2026-10-01", plainText: true, by: "createdDate" })
   );
   check("timelogs: createdDate range", calls[0].includes("?createdDate="), true);
-  check("timelogs: plainText kept", calls[0].endsWith("&plainText=true"), true);
+  check("timelogs: plainText kept", calls[0].includes("&plainText=true"), true);
 }
 
 // No range: exactly the old request.
