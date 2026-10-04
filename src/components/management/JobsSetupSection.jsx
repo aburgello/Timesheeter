@@ -250,21 +250,9 @@ export function JobsSetupSection({ setActiveTab, initialStudio, initialFilm, loc
     setFetchedTemplate(null);
     const studio = targetStudio; // shadow so the existing body below reads the requested studio
     try {
-      const FF = encodeURIComponent("[childIds]");
-      const fd = {};
-      let url = `/api/wrike/folders?fields=${FF}`;
-      while (url) {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`Wrike folders fetch failed (${res.status})`);
-        const json = await res.json();
-        (json.data || []).forEach(f => {
-          if (/^Rb/i.test(f.scope || "")) return; // skip Recycle Bin so a deleted template dupe can't win
-          fd[f.id] = { id: f.id, title: f.title, childIds: f.childIds || [] };
-        });
-        url = json.nextPageToken
-          ? `/api/wrike/folders?fields=${FF}&nextPageToken=${json.nextPageToken}`
-          : null;
-      }
+      // The shared folder-tree download: skips the Recycle Bin (so a deleted
+      // template dupe can't win), retries rate limits, and throws on failure.
+      const fd = await fetchAllFolders();
       // Find candidate master-template roots by fuzzy title match. There can be
       // several ("_Paramount_MASTER_TEMPLATES", a "... copy", archived dupes), so
       // build each subtree and pick the one with the most JOBNUMBER folders,

@@ -335,7 +335,8 @@ create table public.wrike_sync_meta (
   folder_dictionary jsonb,
   contact_dictionary jsonb,
   status_dictionary jsonb,
-  film_code_mappings jsonb default '{}'::jsonb
+  film_code_mappings jsonb default '{}'::jsonb,
+  dictionaries_refreshed_at timestamp with time zone
 );
 
 create table public.wrike_tasks_cache (

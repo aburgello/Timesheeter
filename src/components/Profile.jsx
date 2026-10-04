@@ -38,7 +38,7 @@ import HubRow from "./shared/HubRow";
 import { useTasks } from "../hooks/useTasks";
 import { useWrikeUser } from "../hooks/useWrikeUser";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
-import { startWrikeOAuth, disconnectWrike, fetchWrikeOAuthStatus } from "../lib/wrikeApi";
+import { startWrikeOAuth, disconnectWrike, fetchWrikeOAuthStatus, fetchContactTimelogs } from "../lib/wrikeApi";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
 import SearchableSelect from "./shared/SearchableSelect";
@@ -936,11 +936,22 @@ function OverviewSection({
 
     setActivityLoading(true);
 
-    Promise.all([
-      fetch(`/api/wrike/contacts/${uid}/timelogs?plainText=true`),
-      fetch("/api/wrike/timers"),
-    ])
-      .then(([lRes, tRes]) => Promise.all([lRes.json(), tRes.json()]))
+    // The panel shows the 20 most recently ENTERED logs, so the range is on
+    // createdDate, matching the sort below. Two months of them is plenty for
+    // anyone who logs time; someone with fewer than 20 in that window gets the
+    // full history, exactly as before, so nobody's list gets shorter.
+    const recentTimelogs = async () => {
+      const to = new Date();
+      const from = new Date(to);
+      from.setDate(from.getDate() - 60);
+      const iso = (d) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const logs = await fetchContactTimelogs(uid, { from: iso(from), to: iso(to), plainText: true, by: "createdDate" });
+      return logs.length >= 20 ? logs : fetchContactTimelogs(uid, { plainText: true });
+    };
+
+    Promise.all([recentTimelogs(), fetch("/api/wrike/timers")])
+      .then(([logs, tRes]) => Promise.all([{ data: logs }, tRes.json()]))
       .then(async ([lJson, tJson]) => {
         const loggedIds = new Set(
           tasks.flatMap((t) => t.wrikeTimelogId ? t.wrikeTimelogId.split(",") : [])
