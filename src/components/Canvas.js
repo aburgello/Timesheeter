@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabaseClient";
 import { toggleDarkMode } from "../lib/theme";
 import { useColumnResize } from "../lib/useColumnResize";
-import { getFilmName, PRINT_HUB_RE } from "../lib/wrikeEnrich";
+import { getFilmName, belongsToFilm, PRINT_HUB_RE } from "../lib/wrikeEnrich";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import RichNoteEditor from "./shared/RichNoteEditor";
 import PresenceStack from "./shared/PresenceStack";
@@ -58,7 +58,7 @@ import {
   User,
   Maximize2,
   Minimize2,
-  Printer,
+  Rocket,
   PenTool,
 } from "lucide-react";
 
@@ -2834,7 +2834,7 @@ function PrintLaunchTrackerCard({ isOpen, onToggle, hubs, taskById }) {
 
   return (
     <CollapsibleCard
-      icon={Printer}
+      icon={Rocket}
       title="Launch Tracker"
       subtitle={`Per-market print requests · ${active.length} live`}
       isOpen={isOpen}
@@ -3019,8 +3019,12 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
 
   // --- Launch Tracker (Print): hub tasks + id lookup for their subtasks ---
   const taskById = useMemo(() => new Map(wrikeData.map((t) => [t.id, t])), [wrikeData]);
+  // Only hubs that belong to a film: a film from Wrike's folders, or a name
+  // that starts with a film code (EBZR_, TRSC_ …, translated or not). That
+  // leaves out the template copies ("3._ArtworkName_Launch_Markets",
+  // "_Launch_Markets"), whose only "film" is the start of their own name.
   const printLaunchHubs = useMemo(
-    () => wrikeData.filter((t) => t.title && PRINT_HUB_RE.test(t.title)),
+    () => wrikeData.filter((t) => t.title && PRINT_HUB_RE.test(t.title) && belongsToFilm(t)),
     [wrikeData]
   );
   const [uploadingCountry, setUploadingCountry] = useState(null);
@@ -4593,7 +4597,7 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
           const canvasTools = [
             { id: "campaigns", icon: Film,     label: "Campaigns",  desc: "Every campaign, by studio", count: liveCount === campaigns.length ? `${campaigns.length} live` : `${liveCount} live · ${campaigns.length - liveCount} delivered` },
             { id: "notes",     icon: Folder,   label: "Notes Canvas", desc: `${department} team board · personal spaces`, count: null },
-            ...(hasFeature(department, "launchTracker")  ? [{ id: "launch", icon: Printer, label: "Launch Tracker", desc: "Per-market print requests", count: `${printLaunchHubs.length} live` }] : []),
+            ...(hasFeature(department, "launchTracker")  ? [{ id: "launch", icon: Rocket, label: "Launch Tracker", desc: "Per-market print requests", count: `${printLaunchHubs.length} live` }] : []),
             ...(hasFeature(department, "doohSpecs") ? [{ id: "dooh",   icon: Globe,   label: "DOOH Specs", desc: "Screen specs by country", count: `${doohCountries.length} countries` }] : []),
             // End of Campaign Notes has no tile: it lives at the foot of Notes
             // Canvas, where the team is already writing things down for each

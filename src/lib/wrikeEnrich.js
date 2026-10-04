@@ -175,6 +175,14 @@ export function filmFromTask(task) {
   return name;
 }
 
+// Whether a task belongs to a film: a film from Wrike's folders (filmFromTask),
+// or a name that starts with a film code, translated or not ("EBZR_", "EX2_",
+// "TG40th_"). Template copies ("3._ArtworkName_…", "_Launch_Markets") have
+// neither: their only "film" is the start of their own name.
+const FILM_CODE_RE = /^[A-Z][A-Z0-9][A-Za-z0-9]{0,6}$/;
+export const belongsToFilm = (task) =>
+  !!filmFromTask(task) || FILM_CODE_RE.test(String(task?.title || "").split(/[_|-]/)[0].trim());
+
 // ---------------------------------------------------------------------------
 // Climb the folder tree to find the studio for a task
 // ---------------------------------------------------------------------------
