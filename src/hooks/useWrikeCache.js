@@ -56,6 +56,11 @@ const SHARED_META_ID = "shared";
 // v1 mirrors are silently missing thousands of tasks.
 const CACHE_FORMAT = "2";
 const CACHE_FORMAT_KEY = "xyi_cache_format";
+// Load-time repairs whose answer rarely changes: how long a confirmed-real gap
+// is left alone, and how often the (mostly fruitless) studio backfill runs.
+const REPAIR_RECHECK_MS = 7 * 24 * 60 * 60 * 1000;
+const STUDIO_PROBE_AT_KEY = "xyi_studio_probe_at";
+const STUDIO_PROBE_EVERY_MS = 24 * 60 * 60 * 1000;
 
 // Guards the mount hydration against React StrictMode's dev double-invoke —
 // without it every dev reload downloaded the Supabase cache twice.
@@ -383,14 +388,24 @@ export function useWrikeCache() {
         // Broken cached copies: MATRIX tasks missing parentIds or their table, and Print
         // launch hubs cached from list pages 2+ without subTaskIds (the Launch Tracker
         // needs them for its market links).
+        // A refetch that comes back the same means the gap is real (a hub with
+        // no subtasks yet), so a checked task is left alone for a week. The mark
+        // is saved in the shared cache, so one check covers every browser, and a
+        // sync that rewrites the task drops it.
+        const recentlyChecked = (t) =>
+          t._repairCheckedAt && Date.now() - Date.parse(t._repairCheckedAt) < REPAIR_RECHECK_MS;
         const broken = loaded.filter(
           (t) =>
-            (t.title?.toUpperCase().includes("MATRIX") && (!t.tableHtml || !t.parentIds?.length)) ||
-            (t.title && PRINT_HUB_RE.test(t.title) && (!t.subTaskIds?.length || !t.notesText))
+            !recentlyChecked(t) &&
+            ((t.title?.toUpperCase().includes("MATRIX") && (!t.tableHtml || !t.parentIds?.length)) ||
+              (t.title && PRINT_HUB_RE.test(t.title) && (!t.subTaskIds?.length || !t.notesText)))
         );
-        // Nothing to heal: skip the block, and with it the multi-MB folder_dictionary
-        // download. Repairs persist, so this is the normal case.
-        const needsStudioProbe = loaded.some((t) => !t.studioName);
+        // Nothing to heal: skip the block, and with it the 1 MB folder_dictionary
+        // download. Most cached tasks have no resolvable studio at all, so the
+        // studio backfill runs at most daily rather than on every load.
+        const lastStudioProbe = Number(localStorage.getItem(STUDIO_PROBE_AT_KEY)) || 0;
+        const needsStudioProbe =
+          Date.now() - lastStudioProbe > STUDIO_PROBE_EVERY_MS && loaded.some((t) => !t.studioName);
         // Launch-hub subtasks that aren't cached. Most were completed before the sync
         // window, so no sync will ever pull them; backfill them by id once.
         const cachedIds = new Set(loaded.map((t) => t.id));
@@ -414,13 +429,15 @@ export function useWrikeCache() {
           console.log(`[WrikeCache] repairing ${broken.length} MATRIX/launch-hub tasks (missing table/parentIds/subTaskIds)`);
           const refetched = await fetchTasksByIds(broken.map((t) => t.id));
           const refetchedById = new Map(refetched.map((t) => [t.id, t]));
+          const checkedAt = new Date().toISOString();
           const repaired = broken
-            .filter((t) => refetchedById.get(t.id))
             .map((t) => {
               const full = refetchedById.get(t.id);
+              if (!full) return { ...t, _repairCheckedAt: checkedAt };
               const parsed = parseWrikeData(full.description);
               return {
                 ...t,
+                _repairCheckedAt: checkedAt,
                 parentIds: full.parentIds || t.parentIds,
                 subTaskIds: full.subTaskIds?.length ? full.subTaskIds : t.subTaskIds,
                 responsibleIds: full.responsibleIds || t.responsibleIds,
@@ -477,7 +494,8 @@ export function useWrikeCache() {
           try { localStorage.setItem(FOLDER_CAMPAIGNS_KEY, JSON.stringify(derived)); } catch { /* ignore */ }
         }
 
-        const needsStudio = loaded.filter((t) => !t.studioName);
+        const needsStudio = needsStudioProbe ? loaded.filter((t) => !t.studioName) : [];
+        if (needsStudioProbe) localStorage.setItem(STUDIO_PROBE_AT_KEY, String(Date.now()));
         if (needsStudio.length > 0 && Object.keys(fd).length > 100) {
           const backfilled = needsStudio
             .map((t) => ({ ...t, studioName: getStudioName(t, fd, c2p) }))
