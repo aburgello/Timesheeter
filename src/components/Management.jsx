@@ -2,7 +2,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { Shield, AlertTriangle, ChevronLeft, ChevronRight, ClipboardList } from "lucide-react";
 import PageHeader from "./shared/PageHeader";
-import OrgChart from "./OrgChart";
 import StudioAnalytics from "./StudioAnalytics";
 import { MANAGEMENT_IDS, isManager } from "../lib/access";
 import { AdminHub } from "./management/AdminHub";
@@ -356,7 +355,6 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
                   {activeTab === "rates"      && <PositionsAndRatesSection />}
                   {activeTab === "translations" && <TranslationCountriesSection />}
                   {activeTab === "departments"  && <SimpleListSection table="job_departments" labelField="name" label="Departments" placeholder="e.g. Print…" />}
-                  {activeTab === "orgchart"     && <OrgChart />}
                 </div>
               </div>
             )}

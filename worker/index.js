@@ -1431,7 +1431,8 @@ async function handlePanelJobs(request, url, env) {
     // taking whichever came first resolved names to the wrong user.
     const profRes = await sbFetch(
       env,
-      "/profiles?select=wrike_user_id,first_name,last_name,department,updated_at&order=updated_at.desc"
+      // select=* so left_at is included once that column exists.
+      "/profiles?select=*&order=updated_at.desc"
     );
     if (profRes.ok) {
       const profiles = (await profRes.json()) || [];
@@ -1455,7 +1456,7 @@ async function handlePanelJobs(request, url, env) {
       let best = null;
       let bestScore = 0;
       for (const p of profiles) {
-        if (!p || !p.wrike_user_id) continue;
+        if (!p || !p.wrike_user_id || p.left_at) continue; // leavers can't be matched
         const sc = score(p);
         if (sc > bestScore || (sc > 0 && sc === bestScore && preferred(p) > preferred(best))) {
           bestScore = sc;
@@ -1494,10 +1495,10 @@ async function handlePanelJobs(request, url, env) {
   let liveUsed = false;
   if (url.searchParams.get("refresh") === "1") {
     const teamIds = [];
-    const teamRes = await sbFetch(env, "/profiles?select=wrike_user_id");
+    const teamRes = await sbFetch(env, "/profiles?select=*");
     if (teamRes.ok) {
       for (const p of (await teamRes.json()) || []) {
-        if (p && p.wrike_user_id) teamIds.push(p.wrike_user_id);
+        if (p && p.wrike_user_id && !p.left_at) teamIds.push(p.wrike_user_id);
       }
     }
     const live = await panelLiveTasks(env, teamIds);

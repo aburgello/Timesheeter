@@ -3,7 +3,7 @@ import { fullName } from "../lib/formatName";
 import { X, Shield, Users, Clock, Key, RefreshCw, CheckCircle, AlertCircle, Zap, Eye } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useDepartmentPreviewState, setDepartmentPreview } from "../hooks/useDepartment";
-import { isServiceAccount } from "../lib/people";
+import { isServiceAccount, hasLeft } from "../lib/people";
 
 export default function AdminModal({ onClose }) {
   const [profiles, setProfiles] = useState([]);
@@ -44,7 +44,7 @@ export default function AdminModal({ onClose }) {
           // Wrike's own service accounts (AM Team, Magic Wrike, All
           // proofreaders) sync into profiles like any real contact but
           // aren't people — never count them toward team stats here.
-          const realProfiles = profileData.filter((p) => !isServiceAccount(p.wrike_user_id));
+          const realProfiles = profileData.filter((p) => !isServiceAccount(p.wrike_user_id) && !hasLeft(p));
           setProfiles(realProfiles);
 
           // Fetch task counts per user

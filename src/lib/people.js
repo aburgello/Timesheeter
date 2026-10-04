@@ -1,3 +1,4 @@
+import { normalizeName } from "../constants";
 // Wrike accounts that exist purely for Wrike's own plumbing (a shared inbox
 // for "all proofreaders", the built-in "Magic Wrike" bot, a catch-all "AM
 // Team" login) — not real staff. They show up in profiles like anyone else
@@ -14,8 +15,8 @@ export function isServiceAccount(wrikeUserId) {
 // (the assignable NAMES come from the editable job_departments table) should
 // auto-generate. Anyone in a department without an entry here lands in the
 // "—" catch-all bucket instead of being silently dropped. Lives here (not in
-// Management.jsx, where PeopleSection is) so OrgChart.jsx can share the same
-// colours without a circular import between the two.
+// Management.jsx, where PeopleSection is) so other screens can share the same
+// colours without a circular import.
 export const DEPT_GROUPS = [
   { label: "PM",         color: "bg-blue-50 text-blue-700 border-blue-200",           gradient: "from-blue-500 to-blue-700"         },
   { label: "Motion",     color: "bg-violet-50 text-violet-700 border-violet-200",     gradient: "from-violet-500 to-violet-700"     },
@@ -25,3 +26,29 @@ export const DEPT_GROUPS = [
   { label: "Print",      color: "bg-orange-50 text-orange-700 border-orange-200",     gradient: "from-orange-400 to-orange-600"     },
   { label: "—",          color: "bg-slate-50 text-slate-500 border-slate-200",        gradient: "from-slate-400 to-slate-600"       },
 ];
+
+// The department a Wrike group stands for, or null. The group's name must BE
+// the department's name, ignoring case, emoji, punctuation and the words
+// "team"/"group"/"department": "Motion Team" is Motion, "PM" is PM. It used to
+// be a substring match either way round, which made any group with "team" in
+// its name AM (te-am) and anything containing "pm" (development) PM.
+const GROUP_FILLER = /\b(team|teams|group|dept|department)\b/g;
+const groupKey = (s) =>
+  normalizeName(String(s || ""))
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(GROUP_FILLER, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+export function departmentForGroup(groupTitle, departments) {
+  const key = groupKey(groupTitle);
+  if (!key) return null;
+  return departments.find((d) => groupKey(d) === key) || null;
+}
+
+// Someone who has left the company. They keep their profile (old timesheet
+// rows point at it) but drop out of team boards, the shared cache's team list,
+// the Toolbox panel's name matching and the People list. Set by "Sync from
+// Wrike" when Wrike reports the account deleted, or by hand in People.
+export const hasLeft = (profile) => !!profile?.left_at;

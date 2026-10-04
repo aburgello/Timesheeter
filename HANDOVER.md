@@ -238,10 +238,16 @@ silently fail.
   studios go in `src/lib/studios.js`.
 - **When the company timesheet site changes**, check the bookmarklet still
   works. It depends on functions that site defines.
-- **When people join or leave**, check `src/lib/access.js` for
-  Administration access. `src/lib/people.js` lists Wrike accounts that aren't
-  real people (shared inboxes, bots), which are kept out of people lists. Add
-  any new ones there.
+- **When people join or leave**, run "Sync from Wrike" in Administration ›
+  People. It adds new people, fills in a blank department from a Wrike group
+  whose name is exactly the department's ("Motion" or "Motion Team"), and marks
+  anyone whose Wrike account was deleted as having left. Nothing set by hand is
+  overwritten. For someone who has left but whose Wrike account is still
+  active, press "Left" on their row. Leavers drop off team boards and the
+  Toolbox panel but keep their timesheet history, and "Restore" undoes it. Also
+  check `src/lib/access.js` for Administration access. `src/lib/people.js`
+  lists Wrike accounts that aren't real people (shared inboxes, bots), which
+  are kept out of people lists. Add any new ones there.
 
 
 ## Known issues and open decisions

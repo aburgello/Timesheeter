@@ -17,11 +17,11 @@ const PROFILES = [
   { wrike_user_id: "ADAM_T", first_name: "Adam", last_name: "Tansley-Scales", department: "Digital", updated_at: "2026-09-01T10:00:00Z" },
 ];
 
-async function resolve(member) {
+async function resolve(member, profiles = PROFILES) {
   let asked = null;
   globalThis.fetch = async (url) => {
     url = String(url);
-    if (url.includes("/profiles?")) return ok(PROFILES);
+    if (url.includes("/profiles?")) return ok(profiles);
     if (url.includes("/wrike_tasks_cache")) {
       asked = decodeURIComponent(url).match(/responsibleIds=cs\.\["([^"]+)"\]/)?.[1] || null;
       return ok([]);
@@ -41,3 +41,11 @@ check("panel: 'Luke' is the Motion member even when the other Luke edited later"
 check("panel: a full name still picks that exact person", await resolve("Luke Steer"), "STEER");
 check("panel: 'Trott' (surname) resolves", await resolve("Trott"), "TROTT");
 check("panel: no Motion member among the matches: newest edit wins, as before", await resolve("Adam"), "ADAM_P");
+
+// Leavers can't be matched: with Luke Trott marked as left, "Luke" is the
+// other Luke.
+check(
+  "panel: someone who has left is never matched",
+  await resolve("Luke", PROFILES.map((p) => (p.wrike_user_id === "TROTT" ? { ...p, left_at: "2026-10-01T00:00:00Z" } : p))),
+  "STEER"
+);

@@ -16,6 +16,7 @@ import { TERRITORY_FLAGS } from "../constants";
 import { supabase } from "../lib/supabaseClient";
 import { useBoardNow, ActiveDot } from "./shared/BoardNow";
 import { fullName as cleanFullName } from "../lib/formatName";
+import { hasLeft } from "../lib/people";
 import { useBoardTasks } from "../hooks/useBoardTasks";
 import PageHeader from "./shared/PageHeader";
 import { boardLabelFor, countedStatusFor } from "../lib/departments";
@@ -79,12 +80,12 @@ function useDepartmentTeam(department) {
     setTeam((t) => ({ ...t, loading: true }));
     supabase
       .from("profiles")
-      .select("wrike_user_id, first_name, last_name")
+      .select("*") // * so left_at is included once that column exists
       .eq("department", department)
       .order("first_name")
       .then(({ data }) => {
         if (cancelled) return;
-        const rows = (data || []).filter((p) => p.wrike_user_id);
+        const rows = (data || []).filter((p) => p.wrike_user_id && !hasLeft(p));
         const members = [], lanes = {}, wrikeIdToMember = {}, teamWrikeIds = [];
         const seen = new Set();
         const firstOf = (p) => (p.first_name || "").trim();

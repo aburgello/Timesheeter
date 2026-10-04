@@ -35,6 +35,7 @@ import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { fetchAllFolders } from "../lib/wrikeCampaign";
 import { fetchWrikeMeta } from "../lib/wrikeMeta";
 import { usesTeamBoard } from "../lib/departments";
+import { hasLeft } from "../lib/people";
 
 const FIELDS_FILTER = encodeURIComponent(
   "[customFields,parentIds,responsibleIds,subTaskIds,description]"
@@ -216,10 +217,12 @@ async function loadTeamIds() {
   if (teamIdsCache.ids && Date.now() - teamIdsCache.at < TEAM_IDS_TTL_MS) return teamIdsCache.ids;
   const { data, error } = await supabase
     .from("profiles")
-    .select("wrike_user_id, department")
+    .select("*") // * so left_at is included once that column exists
     .not("department", "is", null);
   if (error) throw new Error(`team roster unavailable: ${error.message}`);
-  const ids = (data || []).filter((p) => p.wrike_user_id && usesTeamBoard(p.department)).map((p) => p.wrike_user_id);
+  const ids = (data || [])
+    .filter((p) => p.wrike_user_id && !hasLeft(p) && usesTeamBoard(p.department))
+    .map((p) => p.wrike_user_id);
   if (!ids.length) throw new Error("team roster is empty");
   teamIdsCache = { at: Date.now(), ids: new Set(ids) };
   return teamIdsCache.ids;
