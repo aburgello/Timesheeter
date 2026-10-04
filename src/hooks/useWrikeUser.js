@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { setWrikeUserId } from "../lib/supabaseClient";
+import { completedStats } from "../lib/completedStats";
 
-// Lifetime stats are expensive to compute (full pagination of every completed
-// task), so we cache the three resulting counts per user and only re-run the
-// fetch in the background when the cache is older than this.
+// The completed-task counts (see lib/completedStats.js) are cached per user and
+// refreshed in the background when older than this.
 const STATS_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const statsKey = (uid) => `xyi_lifetime_stats_${uid}`;
 
@@ -65,42 +65,14 @@ export function useWrikeUser(wrikeData, triggerToast) {
       setUserStats((prev) => ({ ...prev, loading: true }));
 
       try {
-        let rawTasks = [];
-        let nextPageToken = null;
-        let hasMore = true;
-
-        while (hasMore) {
-          let url = `/api/wrike/tasks?responsibles=[${uid}]&status=Completed&pageSize=1000`;
-          if (nextPageToken) url += `&nextPageToken=${nextPageToken}`;
-
-          const response = await fetch(url);
-          const json = await response.json();
-          rawTasks = [...rawTasks, ...(json.data || [])];
-          nextPageToken = json.nextPageToken;
-          hasMore = !!nextPageToken;
-        }
-
-        const now = new Date();
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(now.getDate() - 30);
-        const startOfYear = new Date(now.getFullYear(), 0, 1);
-
-        let monthCount = 0;
-        let yearCount = 0;
-
-        rawTasks.forEach((task) => {
-          const d = new Date(
-            task.completedDate || task.updatedDate || task.createdDate || 0
-          );
-          if (d >= thirtyDaysAgo) monthCount++;
-          if (d >= startOfYear) yearCount++;
-        });
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem(statsKey(uid)) || "null"); } catch (_) { /* ignore */ }
+        const { earlierTotal, earlierYear, ...counts } = await completedStats(uid, saved);
 
         const syncedAt = new Date().toISOString();
-        const counts = { month: monthCount, year: yearCount, allTime: rawTasks.length };
         setUserStats({ ...counts, loading: false, fetched: true, syncedAt });
         try {
-          localStorage.setItem(statsKey(uid), JSON.stringify({ ...counts, syncedAt }));
+          localStorage.setItem(statsKey(uid), JSON.stringify({ ...counts, earlierTotal, earlierYear, syncedAt }));
         } catch (_) { /* storage full / disabled — non-fatal */ }
         if (!silent) triggerToastRef.current?.("Lifetime stats synced!", "success");
       } catch (err) {

@@ -54,13 +54,6 @@ export const territoryFlags = (value, max = Infinity) => {
   return list.slice(0, max).map(territoryFlag).join("");
 };
 
-// "🇧🇪 Belgium" / "🇧🇪🇫🇷 Belgium +1" — the closed-state label.
-export const territoryLabel = (value) => {
-  const list = splitTerritories(value);
-  if (!list.length) return "";
-  return list.length === 1 ? list[0] : `${list[0]} +${list.length - 1}`;
-};
-
 // What goes out in the JSON the bookmarklet pastes into the company
 // timesheet. Our list and the site's are nearly identical, so this is a no-op
 // for almost every row — the exception is a value we carry that the site has

@@ -813,17 +813,3 @@ export async function renameFolder(folderId, title) {
   }
 }
 
-// After a copy, map each JOBNUMBER_ folder title under the new tree to its id, so
-// propagation can target each slot.
-export async function mapJobNumberFoldersUnder(rootFolderId) {
-  const byId = await fetchAllFolders();
-  const out = {};
-  const walk = (id) => {
-    const node = byId[id];
-    if (!node) return;
-    if (/JOBNUMBER/i.test(node.title)) out[node.title] = node.id;
-    (node.childIds || []).forEach(walk);
-  };
-  walk(rootFolderId);
-  return out;
-}

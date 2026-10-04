@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspens
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabaseClient";
 import { useColumnResize } from "../lib/useColumnResize";
-import { getFilmName, belongsToFilm, PRINT_HUB_RE } from "../lib/wrikeEnrich";
+import { belongsToFilm, PRINT_HUB_RE } from "../lib/wrikeEnrich";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import RichNoteEditor from "./shared/RichNoteEditor";
 import PresenceStack from "./shared/PresenceStack";
@@ -13,7 +13,6 @@ import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
 import HubRow from "./shared/HubRow";
 import { useDepartment } from "../hooks/useDepartment";
 import { boardLabelFor, hasFeature } from "../lib/departments";
-import { PAGE_GRADIENTS } from "../lib/pageGradients";
 import { reportError } from "../lib/monitoring";
 import { FILM_MAPPINGS } from "../constants.js";
 import { docToPlainText, docToHtml, docHasText, escapeHtml } from "../utils/tiptapText";
@@ -143,8 +142,9 @@ function relativeTime(dateStr) {
 
 // --- Save status indicator: "Saving…" / "Saved ✓" / "Last edited Xm ago" ---
 function SaveStatus({ state, lastSavedAt }) {
-  const [now, setNow] = useState(Date.now());
-  // Re-render every 30s so "Xm ago" stays fresh while the card is open.
+  // Re-render every 30s so "Xm ago" stays fresh while the card is open; the
+  // value itself isn't read, setting it is what triggers the render.
+  const [, setNow] = useState(Date.now());
   useEffect(() => {
     if (state === "saving") return;
     const t = setInterval(() => setNow(Date.now()), 30000);
@@ -1050,174 +1050,6 @@ const hashColor = (id) => {
   return CANVAS_COLOR_PALETTE[Math.abs(hash) % CANVAS_COLOR_PALETTE.length];
 };
 
-function FolderNameInput({ value, onChange, onSubmit, onCancel }) {
-  return (
-    <div className="flex items-center gap-1.5 mb-1">
-      <input
-        autoFocus
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") onSubmit(); if (e.key === "Escape") onCancel(); }}
-        placeholder="Topic name…"
-        className="w-full px-2 py-1 rounded-lg border border-[#dce4ec] outline-none text-xs font-bold"
-      />
-      <button onClick={onSubmit} className="p-1 rounded hover:bg-black/5"><Check className="w-3.5 h-3.5 text-[#c2410d]" /></button>
-    </div>
-  );
-}
-
-function FolderTree({ folders, pages, selectedFolderId, selectedPageId, onToggleFolder, onSelectPage, onDeleteFolder, onDeletePage, onAddPage, accentColor }) {
-  if (!folders.length) return <p className="text-xs font-semibold text-[#768994] px-1">No topics yet.</p>;
-  return (
-    <div className="space-y-0.5">
-      {folders.map((folder) => {
-        const folderPages = pages.filter((p) => p.folder_id === folder.id);
-        const isExpanded = selectedFolderId === folder.id;
-        return (
-          <div key={folder.id}>
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => onToggleFolder(folder.id)}
-              className="group/folder flex items-center gap-1.5 px-1.5 py-1 rounded-lg cursor-pointer hover:bg-black/5"
-            >
-              <ChevronRight className={`w-3 h-3 shrink-0 text-[#768994] transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-              <span className="text-xs font-bold text-[#122027] truncate flex-1">{folder.name}</span>
-              <span className="text-[10px] font-black text-[#768994]">{folderPages.length}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); onDeleteFolder(folder.id); }}
-                className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            </div>
-            {isExpanded && (
-              <div className="ml-4 mt-0.5 space-y-0.5">
-                {folderPages.map((page) => (
-                  <div
-                    key={page.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onSelectPage(page.id)}
-                    className="group/page flex items-center gap-1.5 px-1.5 py-1 rounded-lg cursor-pointer hover:bg-black/5 text-[#122027]"
-                    style={page.id === selectedPageId ? { backgroundColor: `${accentColor}1a`, color: accentColor } : undefined}
-                  >
-                    <FileText className="w-3 h-3 shrink-0" />
-                    <span className="text-xs font-semibold truncate flex-1">{page.title || "Untitled"}</span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onDeletePage(page.id); }}
-                      className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-                <button
-                  onClick={() => onAddPage(folder.id)}
-                  className="flex items-center gap-1 px-1.5 py-1 text-[11px] font-black hover:opacity-80"
-                  style={{ color: accentColor }}
-                >
-                  <Plus className="w-3 h-3" /> New page
-                </button>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// Folders-only column for the three-pane drill-down (Folders → Pages →
-// Editor): a folder is just a selectable row here, its pages live in
-// PageList next to it instead of nesting inline underneath.
-function FolderList({ folders, pages, selectedFolderId, onSelectFolder, onDeleteFolder, accentColor }) {
-  if (!folders.length) return <p className="text-xs font-semibold text-[#768994] px-1">No topics yet.</p>;
-  return (
-    <div className="space-y-1">
-      {folders.map((folder) => {
-        const count = pages.filter((p) => p.folder_id === folder.id).length;
-        const isSelected = selectedFolderId === folder.id;
-        return (
-          <div
-            key={folder.id}
-            role="button"
-            tabIndex={0}
-            onClick={() => onSelectFolder(folder.id)}
-            className="group/folder flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors"
-            style={isSelected ? { backgroundColor: `${accentColor}1a` } : undefined}
-          >
-            <Folder className="w-3.5 h-3.5 shrink-0" style={{ color: accentColor }} />
-            <span
-              className="text-xs font-bold truncate flex-1"
-              style={{ color: isSelected ? accentColor : "#122027" }}
-            >
-              {folder.name}
-            </span>
-            <span className="text-[10px] font-black text-[#768994]">{count}</span>
-            <button
-              onClick={(e) => { e.stopPropagation(); onDeleteFolder(folder.id); }}
-              className="opacity-0 group-hover/folder:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 shrink-0"
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// Pages column: a folder's pages as cards rather than an indented list, so
-// they carry the same visual weight as the folder they belong to instead
-// of reading as a footnote underneath it.
-function PageList({ folder, pages, selectedPageId, onSelectPage, onDeletePage, onAddPage, accentColor }) {
-  if (!folder) {
-    return (
-      <p className="text-xs font-semibold text-[#768994] text-center px-4 py-8">
-        Pick a topic on the left to see its pages.
-      </p>
-    );
-  }
-  const folderPages = pages.filter((p) => p.folder_id === folder.id);
-  return (
-    <div>
-      <p className="text-[11px] font-black uppercase tracking-widest text-[#768994] px-1 mb-2 truncate">{folder.name}</p>
-      <div className="space-y-1.5">
-        {folderPages.map((page) => {
-          const isSelected = page.id === selectedPageId;
-          return (
-            <div
-              key={page.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelectPage(page.id)}
-              className="group/page flex items-center gap-2 px-2.5 py-2 rounded-xl border cursor-pointer transition-colors"
-              style={isSelected ? { borderColor: accentColor, backgroundColor: `${accentColor}14` } : { borderColor: "#dce4ec" }}
-            >
-              <FileText className="w-3.5 h-3.5 shrink-0" style={{ color: isSelected ? accentColor : "#768994" }} />
-              <span className="text-xs font-semibold truncate flex-1 text-[#122027]">{page.title || "Untitled"}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); onDeletePage(page.id); }}
-                className="opacity-0 group-hover/page:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 shrink-0"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            </div>
-          );
-        })}
-        <button
-          onClick={() => onAddPage(folder.id)}
-          className="w-full flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl border border-dashed text-[11px] font-black hover:opacity-80"
-          style={{ borderColor: `${accentColor}55`, color: accentColor }}
-        >
-          <Plus className="w-3 h-3" /> New page
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // Kill switch for live collaborative editing on text notes. Collaboration
 // rides Supabase Realtime, and this account has no egress headroom to spare —
 // if it ever starts costing more than it's worth, flip this off and notes fall
@@ -1260,7 +1092,6 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
   const savedTimerRef = useRef(null);
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
   const [activeBoard, setActiveBoard] = useState("team");
-  const [showTeammates, setShowTeammates] = useState(false);
   // Expand ("focus mode") is controlled by the parent so it can also hide the
   // campaigns panel and let the note take the full page width.
   const toggleEditorExpanded = onToggleEditorExpanded || (() => {});
@@ -1688,7 +1519,6 @@ export function NotesCanvasCard({ isOpen, onToggle, department, pinnedFolderIds 
     return `${Math.floor(d / 30)}mo ago`;
   };
 
-  const toggleFolder = (id) => setSelectedFolderId((prev) => (prev === id ? null : id));
   const startDraft = (owner) => { setFolderDraft({ owner }); setNewFolderName(""); };
 
   // A pinned-topic card on the shelf was clicked: jump to the board that owns
@@ -2905,7 +2735,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
   ];
   const { widths: filmWidths, resizeHandle: filmHandle } = useColumnResize("canvas-filmmap-cols", FILM_TABLE_COLS);
 
-
   // --- ACCORDION ANIMATION & SCROLL STATE ---
   const [expandedCampId, setExpandedCampId] = useState(null);
 
@@ -2948,7 +2777,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const [collapsedStudios, setCollapsedStudios] = useState({}); // {studio: true} = folded
   // Notes "expand" → full page width: hides the campaigns panel + the notes rail.
   const [notesExpanded, setNotesExpanded] = useState(false);
   // The Notes Canvas browser folds away when you open a campaign in End of
@@ -3061,7 +2889,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
   const [editLinkTitle, setEditLinkTitle] = useState("");
   const [editLinkUrl, setEditLinkUrl] = useState("");
 
-  const [linkModalCampId, setLinkModalCampId] = useState(null);
   const [newLinkTitle, setNewLinkTitle] = useState("");
   const [newLinkUrl, setNewLinkUrl] = useState("");
   const [copiedLinkId, setCopiedLinkId] = useState(null);
@@ -4812,7 +4639,6 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
             </div>
           );
         })()}
-
 
         {/* --- CAMPAIGN DETAIL MODAL --- */}
         {activeCamp && (

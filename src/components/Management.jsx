@@ -1,9 +1,9 @@
 ﻿import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Shield, AlertTriangle, ChevronLeft, ChevronRight, ClipboardList } from "lucide-react";
+import { Shield, ChevronLeft, ChevronRight, ClipboardList } from "lucide-react";
 import PageHeader from "./shared/PageHeader";
 import StudioAnalytics from "./StudioAnalytics";
-import { MANAGEMENT_IDS, isManager } from "../lib/access";
+import { isManager } from "../lib/access";
 import { AdminHub } from "./management/AdminHub";
 import { FilmCampaignModal } from "./management/FilmCampaignModal";
 import { FilmStudioPicker } from "./management/FilmStudioPicker";
@@ -23,7 +23,6 @@ import { TranslationCountriesSection } from "./management/TranslationCountriesSe
 // Access control lives in lib/access.js (App and the Rail read it at startup;
 // importing it from this lazy-loaded chunk would drag Administration into the
 // main bundle). Re-exported here for compatibility.
-export { MANAGEMENT_IDS } from "../lib/access";
 
 // ── Project Description quick-filter chips ────────────────────────────────────
 // keyword uses "<CODE> " (with trailing space) so "UK Something" matches but
@@ -213,7 +212,7 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Administration is the named managers' only (lib/access.js) — no
+  // Administration is for people with profiles.is_admin (lib/access.js) — no
   // department opens it. App already sends anyone else home; this is the page
   // refusing on its own account, should it ever be mounted another way.
   const hasAccess = isManager(wrikeUserId);
@@ -247,16 +246,7 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
         icon={Shield}
         title="Administration"
         subtitle="Reports · Staff Accounts · Supporting Content"
-      >
-        {MANAGEMENT_IDS.length === 0 && (
-          <div className="flex items-center gap-2 bg-white/15 border border-white/20 backdrop-blur-sm rounded-xl px-3 py-2">
-            <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-            <p className="text-[10px] font-bold text-white/90">
-              Add your Wrike ID to <code className="font-mono">MANAGEMENT_IDS</code> in Management.jsx
-            </p>
-          </div>
-        )}
-      </PageHeader>
+      />
 
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-6 pb-6">
         {/* Breadcrumb bar. This is page chrome, not panel content, so it sits

@@ -274,11 +274,12 @@ create table public.profiles (
   -- The playful extras on the timesheet (stepper coins); one switch for all of
   -- them. See migrations/20261002145735_profiles_fun_mode.sql.
   fun_mode boolean not null default true,
-  -- Per-member grant, NOT a preference: guarded by the guard_can_debug_pull
-  -- trigger so a member cannot set it on themselves through profiles_write.
-  -- See migrations/20260814100000_profiles_can_debug_pull.sql.
+  -- Grants, not preferences: only an administrator changes them, enforced by
+  -- the guard_profile_grants trigger. See
+  -- migrations/20261004180000_profiles_is_admin.sql.
   can_debug_pull boolean not null default false,
-  left_at timestamp with time zone
+  left_at timestamp with time zone,
+  is_admin boolean not null default false
 );
 
 create table public.project_descriptions (
@@ -534,7 +535,9 @@ create policy "profiles_read" on public.profiles as permissive for select to aut
 -- management ids, which need to edit other people's department/position and to
 -- run the Sync-from-Wrike upsert. Keep the id list in step with MANAGEMENT_IDS
 -- in src/lib/access.js.
-create policy "profiles_write" on public.profiles as permissive for all to authenticated using ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)) or (((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text) in ('KUAWDLVN', 'KUAQT4JC', 'KUAQGSEW'))) with check ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)) or (((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text) in ('KUAWDLVN', 'KUAQT4JC', 'KUAQGSEW')));
+-- caller_wrike_id(), caller_is_admin() and the guard_profile_grants trigger
+-- are defined in migrations/20261004180000_profiles_is_admin.sql.
+create policy "profiles_write" on public.profiles as permissive for all to authenticated using ((wrike_user_id = caller_wrike_id()) or caller_is_admin()) with check ((wrike_user_id = caller_wrike_id()) or caller_is_admin());
 create policy "auth_all" on public.project_descriptions as permissive for all to authenticated using (true) with check (true);
 create policy "wrike_user_isolation" on public.tasks as permissive for all to public using ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text))) with check ((wrike_user_id = ((auth.jwt() -> 'user_metadata'::text) ->> 'wrike_user_id'::text)));
 create policy "auth_all" on public.translation_countries as permissive for all to public using (true) with check (true);

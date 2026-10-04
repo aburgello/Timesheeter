@@ -131,9 +131,6 @@ export const setRuntimeAliases = (rows) => {
   RUNTIME_ALIASES = next;
 };
 
-/** What the overlay currently holds, for the editor's "already taken" checks. */
-export const runtimeAliasCount = () => RUNTIME_ALIASES.size;
-
 /**
  * A single token -> its canonical territory, or null. Whole-token equality
  * only: "IT" resolves, "ITINERARY" does not.

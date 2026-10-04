@@ -1,26 +1,42 @@
 // ── Access control ────────────────────────────────────────────────────────────
-// Wrike user IDs allowed into Administration. Lives in its own tiny module —
-// NOT in Management.jsx — because App and the Rail need it at startup, and an
-// import from Management.jsx would pull the whole (lazy-loaded) Administration
-// chunk into the main bundle just to read this list.
+// Its own tiny module, not part of Management.jsx, because App and the Rail
+// need it at startup and Administration is lazy-loaded.
 //
-// Your Wrike ID is shown on the Profile Hub page (under your name, first 8
-// chars). An empty list means everyone gets access.
+// Who may open Administration is profiles.is_admin, ticked in Administration ›
+// People. The database enforces it (the profiles_write policy and the
+// guard_profile_grants trigger); this only decides what the app offers.
 //
-// This list is mirrored in the `profiles_write` RLS policy (schema.sql) and the
-// `guard_can_debug_pull` trigger (supabase/migrations), which are what actually
-// permit editing other people's department/position, the Sync-from-Wrike
-// upsert and granting Debug Pull. Adding someone here without adding them
-// there gets them the Administration UI but silently-failing writes.
+// The flag is cached per person so the menu is right on the first frame.
+// MANAGEMENT_IDS is the answer only until the signed-in person's profile has
+// been read with the is_admin column in it.
+const ADMIN_CACHE_KEY = "xyi_is_admin";
+
 export const MANAGEMENT_IDS = [
   "KUAWDLVN", // Antonio Burgello
   "KUAQT4JC", // Guillaume Rater
   "KUAQGSEW", // Ben Gladwyn
 ];
 
-// Administration is these people and nobody else — no department reaches it.
-export const isManager = (wrikeUserId) =>
-  MANAGEMENT_IDS.length === 0 || MANAGEMENT_IDS.includes(wrikeUserId);
+function cachedAdmin(wrikeUserId) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ADMIN_CACHE_KEY) || "null");
+    return saved?.uid === wrikeUserId ? saved.admin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Called with the signed-in person's profile row (read with select *).
+export function rememberAdmin(wrikeUserId, profile) {
+  if (!wrikeUserId || !profile || !("is_admin" in profile)) return;
+  const admin = !!profile.is_admin && !profile.left_at;
+  localStorage.setItem(ADMIN_CACHE_KEY, JSON.stringify({ uid: wrikeUserId, admin }));
+}
+
+export const isManager = (wrikeUserId) => {
+  const cached = cachedAdmin(wrikeUserId);
+  return cached !== undefined ? cached : MANAGEMENT_IDS.includes(wrikeUserId);
+};
 
 // The pages a manager has whatever their department: Administration, and the
 // Job Book, which is otherwise the Project Managers' alone. Listed in the

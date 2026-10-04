@@ -132,15 +132,39 @@ export async function setWrikeUserId(id, profile = {}) {
   return identityReady;
 }
 
-/** Reads the user_metadata claim out of an access token without verifying it. */
-function claimFromToken(accessToken) {
+/** Reads a wrike_user_id claim out of an access token without verifying it. */
+function claimFromToken(accessToken, where = "user_metadata") {
   try {
     const payload = accessToken.split(".")[1];
     const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
-    return JSON.parse(json)?.user_metadata?.wrike_user_id ?? null;
+    return JSON.parse(json)?.[where]?.wrike_user_id ?? null;
   } catch (_) {
     return null;
   }
+}
+
+// Asks the Worker to record the Wrike id on this Supabase account
+// (app_metadata), taken from the Wrike login rather than from us. Failures are
+// logged and otherwise ignored: nothing reads that value yet.
+async function linkAccount(id) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session || claimFromToken(session.access_token, "app_metadata") === id) return;
+  const res = await fetch("/api/auth/link", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
+  if (!res.ok) {
+    console.warn("Could not link account:", res.status);
+    return;
+  }
+  const body = await res.json();
+  if (body.wrikeUserId !== id) {
+    console.warn("Wrike login is a different account from the one in use:", body.wrikeUserId, id);
+  }
+  if (body.linked) await supabase.auth.refreshSession();
 }
 
 async function stampIdentity(id, profile) {
@@ -184,6 +208,11 @@ async function stampIdentity(id, profile) {
     }
   } catch (err) {
     console.warn("Could not update Supabase user metadata:", err.message);
+  }
+  try {
+    await linkAccount(id);
+  } catch (err) {
+    console.warn("Could not link account:", err.message);
   }
   try {
     // Only include fields that actually have values — never overwrite existing

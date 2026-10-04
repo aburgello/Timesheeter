@@ -3,7 +3,6 @@ import { isBoardTask, isOverdue as isOverdueFn, isStale as isStaleFn } from "../
 import { motion } from "framer-motion";
 import {
   LayoutList,
-  Film,
   Paperclip,
   ChevronDown,
   Star,
@@ -148,26 +147,6 @@ const getTerritoryData = (title) => {
   return { name: "GLOBAL", flag: "🎬" };
 };
 
-const getTagStyle = (tag) => {
-  const base = "text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded border whitespace-nowrap";
-  if (!tag) return `${base} bg-slate-100 text-slate-500 border-slate-200`;
-  const t = String(tag).toLowerCase();
-  if (t.includes("to amend"))          return `${base} bg-rose-50 text-rose-600 border-rose-200`;
-  if (t.includes("render review"))     return `${base} bg-indigo-50 text-indigo-600 border-indigo-200`;
-  if (t.includes("revised"))           return `${base} bg-teal-50 text-teal-600 border-teal-200`;
-  if (t.includes("creative approved")) return `${base} bg-blue-50 text-blue-600 border-blue-200`;
-  if (t.includes("content approved"))  return `${base} bg-purple-50 text-purple-600 border-purple-200`;
-  if (t.includes("client review") || t.includes("content review")) return `${base} bg-yellow-50 text-yellow-600 border-yellow-200`;
-  if (t.includes("motion"))            return `${base} bg-emerald-50 text-emerald-600 border-emerald-200`;
-  if (t.includes("digital"))           return `${base} bg-cyan-50 text-cyan-600 border-cyan-200`;
-  if (t.includes("prep for delivery")) return `${base} bg-orange-50 text-orange-600 border-orange-200`;
-  if (t === "delivering" || t === "delivery") return `${base} bg-yellow-100 text-yellow-700 border-yellow-400`;
-  if (t.includes("on hold"))           return `${base} bg-red-50 text-red-600 border-red-200`;
-  if (t.includes("pm"))                return `${base} bg-fuchsia-50 text-fuchsia-600 border-fuchsia-200`;
-  if (t.includes("backlog"))           return `${base} bg-slate-100 text-slate-500 border-slate-200`;
-  return `${base} bg-slate-100 text-slate-500 border-slate-200`;
-};
-
 const getBorderColorClass = (tag) => {
   if (!tag) return "border-l-slate-300";
   const t = String(tag).toLowerCase();
@@ -206,8 +185,8 @@ const getTagTextColorClass = (tag) => {
   return "text-slate-500";
 };
 
-// Status as a small dot — used on the dark slate where the light chip
-// palette of getTagStyle would not survive. Same semantic hues as
+// Status as a small dot — used on the dark slate where a light chip palette
+// would not survive. Same semantic hues as
 // getBorderColorClass (literal classes so Tailwind's scanner sees them).
 const getStatusDotClass = (tag) => {
   if (!tag) return "bg-slate-400";

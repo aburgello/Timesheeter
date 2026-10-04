@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Activity, CheckCircle2, Clock, Film, Table2, BarChart3, RefreshCw } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
-import { cleanNamePart } from "../lib/formatName";
 import { zoomFactor } from "../utils/zoom";
 
 // Management-facing analytics, fed from two pools:

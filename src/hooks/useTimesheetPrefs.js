@@ -51,12 +51,6 @@ function writeCache(prefs) {
   window.dispatchEvent(new CustomEvent(CHANGED_EVENT));
 }
 
-// Read-only access for non-React callers (the pull path reads the live value at
-// the moment the button is pressed rather than closing over a render-time one).
-export function getTimesheetPrefs() {
-  return readCache();
-}
-
 export function useTimesheetPrefs() {
   const [prefs, setPrefsState] = useState(readCache);
 

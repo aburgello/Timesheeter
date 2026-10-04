@@ -18,7 +18,7 @@ import { reportError } from "../../lib/monitoring";
 import {
   Bold as BoldIcon, Italic as ItalicIcon, Underline as UnderlineIcon, Strikethrough,
   Heading2, Heading3, List, ListOrdered, ListChecks, Quote, Code2, Link as LinkIcon, GripVertical,
-  Palette, Image as ImageIcon,
+  Palette,
 } from "lucide-react";
 
 // Images and videos live in the public "notes-images" Supabase Storage bucket

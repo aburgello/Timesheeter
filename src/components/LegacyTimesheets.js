@@ -23,7 +23,6 @@ import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import {
   RefreshCw,
   XCircle,
-  FileSpreadsheet,
   ChevronDown,
   Tag,
   Search,
@@ -57,7 +56,7 @@ import { countryFieldIds, warmCountryFields } from "../lib/countryField";
 import { secondsToHM } from "../utils/timeHelpers";
 import { coinDrop } from "../utils/coinDrop";
 import { COLUMNS, DAYS, TIME_OPTIONS, getDarkTagStyle } from "./legacy/legacyConstants";
-import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
+import PageHeader from "./shared/PageHeader";
 import TableSearchableSelect from "./legacy/TableSearchableSelect";
 import MultiCountrySelect from "./shared/MultiCountrySelect";
 import PasteNextSteps from "./shared/PasteNextSteps";
@@ -379,7 +378,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const [wrikeUserId, setWrikeUserId] = useState("");
 
   const [localWrikeTasks, setLocalWrikeTasks] = useState([]);
-  const [isSyncingJobs, setIsSyncingJobs] = useState(false);
   const activeWrikeData =
     localWrikeTasks.length > 0 ? localWrikeTasks : wrikeData;
 
@@ -401,8 +399,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Initialised here so showToast is available to pass in
   const {
     rows,
-    setRows,
-    loading: rowsLoading,
     addRow,
     addRows,
     updateRow,
@@ -763,7 +759,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       return null;
     }
 
-    setIsSyncingJobs(true);
     try {
       await Promise.all([ensureFolderTree(), warmCountryFields()]);
 
@@ -852,8 +847,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           "Failed to sync your personal jobs. See console for details."
         );
       return null;
-    } finally {
-      setIsSyncingJobs(false);
     }
   };
 
@@ -1991,42 +1984,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     }
   };
 
-  const handleExportExcel = () => {
-    if (rows.length === 0) {
-      showToast("No data to export yet.");
-      return;
-    }
-
-    const headers = ["Day", ...COLUMNS].join(",");
-    const csvRows = rows.map((row) => {
-      return [
-        row.dayOfWeek,
-        `"${row.jobNumber}"`,
-        `"${row.client}"`,
-        `"${row.filmTitle}"`,
-        `"${row.projectDescription?.replace(/"/g, '""') || ""}"`,
-        `"${row.territory}"`,
-        `"${row.category}"`,
-        row.clientAmends ? "Yes" : "No",
-        `"${(row.notes ?? "").replace(/"/g, '""')}"`,
-        row.is3D ? "Yes" : "No",
-        row.timeSpent,
-        row.additionalTime,
-      ].join(",");
-    });
-
-    const csvContent = [headers, ...csvRows].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `Timesheet_Export_${
-      new Date().toISOString().split("T")[0]
-    }.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
   const handleCopyJSON = async () => {
     if (rows.length === 0) {
       showToast("No data to copy yet.");
@@ -2345,9 +2302,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     // was still empty.
   }, [recentJobs, bookJobNumbers]);
 
-  const [expandedSessions, setExpandedSessions] = useState({});
-  const toggleSessions = (rowKey) =>
-    setExpandedSessions((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }));
   // Collapsed job groups in consolidated view (default: expanded, so you see
   // every territory/category subrow). Keyed by jobNumber.
   const [collapsedGroups, setCollapsedGroups] = useState({});

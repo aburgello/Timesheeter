@@ -199,12 +199,10 @@ The Supabase anon key is meant to be public. It's in every visitor's browser
 anyway. That only holds up if the database's access rules (row level security,
 in `schema.sql`) are what actually protect the data. See "Known issues" below.
 
-**Who can open Administration** is decided by a hardcoded list of Wrike IDs in
-`src/lib/access.js`. Giving someone access takes three changes, which have to
-match: that list, the `profiles_write` policy, and the `guard_can_debug_pull`
-trigger, both in a migration. The comment at the top of `access.js` explains
-why. Adding someone in only one place gives them the screens but writes that
-silently fail.
+**Who can open Administration** is the "Admin" button on each person's row in
+Administration › People (`profiles.is_admin`). Only an administrator can change
+it, the last one can't be removed, and someone marked as left loses it. The
+database enforces this; `src/lib/access.js` only decides what the app shows.
 
 
 ## Keeping an eye on it
@@ -218,9 +216,13 @@ silently fail.
   on someone's screen, you'll only hear about it from them. Adding an error
   service (Sentry's free tier is enough) is the next step, but it needs an
   account created by whoever owns the project.
+- **System status**, at the bottom of the Administration page, shows when
+  Wrike last synced, when the folder and people lists were refreshed, the last
+  live update, and whether Wrike still has the webhook active. Amber means
+  stale during working hours; red means the webhook is missing or suspended,
+  and the card offers to register it again.
 - **The Wrike webhook** can be suspended by Wrike without anyone noticing,
-  because the fifteen-minute sync carries on. If boards feel slow to update,
-  re-register it from Admin.
+  because the fifteen-minute sync carries on. The status card above shows it.
 - **Backups.** Check in the Supabase dashboard that backups (ideally
   point-in-time recovery) are on, and try a restore into a scratch project
   once, so you know it works before you need it.
@@ -245,7 +247,7 @@ silently fail.
   overwritten. For someone who has left but whose Wrike account is still
   active, press "Left" on their row. Leavers drop off team boards and the
   Toolbox panel but keep their timesheet history, and "Restore" undoes it. Also
-  check `src/lib/access.js` for Administration access. `src/lib/people.js`
+  check who has the Admin button ticked. `src/lib/people.js`
   lists Wrike accounts that aren't real people (shared inboxes, bots), which
   are kept out of people lists. Add any new ones there.
 
@@ -258,19 +260,20 @@ These were found during a review in October 2026 and haven't been resolved.
    who is making a request needs reworking so that it can't be influenced from
    the browser. The details have been passed on privately rather than written
    here, because this repository is public. Treat this as the first job.
+   Step one is in: on sign-in, the Worker's `/api/auth/link` records each
+   person's Wrike id on their database account, from their Wrike login. The
+   access rules switch over to it once everyone active has been recorded.
 2. **The repository is public** and contains the Supabase URL and anon key.
    Decide whether it should be private, and in a company-owned GitHub
    organisation.
 3. **There are three copies of the repository** (`aburgelloxyi/TimeHub`,
    `xyidesign/timehub`, `aburgello/Timesheeter`) with different histories.
    Choose one as the real one and archive or mirror the others.
-4. **Access lists are hardcoded** (see above), so staff changes need a code
-   change and a deploy.
-5. **No error reporting from browsers** (see above).
-6. **The Toolbox panel borrows a person's Wrike login**: whichever connected
+4. **No error reporting from browsers** (see above).
+5. **The Toolbox panel borrows a person's Wrike login**: whichever connected
    person's token was refreshed most recently. If nobody stays connected, the
    panel stops working.
-7. **Frozen timesheet days are stored in the browser**, so they don't follow a
+6. **Frozen timesheet days are stored in the browser**, so they don't follow a
    person between computers.
-8. **Two very large files** remain, Canvas.js and LegacyTimesheets.js (see
+7. **Two very large files** remain, Canvas.js and LegacyTimesheets.js (see
    above), which make changes there riskier than they need to be.
