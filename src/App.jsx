@@ -28,8 +28,9 @@ import { useWrikeCache } from "./hooks/useWrikeCache";
 import { PRINT_HUB_RE } from "./lib/wrikeEnrich";
 import { pageIdsFor, pagesFor } from "./lib/departments";
 import { useDepartment } from "./hooks/useDepartment";
-import { MANAGER_PAGE_IDS } from "./lib/access";
-import { setWrikeUserId } from "./lib/supabaseClient";
+import { MANAGER_PAGE_IDS, isManager } from "./lib/access";
+import { setWrikeUserId, supabase, whenIdentityReady } from "./lib/supabaseClient";
+import { autoSyncPeople } from "./lib/peopleSync";
 import { startWrikeOAuth } from "./lib/wrikeApi";
 import { warmCountryFields } from "./lib/countryField";
 import { loadCountryAliases } from "./lib/countryAliases";
@@ -189,6 +190,18 @@ export default function App() {
   useEffect(() => {
     warmCountryFields();
     loadCountryAliases();
+  }, []);
+
+  // An administrator's visit runs the daily people sync from Wrike, once the
+  // browser is idle. See lib/peopleSync.js.
+  useEffect(() => {
+    const uid = localStorage.getItem("wrike_user_id");
+    if (!uid || !isManager(uid)) return;
+    const run = () => whenIdentityReady()
+      .then(() => autoSyncPeople(supabase))
+      .catch((err) => console.warn("[People] daily sync failed:", err.message));
+    const handle = window.requestIdleCallback ? window.requestIdleCallback(run, { timeout: 30000 }) : setTimeout(run, 10000);
+    return () => (window.cancelIdleCallback ? window.cancelIdleCallback(handle) : clearTimeout(handle));
   }, []);
 
   // Reset scroll on page swap — AnimatePresence swaps the content but the

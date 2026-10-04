@@ -240,8 +240,9 @@ database enforces this; `src/lib/access.js` only decides what the app shows.
   studios go in `src/lib/studios.js`.
 - **When the company timesheet site changes**, check the bookmarklet still
   works. It depends on functions that site defines.
-- **When people join or leave**, run "Sync from Wrike" in Administration ›
-  People. It adds new people, fills in a blank department from a Wrike group
+- **When people join or leave**, nothing usually needs doing: "Sync from
+  Wrike" in Administration › People runs by itself once a day, the first time
+  an administrator opens TimeHub, and can be run by hand there too. It adds new people, fills in a blank department from a Wrike group
   whose name is exactly the department's ("Motion" or "Motion Team"), and marks
   anyone whose Wrike account was deleted as having left. Nothing set by hand is
   overwritten. For someone who has left but whose Wrike account is still
