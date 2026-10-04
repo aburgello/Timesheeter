@@ -20,7 +20,7 @@
     "@fontsource-variable/bricolage-grotesque": "^5.2.10",
     "@fontsource-variable/geist": "^5.2.9",
     "@gsap/react": "^2.1.2",
-    "@hello-pangea/dnd": "^16.6.0",
+    "@hello-pangea/dnd": "^18.0.1",
     "@lottiefiles/dotlottie-react": "^0.6.5",
     "@sentry/react": "^10.66.0",
     "@supabase/supabase-js": "^2.108.2",
