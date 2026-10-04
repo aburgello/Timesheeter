@@ -5,11 +5,8 @@ import { countryFieldIds } from "./countryField";
 import { fetchRetrying } from "./fetchPool";
 import { studioNameOf, studioKeywordOf } from "./studios";
 
-// Resolve a film-code folder/name (e.g. "ZAL", "ody", "DDA") to its full
-// title via FILM_MAPPINGS; returns the title-cased input untouched when no
-// mapping exists. Used by getFilmName's tree-climb and path fallback so
-// "ZAL" doesn't slip through as projectName when the Wrike folder itself
-// is named after the code, not the film.
+// Resolve a film code ("ZAL", "ody") to its title via FILM_MAPPINGS, or title-case
+// it when unmapped. For folders named after the code rather than the film.
 const titleCase = (s) =>
   s.trim().toLowerCase().split(" ").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 const resolveFilmCode = (name) => {
@@ -19,19 +16,10 @@ const resolveFilmCode = (name) => {
   return titleCase(name.replace(/[_|-]/g, " "));
 };
 
-// Every token the territory guesser can recognise (full names + aliases like
-// AE/AUS), uppercased — used below to decide which customFields values are
-// worth keeping in the cache. Mirrors guessFieldsFromTask's own sources so
-// the cache keeps exactly what that guesser could ever match on.
-// _Multiple_ and the agreed exception words are included here even though the
-// old guesser refused to infer them: this set decides what survives into the
-// cache, and a Country field reading "Markets" has to reach the resolver to be
-// read as one. Deciding whether a value counts is countryCodes.js's job now.
-// MAGI's own codes are in here too. They were missed first time round, and the
-// gap is invisible until it bites: a Country field reading "BEL-FL" survives
-// only because "BEL" happens to also be a REGION_ALIAS, while a MAGI-only code
-// would be dropped from the cache before the resolver — which CAN read it —
-// ever saw it. Whatever the resolver can read, the cache has to keep.
+// Every territory token the resolver can recognise, uppercased. It decides which
+// custom-field values survive into the cache, so it must cover everything the
+// resolver can read (MAGI codes and exception words included), or a value the
+// resolver could match is dropped before it gets there.
 const TERRITORY_TOKENS = new Set(
   [
     ...TERRITORIES,
@@ -85,19 +73,9 @@ export function parseWrikeData(htmlString) {
   };
 }
 
-// A folder title that cannot be a film: the studio itself, a year, or one of
-// the org-chart words.
-//
-// The studio half used to be a hardcoded list of three — UNIVERSAL, PARAMOUNT,
-// SONY — while the studio keyword list in this same file named eight. So a task
-// under "Warner Bros / DIGITAL" returned the film name "Warner Bros", and the
-// same for Disney, Netflix, Apple, Amazon and Lionsgate. Deriving it from the
-// shared list means adding a studio can never leave this behind again.
-//
-// studioKeywordOf, not a substring test: it treats underscores as separators,
-// so "Universal_UK_Archive" is recognised as Universal (a plain word-boundary
-// test would miss it, because `_` is a word character) while "Portfolio Mgmt"
-// is not mistaken for MGM.
+// A folder title that can't be a film: empty, a year, an org-chart word, or a
+// studio (from studios.js; studioKeywordOf treats `_` as a separator, so
+// "Universal_UK_Archive" counts and "Portfolio Mgmt" isn't MGM).
 const isNotAFilmName = (title) => {
   const t = String(title || "").trim();
   if (!t) return true;
@@ -113,23 +91,16 @@ export function getFilmName(task, folderDictionary, extractedPath = "", extraMap
   return resolveFilmName(task, folderDictionary, extractedPath, extraMappings, childToParents).name;
 }
 
-// getFilmName, plus which rule answered: "folder", "path", "code" or "prefix"
-// (or "none" for a task with no title).
-//
-// "prefix" is the last resort — the task name's first token, title-cased — and
-// is not a film at all: "GMF_Quotes_Quad" came back as the film "Gmf". Callers
-// that WRITE a film somewhere (a timesheet row, the Job Book) need to tell that
-// apart from a real answer, because a fake name that looks filled in is never
-// replaced, while a blank one is filled from the Job Book. Canvas and the
-// other display callers keep the prefix, where a label beats an empty header.
+// getFilmName plus which rule answered: "folder", "path", "code", "prefix" or
+// "none". "prefix" is the task name's first token title-cased ("GMF_…" → "Gmf"),
+// not a real film. Callers that WRITE a film (timesheet rows, the Job Book) treat
+// it as blank so the Job Book can fill it in; display callers may show it.
 export function resolveFilmName(task, folderDictionary, extractedPath = "", extraMappings = {}, childToParents = {}) {
   if (!task.title) return { name: "Unknown Project", source: "none" };
 
-  // 1. Tree-climb: find "DIGITAL" or "PRINT" folder, then take its parent as film name.
-  // Folders fetched individually (hydration) carry parentIds; the flat /folders list only
-  // returns childIds. When parentIds is absent we fall back to the reverse childToParents map
-  // built from childIds, so deep hierarchies (task → Job folder → INTL → PRINT → Film) work
-  // even when the folder dictionary came from the lightweight flat-list endpoint.
+  // 1. Tree climb: find a DIGITAL or PRINT folder and take its parent as the film.
+  // Folders hydrated by id carry parentIds; the flat folder list only has childIds,
+  // so fall back to the reverse childToParents map.
   if (task.parentIds?.length > 0) {
     let queue = [...task.parentIds];
     let visited = new Set(queue);
@@ -140,8 +111,7 @@ export function resolveFilmName(task, folderDictionary, extractedPath = "", extr
       const currentFolder = folderDictionary[currentId];
       if (!currentFolder) continue;
 
-      // Prefer stored parentIds; fall back to the reverse map, which now yields
-      // every parent rather than one arbitrary branch.
+      // Stored parentIds first, else every parent from the reverse map.
       const parentIds = currentFolder.parentIds?.length
         ? currentFolder.parentIds
         : orderedParents(currentId, childToParents, folderDictionary);
@@ -175,8 +145,7 @@ export function resolveFilmName(task, folderDictionary, extractedPath = "", extr
     const parts = extractedPath.split("/");
     const digIdx = parts.findIndex((p) => ["DIGITAL", "PRINT"].includes(p.toUpperCase()));
     if (digIdx > 0) {
-      // Same test as the tree climb above — a path segment that names the
-      // studio is no more a film than a folder that does.
+      // Same test as the climb: a path segment naming the studio isn't a film either.
       let back = digIdx - 1;
       while (back > 0 && isNotAFilmName(decodeURIComponent(parts[back]))) back--;
       if (back > 0 && parts[back].trim()) {
@@ -194,10 +163,9 @@ export function resolveFilmName(task, folderDictionary, extractedPath = "", extr
   return { name: titleCase(rawPrefix), source: "prefix" };
 }
 
-// The film a task can vouch for, or "" when all it has is the name-prefix
-// guess. Tasks enriched before projectNameSource existed (the Supabase cache
-// holds them until their next sync) are judged the way buildFilmCodeMappings
-// already judges them: a projectName that is just the prefix is the fallback.
+// The film a task can vouch for, or "" when all it has is the name-prefix guess.
+// Tasks cached before projectNameSource existed are judged by comparing the name
+// with the prefix.
 export function filmFromTask(task) {
   const name = task?.projectName || "";
   if (!name || name === "Unknown Project") return "";
@@ -210,30 +178,13 @@ export function filmFromTask(task) {
 // ---------------------------------------------------------------------------
 // Climb the folder tree to find the studio for a task
 // ---------------------------------------------------------------------------
-// Was a second, divergent copy of the studio list — see studios.js for what the
-// two disagreeing lists cost. Matching moved there too, so the scanner and the
-// enricher can no longer resolve the same folder to different studios.
+// Studio matching lives in studios.js, shared with the Job Book scan, so the two
+// can't resolve the same folder to different studios.
 
-// Build a childId→parentId[] reverse map from a folderDictionary that has
-// childIds. Wrike's /v4/folders returns childIds (downward), not parentIds
-// (upward), so we invert the relationship to enable upward tree climbing.
-//
-// EVERY parent, not one. This used to assign `map[childId] = folder.id`, so the
-// last folder iterated won and a folder shared into several places kept a single
-// arbitrary parent — arbitrary because the iteration order is just the order
-// Wrike's /folders endpoint happened to page the rows in, which it documents no
-// guarantee about. Every climb below then followed that one branch.
-//
-// It was not theoretical. In the Job Book, thirteen rows carrying codes in the
-// XY0249xx–XY0251xx range — the range Hamnet and Anemone occupy — are filed
-// under the film "Old", whose own campaign ran three years earlier. Every one of
-// them has a generic description ("NM Titles", "Packshots FinalWindow"): jobs
-// whose own folder name says nothing about the film, so the climb has to go
-// upward, and upward it went into a neighbouring campaign's branch.
-//
-// scanStudioJobNumbers reached the same conclusion for the scan side and its
-// `parentsOf` has been an array since; this is that fix carried back to the
-// enrich side, which is the one whose output reaches a timesheet.
+// childId → [every parentId], inverted from the folders' childIds (the folder
+// list gives childIds, not parentIds). EVERY parent: a folder can sit in several
+// places, and keeping just one (whichever Wrike paged last) sent climbs up an
+// unrelated branch and filed jobs under the wrong film.
 export function buildChildToParents(folderDictionary) {
   const map = {};
   for (const folder of Object.values(folderDictionary)) {
@@ -245,22 +196,13 @@ export function buildChildToParents(folderDictionary) {
   return map;
 }
 
-// A folder that exists to hold finished work rather than to describe it. Same
-// test the scanner uses (wrikeCampaign.js isArchiveNode) so a branch treated as
-// archived by one is treated as archived by the other.
+// A folder that holds finished work. Same test as wrikeCampaign's isArchiveNode,
+// so the scan and enrichment agree on what's archived.
 const isArchiveTitle = (title) =>
   /(^|[\s_])_?archive\b/i.test(title || "") || /master.?template/i.test(title || "");
 
-// The parents of one folder, ordered so a climb is deterministic and prefers a
-// live branch over an archived one.
-//
-// Order matters now that there can be more than one. Two folders at the same
-// distance are genuinely ambiguous, and resolving that by object-iteration order
-// would mean the same task could enrich differently on two runs against an
-// unchanged tree. Sorting by id makes the choice stable; putting non-archive
-// branches first makes it the better of the two rather than merely a repeatable
-// one. Both rules are cheap, and neither can turn a correct answer into a wrong
-// one — they only decide between candidates that were already tied.
+// A folder's parents in a stable order, live branches before archived ones, so
+// a task resolves the same way every time when two parents tie.
 function orderedParents(id, childToParents, folderDictionary) {
   const raw = childToParents[id];
   const ids = Array.isArray(raw) ? raw : raw ? [raw] : [];
@@ -283,9 +225,7 @@ export function getStudioName(task, folderDictionary, childToParents = {}) {
       const studio = studioNameOf(title);
       if (studio) return studio;
     }
-    // Climb to EVERY parent via the reverse childIds map. Breadth-first, so the
-    // nearest studio still wins; what changes is that a nearer studio sitting on
-    // a branch this climb used to not know about can now win at all.
+    // Breadth-first over every parent, so the nearest studio wins.
     for (const parentId of orderedParents(id, childToParents, folderDictionary)) {
       if (!visited.has(parentId)) {
         visited.add(parentId);
@@ -296,16 +236,10 @@ export function getStudioName(task, folderDictionary, childToParents = {}) {
   return null;
 }
 
-// The market folder a task sits in, resolved to countries. Localisation
-// campaigns carry the market in the tree rather than the task name — see
-// countriesFromFolderNames — so the climb walks outward from the task's own
-// folders and stops at the first one that names a country. Nearest wins, so a
-// "Chile" folder beats the "..._Markets" campaign root above it.
-//
-// Depth is capped: the market folder and its campaign root sit one or two
-// levels up, and climbing to the top of the account only risks a distant
-// ancestor (a studio or archive folder named after a country) claiming a task
-// that nobody labelled.
+// The market folder a task sits in, resolved to countries (localisation campaigns
+// put the market in the tree, not the task name). Nearest folder wins, so "Chile"
+// beats the "..._Markets" root above it. Depth is capped so a distant studio or
+// archive folder named after a country can't claim the task.
 const FOLDER_COUNTRY_MAX_DEPTH = 4;
 
 export function getFolderCountries(task, folderDictionary, childToParents = {}) {
@@ -334,23 +268,9 @@ export function getFolderCountries(task, folderDictionary, childToParents = {}) 
   return [];
 }
 
-// The discipline folder a task sits under — "Print" or "Digital", or "" when
-// the tree doesn't say.
-//
-// categoryFamily.js was written around exactly this signal ("print and digital
-// work sit in their own Wrike folders") but read it off a /Volumes path scraped
-// out of the task DESCRIPTION, which most tasks don't carry. The folders it was
-// describing were there the whole time and nothing ever looked at them.
-//
-// Same climb as getFolderCountries and capped the same way, which the tree
-// supports exactly: measured from the job folder, every discipline folder in
-// the account sits 1-3 levels up (2,010 at one, 1,055 at two, 15 at three) and
-// a cap of 4 saturates at 3,080 of 3,741 job folders. Nothing is gained by
-// climbing further and a distant ancestor is all that's up there.
-//
-// A level naming BOTH disciplines returns "" rather than picking one — the same
-// call categoryFamilyFromText makes when a brief says both words, and a real
-// case: XY025018_Odeon_Selfie_Station is filed under Print and Digital at once.
+// The discipline folder a task sits under: "Print", "Digital", or "" when the tree
+// doesn't say or one level names both (some jobs are filed under both).
+// Discipline folders sit 1-3 levels above the job folder, hence the cap.
 const FOLDER_FAMILY_MAX_DEPTH = 4;
 
 export function getFolderFamily(task, folderDictionary, childToParents = {}) {
@@ -388,26 +308,11 @@ export function getFolderFamily(task, folderDictionary, childToParents = {}) {
 // ---------------------------------------------------------------------------
 // The description a job carries in its own Wrike folder name
 // ---------------------------------------------------------------------------
-// A job's description lives in the folder title the push writes —
-// "XY026047_French_Canada_Assets" — but the Job Number custom field only ever
-// receives the BARE code (see PushToWrikeModal). So a task tagged "XY026047"
-// says which job it belongs to and nothing whatever about what that job is.
-//
-// Readers used to fill that gap by inventing a description from the task's own
-// name. A task name describes a piece of work, not a job, so the Job Book
-// ended up holding rows like "The Odyssey : XY026047, ODY_Print_Teaser1SHT_
-// Birds_CMYK_KR" for a job actually called "French Canada Assets" — and
-// because that string is well-formed, the Studio Scan's reconciliation can't
-// see anything wrong with it, so it was never repaired.
-//
-// Reading the folder instead means a description derived here and one derived
-// later by scanStudioJobNumbers come from the same place, so they cannot
-// disagree.
-//
-// Matched on the code already resolved for this task, NOT on "the nearest
-// folder that looks like a job": a task can sit under several parents at once,
-// and a neighbouring job's folder would silently describe these hours as
-// belonging to different work.
+// A job's description is its folder title ("XY026047_French_Canada_Assets"); the
+// Job Number field only holds the bare code. Read it from the folder whose title
+// starts with THIS task's code, not the nearest job-looking folder: a task can sit
+// under several, and a neighbour's folder would mislabel the hours. The Job Book
+// scan reads the same folders, so the two can't disagree.
 const FOLDER_JOB_MAX_DEPTH = 4;
 
 export function jobFolderDescription(task, code, folderDictionary, childToParents = {}) {
@@ -416,9 +321,8 @@ export function jobFolderDescription(task, code, folderDictionary, childToParent
   if (!bare) return "";
   const wanted = new RegExp(`^${bare}_`, "i");
 
-  // A subtask has no folder membership of its own — parentIds is the parent's
-  // business — so it climbs from the parent's folders, resolved at fetch time
-  // into superTaskParentIds. Same fallback the country resolver uses.
+  // A subtask has no folders of its own, so climb from its parent's
+  // (superTaskParentIds, resolved at fetch time).
   let level = task.parentIds?.length
     ? [...task.parentIds]
     : [...(task.superTaskParentIds || [])];
@@ -455,20 +359,14 @@ export function jobFolderDescription(task, code, folderDictionary, childToParent
 // ---------------------------------------------------------------------------
 // Print launch-tracking relevance (Print Canvas / Launch Tracker)
 // ---------------------------------------------------------------------------
-// Print coordinates each launch wave through a hub task ("*_Launch_Print_Requests"
-// / "*_Print_Teaser_Launch_Markets") whose subtasks are the per-market requests
-// ("AB3_INTL_Print_Teaser1SHT_Birds_CMYK_KR"). Only the HUB matches by title;
-// its per-market subtasks are kept by MEMBERSHIP (the sync/webhook look up
-// hub.subTaskIds — see useWrikeCache). Matching subtasks by title instead would
-// need a broad "_INTL_PRINT_" pattern that also swept in every unrelated print
-// asset in the workspace (e.g. ODY_INTL_PRINT_SilverSoldiers_Banner), bloating
-// the cache and polluting the Canvas gallery/notes with non-launch tasks.
+// Print runs each launch wave through a hub task ("*_Launch_Print_Requests",
+// "*_Print_Teaser_Launch_Markets") whose subtasks are the per-market requests.
+// Only the hub matches by title; its subtasks are kept by membership (see
+// useWrikeCache). A broader title pattern sweeps in unrelated print assets.
 export const PRINT_HUB_RE = /print_?requests|launch_?markets/i;
 
-// Which tasks keep their parsed description through enrichment (and are
-// therefore worth a description backfill when pagination drops it): MATRIX
-// tasks (the Canvas table) and Print launch hubs (paths, GD sheet, packaging
-// checklist). Everything else's description is deleted at enrich time.
+// Tasks whose parsed description survives enrichment, and so are worth a
+// description backfill: MATRIX tasks (the Canvas table) and Print launch hubs.
 export const keepsDescription = (title) => {
   const t = title || "";
   return t.toUpperCase().includes("MATRIX") || PRINT_HUB_RE.test(t);
@@ -515,50 +413,27 @@ export function filterToMotionTeam(tasks, folderDictionary, contactDictionary) {
 // Enrich raw Wrike tasks with computed fields (film name, paths, status, etc.)
 // ---------------------------------------------------------------------------
 export function enrichTasks(rawTasks, folderDictionary, contactDictionary, statusDictionary, childToParents = {}, extraMappings = {}) {
-  // Country codes live at the end of a task name, and production writes them
-  // on the parent task — the one people record time against — not always on
-  // every subtask. Wrike gives us subTaskIds but not superTaskIds, so invert
-  // the former once per batch to get each subtask its parent's title. Only the
-  // title is carried (countryCodes.js reads nothing else), so this costs a
-  // string per subtask rather than a second pass over the API.
+  // Country codes are often only on the parent task's name. Wrike gives subTaskIds
+  // but not the parent, so invert subTaskIds within the batch.
   const parentTitleById = {};
   for (const t of rawTasks) {
     for (const childId of t.subTaskIds || []) parentTitleById[childId] = t.title;
   }
 
   return rawTasks.map((task) => {
-    // Only MATRIX tasks need the parsed description — that's where the tableHtml
-    // the Canvas renders lives. For every other task the derived notes/path text
-    // (notesText + extractedPathData) was ~9 MB of retained cache we barely use:
-    // project/studio names come from the folder tree below (getFilmName tree-
-    // climbs first; getStudioName never touches the description), and the
-    // job/territory guessing that DOES read the description fetches it per-task
-    // on the fly (useTaskActions / LegacyTimesheets), not from this cache. So we
-    // skip parsing and don't retain those bytes for non-MATRIX tasks. Tradeoff:
-    // global search no longer matches on notes/path text for non-MATRIX tasks,
-    // and film detection loses its description fallback (folder-tree only).
-    // Print launch hubs also keep their parsed description — it carries the
-    // job-folder paths, OV master links, GD sheet URL and the per-market
-    // packaging checklist the Launch Tracker renders.
+    // Only MATRIX tasks and Print launch hubs keep their parsed description (the
+    // Canvas table; the hub's paths and checklist). For everything else it was ~9 MB
+    // of cache nobody read: film and studio come from the folder tree, and the
+    // job/territory guessing fetches descriptions on demand.
     const isMatrix = keepsDescription(task.title);
     const parsed = isMatrix
       ? parseWrikeData(task.description)
       : { tableHtml: "", notesText: "", extractedPathData: "" };
     delete task.description;
 
-    // Wrike returns every populated custom field (~6.5/task, 35 distinct in
-    // this account, ~9 MB of cache). Cached tasks' customFields ARE read —
-    // TaskDetailModal's fullTask and the Tracker's taskMap both come from
-    // this cache — but their reader (guessFieldsFromTask) only ever pattern-
-    // matches three things in the values: the XY job code, /Volumes server
-    // paths, and territory names/aliases. Keep exactly those three shapes
-    // (verified against the live data: the one territory-bearing field held
-    // codes like AE/AUS; everything else dropped is rates, dates, Wrike user
-    // ids, statuses and comment HTML the app never reads).
-    // The pinned Country field is kept whatever it holds — value-shape tests
-    // decide what's worth caching from the fields we can't identify, and that
-    // reasoning doesn't apply to the one field we can. Dropping a value the
-    // resolver is entitled to read would turn a correct answer into a blank.
+    // Keep only the custom fields guessFieldsFromTask can use: an XY job code, a
+    // /Volumes path, or a territory value, plus the pinned Country field whatever it
+    // holds. The rest (rates, dates, user ids) was ~9 MB of cache.
     const countryIds = new Set(countryFieldIds());
     const customFields = Array.isArray(task.customFields)
       ? task.customFields.filter((cf) => {
@@ -614,33 +489,20 @@ export function buildFilmCodeMappings(enrichedTasks) {
 // ---------------------------------------------------------------------------
 // Fetch missing parent folder IDs from Wrike API (archives, etc.)
 // ---------------------------------------------------------------------------
-// Returns { folderDictionary, complete, unresolved, rounds, exhausted }.
-//
-// The dictionary is still mutated in place, so a caller that only wants the
-// folders can keep ignoring the return value. What is new is that a caller can
-// now ASK whether the tree it is about to climb is whole.
-//
-// It often is not. A chunk that fails is caught, logged and skipped, and the
-// loop gives up after 8 rounds regardless — both are deliberate, because a
-// rate-limited hydration should not take down an enrichment. The cost was that
-// the incompleteness became invisible: every climber reads a half-built tree
-// exactly as it reads a whole one, and returns a confident wrong answer instead
-// of an error. Reporting it does not make the tree any more complete; it makes
-// the difference *knowable*, which is the part that was missing.
+// Mutates folderDictionary in place and returns { folderDictionary, complete,
+// unresolved, rounds, exhausted, recycled }. Failed chunks are logged and skipped
+// and it stops after 8 rounds, so a rate limit can't take down enrichment. Check
+// `complete`: climbs over a partial tree give confident wrong answers.
 export async function hydrateMissingFolders(tasks, folderDictionary) {
   let missing = new Set();
   tasks.forEach((t) => t.parentIds?.forEach((pid) => {
     if (!folderDictionary[pid]) missing.add(pid);
   }));
 
-  // Ids we asked for and did not get back — a failed chunk, or a chunk that
-  // returned without them. Cleared per id as soon as one does arrive, since a
-  // later round can still resolve what an earlier one missed.
+  // Ids asked for and not returned. Cleared as soon as a later round finds them.
   const unresolved = new Set();
-  // Folders we deliberately did NOT hydrate because they sit in the recycle
-  // bin. Excluded is not the same as missing, and conflating them would make
-  // every sync of a workspace with a populated recycle bin report an incomplete
-  // tree forever.
+  // Recycle-bin folders skipped on purpose. Kept apart from unresolved so a full
+  // recycle bin doesn't make every tree look incomplete.
   const recycled = new Set();
 
   let loopCount = 0;
@@ -654,10 +516,7 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
         const res = await fetchRetrying(`/api/wrike/folders/${chunk.join(",")}`);
         if (res.ok) {
           (await res.json()).data?.forEach((f) => {
-            // Recycled folders are deliberately not hydrated — same filter
-            // fetchAllFolders applies. Recorded as excluded rather than
-            // unresolved below, so "the tree is incomplete" keeps meaning
-            // "something is missing that should be here".
+            // Recycled folders aren't hydrated (same filter as fetchAllFolders).
             if (/^Rb/i.test(f.scope || "")) { recycled.add(f.id); return; }
             folderDictionary[f.id] = f;
             f.parentIds?.forEach((pid) => {
@@ -668,9 +527,7 @@ export async function hydrateMissingFolders(tasks, folderDictionary) {
       } catch (e) {
         console.error("Folder hydration chunk failed", e);
       }
-      // Whatever this chunk asked for and still isn't in the dictionary is
-      // unresolved, whether the request threw, returned non-OK, or simply came
-      // back without it.
+      // Whatever this chunk asked for and still lacks is unresolved, whatever the cause.
       chunk.forEach((id) => {
         if (!folderDictionary[id] && !recycled.has(id)) unresolved.add(id);
       });

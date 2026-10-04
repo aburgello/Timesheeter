@@ -100,10 +100,13 @@ testing it recovered all but the new header and import lines of each file
 threshold matters: the default `-C` doesn't recognise this move. On GitHub,
 open `components/Management.jsx` as it was before the split commit instead.
 
-**How the code is commented.** Comments mostly explain *why*, often with the
-incident that made a rule necessary, including the date and the numbers
-involved. Before "simplifying" something that looks over-careful, read the
-comment above it. It usually describes the bug that the simpler version had.
+**How the code is commented.** Comments explain *why* in a few lines, and
+the history behind a rule (what broke, when) lives in the commit that added
+it. Before "simplifying" something that looks over-careful, read the comment
+above it, then `git log -L` or `git blame` on those lines for the full story.
+Older files still carry long narrative comments from before this rule. They're
+being trimmed file by file, with nothing but comments changing. CLAUDE.md has
+the rule, and AI coding assistants read it automatically.
 
 
 ## Making a change safely

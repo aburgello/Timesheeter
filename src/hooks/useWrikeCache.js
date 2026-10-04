@@ -49,11 +49,9 @@ const CACHE_FORMAT_KEY = "xyi_cache_format";
 // without it every dev reload downloaded the Supabase cache twice.
 let bootStarted = false;
 
-// A task's permalink is always https://www.wrike.com/open.htm?id=<id>, so
-// storing it is ~1.4 MB of pure redundancy across 25k rows that every cold
-// start then re-downloads. Strip it from the *stored* copy only — the
-// in-memory object and the local IndexedDB mirror keep it, and the one
-// consumer that read it without an id fallback (Canvas) now reconstructs it.
+// A task's permalink is always https://www.wrike.com/open.htm?id=<id>, so it's
+// stripped from the stored copy (~1.4 MB across the cache). Memory and the local
+// mirror keep it.
 const stripForStorage = ({ permalink, ...rest }) => rest;
 
 // ---------------------------------------------------------------------------
@@ -84,14 +82,8 @@ async function fetchWrikeTasks(sinceIso) {
   return rawTasks;
 }
 
-// Wrike's get-tasks-BY-ID endpoint returns every optional field the app
-// needs (description, customFields, parentIds, responsibleIds, subTaskIds,
-// permalink) by default — and it 400s ("Fields parameter value 'subTaskIds'
-// not allowed") when those fields are passed explicitly via fields=. Only
-// the flat LIST endpoint needs FIELDS_FILTER. The old code here sent
-// fields= on by-id requests and walked a per-task fallback ladder, which
-// meant two guaranteed-400 requests per task before the bare one succeeded —
-// harmless at webhook scale, catastrophic when a sync backfills thousands.
+// Fetch-by-id returns every field we need by default and 400s if they're named
+// in fields=, so no fields param here. Only the list endpoint needs FIELDS_FILTER.
 async function fetchOneTask(id) {
   try {
     const r = await fetch(`/api/wrike/tasks/${id}`);
@@ -103,18 +95,9 @@ async function fetchOneTask(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Re-fetch specific tasks by ID *with* the fields param.
-// Wrike pagination drops optional fields (description, customFields) on pages
-// 2+, so tasks from later pages come back without their description — which is
-// where the MATRIX table + notes live. Fetching by ID guarantees we get them.
-//
-// Explicit fields= (not just relying on get-by-id defaults) — callers of this
-// function read parentIds and customFields off the result (the MATRIX repair
-// and the sync-time description backfill below), and every webhook-driven
-// caller (useWrikeCache's and useMotionBoardTasks' realtime patch) needs the
-// same enrichment inputs a full sync gets, so a live-patched task's project/
-// studio name and Motion-team relevance don't silently degrade versus one
-// that came from a full resync.
+// Re-fetch specific tasks by id, up to 100 per request. Used where the list
+// endpoint's pages 2+ dropped optional fields (description, subTaskIds), and by
+// every webhook handler, so a live-patched task has the same fields as a synced one.
 // ---------------------------------------------------------------------------
 async function fetchBatched(ids) {
   const out = [];
@@ -144,12 +127,9 @@ async function fetchBatched(ids) {
   return out;
 }
 
-// Four components subscribe to the same webhook event stream and each asked for
-// the same changed task independently, so one Wrike edit fanned out into four
-// identical fetch ladders. Collapse concurrent callers onto one request per
-// task. Entries are dropped as soon as they settle — this coalesces the fan-out
-// of a single event, it is not a result cache, so a task that genuinely changes
-// again is always refetched.
+// Several components react to the same webhook event; collapse their concurrent
+// requests for a task into one. Entries go as soon as they settle, so this is
+// not a cache.
 const inflight = new Map();
 
 export async function fetchTasksByIds(ids) {
@@ -234,13 +214,10 @@ export function useWrikeCache() {
 
   const wrikeUserId = localStorage.getItem("wrike_user_id");
 
-  // --- Load cached tasks on mount: IndexedDB mirror first, Supabase deltas only ---
-  // Load all rows regardless of wrike_user_id — single-team tool, cache is shared.
-  // The full cache is tens of MB; downloading it from Supabase on every page
-  // load (twice, under StrictMode) was burning GBs of egress per day. Now the
-  // browser hydrates instantly from its local mirror and only pulls rows whose
-  // updated_date moved past the local cursor. A full download happens exactly
-  // once per browser (cold start / cleared site data).
+  // --- Load cached tasks on mount: local mirror first, then Supabase deltas ---
+  // The shared cache is tens of MB, so each browser keeps a local mirror and only
+  // pulls rows whose updated_date passed its cursor. A full download happens once
+  // per browser.
   useEffect(() => {
     if (bootStarted) return;
     bootStarted = true;
@@ -324,30 +301,22 @@ export function useWrikeCache() {
       };
 
       // --- SELF-HEAL + STUDIO BACKFILL ---
-      // MATRIX tasks that predate parentIds in FIELDS_FILTER have parentIds=undefined.
-      // Re-fetch those by ID to get full data. Also re-fetch any still missing tableHtml.
-      // After repair, fetch a fresh folder dict if the Supabase copy is sparse, then
-      // backfill studioName on every task that still lacks it.
+      // Re-fetch broken cached tasks by id, refresh a sparse folder dictionary, then
+      // fill in studioName where it's missing.
       if (wrikeUserId && loaded.length) {
-        // Broken cached copies to re-fetch by id: MATRIX tasks that predate
-        // parentIds in FIELDS_FILTER (or lost their table), and Print launch
-        // hubs that were cached from list pages 2+ — those pages drop the
-        // whole fields param, so the hub arrived with NO subTaskIds (and no
-        // description), leaving the Launch Tracker without its market links.
+        // Broken cached copies: MATRIX tasks missing parentIds or their table, and Print
+        // launch hubs cached from list pages 2+ without subTaskIds (the Launch Tracker
+        // needs them for its market links).
         const broken = loaded.filter(
           (t) =>
             (t.title?.toUpperCase().includes("MATRIX") && (!t.tableHtml || !t.parentIds?.length)) ||
             (t.title && PRINT_HUB_RE.test(t.title) && (!t.subTaskIds?.length || !t.notesText))
         );
-        // Nothing to heal → skip the whole block, most importantly the
-        // multi-MB folder_dictionary download it needs. This is the steady
-        // state: repairs and backfills persist, so after one clean pass this
-        // costs zero egress.
+        // Nothing to heal: skip the block, and with it the multi-MB folder_dictionary
+        // download. Repairs persist, so this is the normal case.
         const needsStudioProbe = loaded.some((t) => !t.studioName);
-        // Print launch hubs whose per-market subtasks aren't cached: those
-        // subtasks were mostly completed before the sync lookback window, so
-        // no delta/full sync will ever pull them — backfill them by id here,
-        // once, and persist. (Same self-heal idiom as the MATRIX repair.)
+        // Launch-hub subtasks that aren't cached. Most were completed before the sync
+        // window, so no sync will ever pull them; backfill them by id once.
         const cachedIds = new Set(loaded.map((t) => t.id));
         const subIdsOfHubs = () => [...new Set(
           loaded
@@ -452,13 +421,9 @@ export function useWrikeCache() {
         }
 
         // --- PRINT LAUNCH SUBTASK BACKFILL ---
-        // Fetch the hub subtasks the sync window can't reach, run them through
-        // the same enrichment as everything else, and persist to both caches —
-        // after this one pass the Launch Tracker's market chips survive
-        // refreshes and render for the whole team without any live fetching.
-        // Recomputed AFTER the repair above: a hub that just got its
-        // subTaskIds restored surfaces its missing subtasks in this same
-        // pass instead of waiting for the next reload.
+        // Fetch and enrich the hub subtasks the sync window can't reach and persist them
+        // to both caches. Recomputed after the repair above, so a hub that just got its
+        // subTaskIds back is included in this pass.
         const missingSubIds = subIdsOfHubs();
         if (missingSubIds.length > 0) {
           console.log(`[WrikeCache] backfilling ${missingSubIds.length} print launch subtasks`);
@@ -548,17 +513,9 @@ export function useWrikeCache() {
         ? toWrikeDate(new Date(new Date().setMonth(new Date().getMonth() - LOOKBACK_MONTHS)))
         : toWrikeDate(meta.last_synced_at);
 
-      // Refresh folder/contact/status dicts if stale or missing.
-      //
-      // "Stale" used to be measured from last_synced_at, which every sync
-      // moves forward. With the team syncing every 15 minutes it never got a
-      // day old, so the dictionaries only refreshed when someone forced a
-      // full sync: new starters weren't recognised as Motion-team assignees,
-      // and renamed folders and new workflow statuses never appeared.
-      // dictionaries_refreshed_at is their own clock, moved only by a refresh
-      // that came back complete (see fetchWrikeMeta). A database without that
-      // column yet (see its migration) falls back to the old measure, so this
-      // can be deployed before or after the migration is applied.
+      // Refresh folder/contact/status dicts once a day, on their own clock
+      // (dictionaries_refreshed_at): measured from last_synced_at they never got a day
+      // old while anyone was syncing. Without that column, falls back to last_synced_at.
       const hasDictClock = !!meta && "dictionaries_refreshed_at" in meta;
       const dictRefreshedAt = hasDictClock
         ? (meta.dictionaries_refreshed_at ? new Date(meta.dictionaries_refreshed_at).getTime() : 0)
@@ -581,12 +538,8 @@ export function useWrikeCache() {
       // Fetch tasks changed since last sync
       const rawTasks = await fetchWrikeTasks(sinceIso);
 
-      // Hydrate any missing archive folder IDs. The dictionary is filled in
-      // place; the return value says whether it actually got filled. A rate
-      // limit here leaves branches missing and the climbs below read a partial
-      // tree as if it were whole, so record it on the sync rather than letting
-      // it pass silently — a cache built from an incomplete tree is the thing
-      // you want named when a film later looks wrong.
+      // Fill in folders the dictionary lacks. If that's incomplete (rate limit), say
+      // so: climbs over a partial tree give confident wrong answers.
       if (rawTasks.length > 0) {
         const hydration = await hydrateMissingFolders(rawTasks, folderDictionary);
         if (!hydration.complete) {
@@ -597,13 +550,9 @@ export function useWrikeCache() {
         }
       }
 
-      // Filter to the motion-team-relevant subset FIRST (filter only uses base
-      // fields — title/parentIds/responsibleIds/subTaskIds — present on every page).
-      // Print/digital launch-hub subtasks are relevant BY MEMBERSHIP, not by
-      // title: digital launch waves' per-market subtasks carry no "_Print_"
-      // marker, so a title-only filter would purge what the Launch Tracker's
-      // backfill just cached. Anything hanging off a known hub — already
-      // cached or in this batch — is kept and kept fresh.
+      // Keep only Motion-relevant tasks (the filter uses fields every page has).
+      // Launch-hub subtasks are relevant by membership, not title (digital waves'
+      // subtasks have no "_Print_" marker), so anything under a known hub is kept.
       const hubSubIds = new Set(
         [...tasksRef.current, ...rawTasks]
           .filter((t) => t.title && PRINT_HUB_RE.test(t.title))
@@ -617,24 +566,17 @@ export function useWrikeCache() {
       }
       const relevant = [...relevantMap.values()];
 
-      // Tasks Wrike reports as changed but that no longer pass the filter
-      // (e.g. reassigned off the Motion team) must be purged from the cache —
-      // otherwise their stale pre-change copy lingers there forever, since
-      // nothing else ever revisits a task once it drops out of relevance.
-      // Only ids actually IN the cache are worth purging: a full refresh pulls
-      // the whole workspace's recent tasks, and issuing a DELETE for ~15k
-      // never-cached ids blew past the URL length limit (connection closed).
+      // Tasks that changed and no longer pass the filter (e.g. reassigned) are purged,
+      // or their stale copy would stay forever. Only ids actually cached: a full
+      // refresh sees ~15k others, too many for one DELETE URL.
       const cachedIdSet = new Set(tasksRef.current.map((t) => t.id));
       const droppedIds = rawTasks
         .filter((t) => !relevantMap.has(t.id) && cachedIdSet.has(t.id))
         .map((t) => t.id);
 
-      // Re-fetch descriptions for any relevant task missing one (pagination drops
-      // the fields param on pages 2+). This restores the MATRIX table + notes.
-      // Only tasks whose description survives enrichment (MATRIX + Print launch
-      // hubs) are worth the round-trips — enrichTasks deletes everyone else's
-      // description on arrival, so backfilling those was pure API burn (4,600+
-      // by-id fetches per sync once the Print filter widened relevance).
+      // List pages 2+ come back without descriptions. Re-fetch them only for tasks
+      // that keep one after enrichment (MATRIX, Print launch hubs); anyone else's is
+      // discarded anyway.
       const missingDesc = relevant
         .filter((t) => !t.description && keepsDescription(t.title))
         .map((t) => t.id);
@@ -709,9 +651,8 @@ export function useWrikeCache() {
         console.log(`[WrikeCache] film code mappings: ${Object.keys(mergedFilmMappings).length} total, ${Object.keys(newMappings).length} new this sync`);
       }
 
-      // Persist updated meta to the shared row. The dictionaries written back
-      // are either fresh and whole, or the copies already there: fetchWrikeMeta
-      // returns the previous copy of any list it couldn't fetch in full.
+      // Persist meta. Each dictionary written is either fresh and complete or the copy
+      // already there (fetchWrikeMeta keeps the previous copy of a failed list).
       await supabase.from("wrike_sync_meta").upsert({
         wrike_user_id: SHARED_META_ID,
         last_synced_at: new Date().toISOString(),
@@ -719,9 +660,8 @@ export function useWrikeCache() {
         contact_dictionary: needsMetaRefresh ? contactDictionary : (meta?.contact_dictionary ?? {}),
         status_dictionary:  needsMetaRefresh ? statusDictionary  : (meta?.status_dictionary  ?? {}),
         film_code_mappings: mergedFilmMappings,
-        // Only sent when the column exists, so a database that hasn't had the
-        // migration yet keeps accepting this upsert. Not moved by an incomplete
-        // refresh, so the next sync tries again instead of waiting a day.
+        // Only sent if the column exists, and only after a complete refresh, so a
+        // failed refresh is retried on the next sync.
         ...(hasDictClock && dictionariesComplete
           ? { dictionaries_refreshed_at: new Date().toISOString() }
           : {}),
@@ -734,9 +674,8 @@ export function useWrikeCache() {
         filmCodeMappings: mergedFilmMappings,
       };
 
-      // Merge new tasks into state, then backfill studioName on any task still missing it.
-      // Archived tasks (outside the lookback window) are never re-enriched, so we use the
-      // live in-memory folderDictionary (always complete) rather than the Supabase-stored copy.
+      // Merge into state, then fill studioName where missing using the in-memory
+      // folder dictionary (older tasks outside the sync window are never re-enriched).
       setTasks((prev) => {
         const map = new Map(prev.map((t) => [t.id, t]));
         droppedIds.forEach((id) => map.delete(id));
@@ -786,12 +725,10 @@ export function useWrikeCache() {
 
   const syncNow = useCallback(() => sync({ fullRefresh: true }), [sync]);
 
-  // --- Live updates: Wrike webhook events pushed via Supabase Realtime ---
-  // The Worker (worker/index.js) receives Wrike webhooks and writes lightweight
-  // {task_id, event_type} rows into wrike_webhook_events. We pick those up here,
-  // fetch just the changed task(s), and run them through the same enrichTasks
-  // pipeline sync() uses — this is the fast path; sync()'s 15-min poll remains
-  // the fallback for missed webhook deliveries or when no tab is open.
+  // --- Live updates: Wrike webhook events via Supabase Realtime ---
+  // The Worker writes a row to wrike_webhook_events per changed task. Fetch those
+  // tasks and run them through the same filter and enrichment as sync(). The
+  // 15-minute sync covers missed webhooks and times when no tab is open.
   const handleWebhookTaskIds = useCallback(async (ids) => {
     if (!ids.length) return;
 

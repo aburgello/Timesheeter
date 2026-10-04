@@ -1,14 +1,12 @@
 import { isBoardTask, isStale } from "../src/lib/jobFilter";
 // Cloudflare Worker: Wrike OAuth (authorization code flow) + API proxy.
 //
-// Members never see a Wrike access token. They hit /api/wrike/oauth/start,
-// approve on Wrike's site, and land back here. From then on the browser talks
-// to /api/wrike/* (this Worker), which attaches the stored token, refreshes it
-// when it's about to expire, and forwards the request to the real Wrike API.
+// Members never see a Wrike token. After /api/wrike/oauth/start and Wrike's
+// approval page, the browser calls /api/wrike/* here, and this attaches the
+// stored token (refreshing it when needed) and forwards to Wrike.
 //
-// Tokens live in Supabase (wrike_oauth_tokens), reachable only with the
-// service role key held in this Worker's secrets — RLS blocks the anon/
-// authenticated roles the browser client uses entirely.
+// Tokens live in Supabase (wrike_oauth_tokens), reachable only with the service
+// role key in this Worker's secrets; RLS blocks the browser's roles entirely.
 
 const WRIKE_AUTHORIZE_URL = "https://login.wrike.com/oauth2/authorize/v4";
 const WRIKE_TOKEN_URL = "https://login.wrike.com/oauth2/token";
@@ -17,59 +15,33 @@ const STATE_COOKIE = "wrike_oauth_state";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 180; // 180 days
 const STATE_MAX_AGE = 600; // 10 minutes
 
-// A page load fires several /api/wrike/* calls in parallel. If more than one
-// happens to see a near-expired/expired access token at once, each would
-// independently call Wrike's refresh endpoint with the SAME refresh_token —
-// and since Wrike rotates refresh tokens on use, only the first actually
-// succeeds; every other concurrent caller's refresh_token is already dead by
-// the time it lands, so it gets rejected (token_refresh_failed) even though a
-// valid new token now exists in the DB from the winning call. Keyed by
-// session_token, so concurrent requests share one in-flight refresh instead
-// of racing each other; cleared as soon as that refresh settles either way.
+// One in-flight refresh per session_token. Wrike rotates the refresh token on
+// use, so two concurrent refreshes with the same token mean the second fails
+// (token_refresh_failed) even though the first just stored a good one.
 const refreshInFlight = new Map();
 
-// Deadline for the Supabase calls on the auth critical path. Every /api/wrike/*
-// call begins with a token-row read, so when the data API stalls — as it did on
-// 2026-08-28, individual reads hanging 200s while the median stayed at 20ms —
-// an unbounded read eats the entire Worker request budget and the caller is
-// killed mid-flight. Failing fast turns that into a retryable error instead.
+// Deadline for Supabase calls on the auth path. Every /api/wrike/* call starts
+// with a token-row read, and a stalled read would otherwise eat the whole
+// request budget.
 const SB_AUTH_TIMEOUT_MS = 5000;
 
-// ...and retry rather than giving up on the first one.
-//
-// The stalls this defends against wedge individual requests, not the service:
-// through the worst of 2026-08-28 the median read stayed around 20ms while the
-// 95th percentile sat at 150s. So a read that blows the deadline is best
-// abandoned and simply asked again — the retry is overwhelmingly answered at
-// once. Timing out without retrying was half a fix: it correctly stopped the
-// hang, then returned 503 for a database that was, for almost every other
-// caller, responding instantly.
-//
-// Three attempts, worst case ~15.5s, inside Cloudflare's 30s request ceiling.
+// ...and retry, because stalls hit individual requests, not the service: a
+// retry is almost always answered at once. Three attempts, worst case ~15.5s,
+// inside Cloudflare's 30s limit.
 const SB_AUTH_RETRY_DELAYS_MS = [100, 400];
 
 // Backoff for re-attempting a token write that failed. See unpersistedTokens.
 const TOKEN_PERSIST_RETRY_DELAYS_MS = [1000, 3000, 8000];
 
-// Credentials Wrike has already issued to us but that we have not managed to
-// store yet.
+// Credentials Wrike has issued but we haven't managed to store yet.
 //
-// Wrike rotates the refresh token on every use: the moment it hands us a new
-// pair, the old refresh token is dead. So a refresh is two steps that must both
-// land — mint at Wrike, then save — and losing the save is unrecoverable. The
-// stored refresh token no longer works, nothing can mint another, and the
-// member is signed out for good until they reconnect by hand. That is exactly
-// what a stalled database caused: the save hung, Cloudflare killed the request
-// at 30s, and the new credentials went with it.
-//
-// Holding them here lets this isolate keep serving the member while the write
-// is retried in the background, so a database blip costs latency rather than
-// their session.
+// Wrike kills the old refresh token as soon as it issues a new pair, so losing
+// the save would sign the member out for good. Holding the pair here keeps
+// them working while the save is retried in the background.
 const unpersistedTokens = new Map();
 
-// Wrike positively rejected our credentials (as opposed to us failing to reach
-// Wrike or Supabase). Only this means the member must genuinely reconnect;
-// everything else is transient and must not present as a sign-out.
+// Wrike positively rejected our credentials. Only this means the member must
+// reconnect; anything else is transient and must not look like a sign-out.
 class WrikeAuthInvalid extends Error {}
 
 export default {
@@ -107,9 +79,8 @@ export default {
     if (url.pathname === "/api/jobs-feed/import" && request.method === "POST") {
       return handleJobsFeedImport(request, env);
     }
-    // Read-only feed for the XYi Toolbox CEP panel. Own route, not a reuse of
-    // /api/jobs-feed: that one is the TIMESHEET table and gates on a browser
-    // session cookie, neither of which suits a panel whose origin is `null`.
+    // Read-only feed for the XYi Toolbox panel. Not /api/jobs-feed, which needs a
+    // browser session cookie; the panel's origin is `null`.
     if (url.pathname === "/api/panel/jobs") {
       if (request.method === "OPTIONS") return panelPreflight();
       return handlePanelJobs(request, url, env);
@@ -159,16 +130,12 @@ function json(body, init = {}) {
 }
 
 // ── Video embed page (Notes Canvas sketches) ─────────────────────────────────
-// Excalidraw can only host another document via an iframe. Pointed straight at
-// an .mp4, that iframe gets Chrome's built-in media document — whose behaviour
-// (autoplay in particular) is the browser's to decide, not ours, and varies by
-// version. Serving our own one-page wrapper puts playback back under our
-// control: `controls`, `preload="metadata"`, and pointedly NO autoplay, so a
-// board full of clips opens silent and still.
+// Excalidraw can only embed via an iframe, and an iframe pointed at an .mp4 gets
+// the browser's own player (autoplay is up to the browser). Our wrapper page
+// sets controls and no autoplay.
 //
-// The src is restricted to this project's own Storage bucket. Without that
-// check the route would happily frame any URL on request — an open embedder
-// sitting on our origin, usable to dress a third-party page up as ours.
+// The src must be in this project's own Storage bucket, or the route would frame
+// any URL on our origin.
 function handleVideoEmbed(url, env) {
   const src = url.searchParams.get("src") || "";
   const allowedPrefix = `${env.SUPABASE_URL}/storage/v1/object/public/notes-images/`;
@@ -199,12 +166,9 @@ function handleVideoEmbed(url, env) {
 }
 
 // ── Admin Jobs Feed (all users' time) ────────────────────────────────────────
-// The tasks table has a per-user RLS policy (wrike_user_isolation), so a browser
-// read only ever returns the caller's own rows. The Administration Jobs Feed is
-// a management view that must show everyone's time, so it reads through here:
-// service-role query bypasses RLS server-side. Gated on a valid Wrike session so
-// only a connected member can call it (jobs/profiles are already world-readable
-// to authenticated users, so only tasks needs this).
+// `tasks` has per-user RLS, so the browser only sees its own rows. The
+// Administration Jobs Feed shows everyone's time, so it reads here with the
+// service role, gated on a valid Wrike session.
 async function handleJobsFeed(request, env) {
   const cookies = parseCookies(request);
   const session = cookies[SESSION_COOKIE];
@@ -218,12 +182,10 @@ async function handleJobsFeed(request, env) {
   }
   if (!row) return json({ error: "not_connected" }, { status: 401 });
 
-  // Limit raised alongside the CSV importer: a bulk load of historical time
-  // can push the table well past the old 5000 cap, and a silently truncated
-  // feed reads as "those hours were never imported".
-  // Ordered by the day the work happened, not by id — id only reflects when a
-  // row was pulled in, which can be long after the date it is tagged with.
-  // Rows with no date fall to the bottom; ties break by most-recently-synced.
+  // 20000 limit: after bulk imports the table is well past the old 5000, and a
+  // silently truncated feed looks like missing hours.
+  // Ordered by the day the work happened (id only reflects when it was pulled);
+  // undated rows last, ties by most recently synced.
   const res = await sbFetch(env, "/tasks?select=*&order=work_date.desc.nullslast,id.desc&limit=20000");
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -236,16 +198,11 @@ async function handleJobsFeed(request, env) {
 
 // ── Jobs Feed import ─────────────────────────────────────────────────────────
 // Bulk-load timesheet rows from a CSV shaped like the feed's own export.
+// Server-side because `tasks` has per-user RLS and an import covers the whole
+// team; gated on a valid Wrike session.
 //
-// Server-side for the same reason the read is: `tasks` carries a per-user RLS
-// policy, so a browser insert can only ever write the caller's own rows — and
-// an import file covers the whole team. The service-role write bypasses that,
-// so this is gated on a valid Wrike session like the read.
-//
-// Runs in two passes. `dryRun` classifies every row and returns the plan
-// without writing; the same request without it applies exactly that plan. The
-// UI always previews first — same plan/apply contract the Wrike write layer
-// uses (see src/lib/wrikeCampaign.js).
+// Two passes: `dryRun` returns the plan without writing; the same request
+// without it applies exactly that plan. The UI always previews first.
 
 const IMPORT_MAX_ROWS = 5000;
 const EMOJI_RE = /\p{Extended_Pictographic}/gu;
@@ -255,10 +212,8 @@ const EMOJI_RE = /\p{Extended_Pictographic}/gu;
 const cleanName = (s) => (s || "").replace(EMOJI_RE, "").replace(/\s+/g, " ").trim();
 const nameKey = (s) => cleanName(s).toLowerCase();
 
-// The feed stores time as "H:MM" text. Accept that, "H:MM:SS" (what a
-// spreadsheet writes when the column is formatted as a duration/time), or a
-// decimal ("1.5"), and normalise to "H:MM" so imported rows read identically
-// to tracked ones. Seconds are rounded into the minutes rather than dropped.
+// Time as "H:MM", "H:MM:SS" (spreadsheet durations) or decimal "1.5",
+// normalised to "H:MM". Seconds are rounded, not dropped.
 function normaliseTime(v) {
   const s = String(v ?? "").trim();
   if (!s || s === "-" || s === "—") return null;
@@ -275,13 +230,8 @@ function normaliseTime(v) {
   return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`;
 }
 
-// The export writes dd.mm.yy; hand-made files carry dd/mm/yyyy or ISO, and a
-// spreadsheet that treated the column as a datetime serialises a midnight time
-// alongside it ("06/01/2026 00:00:00"). The feed's date column is a date only,
-// so any time part is dropped before matching rather than failing the row.
-//
-// Day-first, not month-first: it's what the rest of the app assumes when it
-// normalises the mixed-format `date` column (see toIso in the feed), so
+// Dates as dd.mm.yy (the export), dd/mm/yyyy or ISO; a trailing time
+// ("06/01/2026 00:00:00") is dropped. Day-first, like the rest of the app, so
 // "06/01/2026" is 6 January.
 function normaliseDate(v) {
   const s = String(v ?? "").trim().split(/[T\s]/)[0];
@@ -349,27 +299,18 @@ async function handleJobsFeedImport(request, env) {
     const key = nameKey(`${p.first_name || ""} ${p.last_name || ""}`);
     if (key) peopleByName[key] = p.wrike_user_id;
   }
-  // Existing jobs keyed on the CODE, not the whole label.
-  //
-  // One job legitimately arrives written several ways — "XY025091" from a
-  // panel that hadn't consulted the Job Book, "Film : XY025091, Desc" from one
-  // that had, the same description with or without the region prefix the
-  // folder scan writes. Keying on the label made an import file's variant of a
-  // job we already hold look brand-new, so it was queued for creation: before
-  // the jobs_job_code_key index that quietly produced a second row for one
-  // job, and after it, a constraint violation that fails the entire insert
-  // chunk and aborts the whole import.
-  //
-  // Mirrors jobKey in src/utils/wrikeHelpers.js — same rule, and the fallback
-  // is the same too: no code means the label is all we have to match on.
+  // Existing jobs keyed on the XY code, not the whole label: the same job arrives
+  // written several ways ("XY025091", "Film : XY025091, Desc", with or without a
+  // region prefix). Keyed on the label, a variant looked new and the insert hit
+  // the jobs_job_code_key constraint, aborting the import. Same rule as jobKey in
+  // src/utils/wrikeHelpers.js; no code means match on the label.
   const codeKeyOf = (s) => (String(s || "").match(/XY\d{5,6}/i) || [""])[0].toUpperCase() || String(s || "").trim();
   const jobByNumber = {};
   for (const j of jobs) if (j.job_number) jobByNumber[codeKeyOf(j.job_number)] = j;
 
-  // A row is "the same time already logged" when job, day, person, category
-  // and both durations match. Deliberately not id-based: a re-exported file
-  // carries no ids, and matching on the timesheet's own natural key is what
-  // makes re-running a corrected file safe.
+  // "Already logged" = same job, day, person, category and both durations. Not by
+  // id: a re-exported file has none, and this is what makes re-running a
+  // corrected file safe.
   const dupKey = (r) => [
     r.job_number || "", r.date || "", r.wrike_user_id || "",
     r.category || "", r.time_spent || "", r.additional_time || "",
@@ -401,9 +342,8 @@ async function handleJobsFeedImport(request, env) {
     const task = {
       job_number: jobNumber,
       date,
-      // The same day in both columns. `date` is what the feed's export writes
-      // and older clients read; work_date is what the database can query.
-      // normaliseDate already returns ISO, so this needs no further parsing.
+      // The same day in both columns: `date` for the export and older clients,
+      // work_date for queries.
       work_date: date,
       client: clean(raw.client),
       film_title: clean(raw.film_title),
@@ -437,10 +377,8 @@ async function handleJobsFeedImport(request, env) {
     const existingJob = jobByNumber[jobCodeKey];
 
     if (!existingJob && !jobsToCreate.has(jobCodeKey)) {
-      // Every key on every object, nulls included — PostgREST rejects a bulk
-      // insert whose objects don't all share the same key set (PGRST102), and
-      // spreading only the populated columns gives each row a different shape.
-      // On a create a null is right anyway: the column genuinely has no value.
+      // Every key on every object, nulls included: PostgREST rejects a bulk insert
+      // whose objects have different key sets (PGRST102).
       jobsToCreate.set(jobCodeKey, {
         job_number: jobNumber,
         client: task.client,
@@ -451,9 +389,8 @@ async function handleJobsFeedImport(request, env) {
         ...jobFields,
       });
     } else if (existingJob && Object.keys(present).length) {
-      // Keyed on the row's OWN stored label, not the file's and not the code:
-      // the apply pass patches with job_number=eq.<key>, so this has to be the
-      // string actually in the table or the PATCH matches nothing.
+      // Keyed on the label actually stored in the table, because the apply pass
+      // PATCHes with job_number=eq.<key>.
       jobsToUpdate.set(existingJob.job_number, {
         ...(jobsToUpdate.get(existingJob.job_number) || {}),
         ...present,
@@ -494,9 +431,8 @@ async function handleJobsFeedImport(request, env) {
       if (!res.ok) throw new Error(`job patch ${jobNumber} ${res.status}: ${await res.text()}`);
     }
 
-    // tasks.id has no default or identity — the client has always supplied it
-    // (Date.now() in the tracker). Base off the current max so an import can
-    // never collide with a row the tracker writes at the same moment.
+    // tasks.id has no default; clients supply it (Date.now() in the tracker). Start
+    // above the current max so an import can't collide with a tracker write.
     const maxRes = await sbFetch(env, "/tasks?select=id&order=id.desc&limit=1");
     const maxRows = maxRes.ok ? await maxRes.json() : [];
     let nextId = Math.max(Number(maxRows[0]?.id || 0), Date.now()) + 1;
@@ -537,16 +473,9 @@ async function sbFetch(env, path, opts = {}) {
   });
 }
 
-// Returns the row, or null when Supabase positively reports there is no such
-// session. Throws SupabaseUnavailable when it couldn't be asked.
-//
-// These two used to collapse into the same null — the identical bug the comment
-// on getWebhookConfig describes, in the place it hurts most. Every caller reads
-// a null as "not connected", so a database stall or timeout presented to the
-// member as being signed out of Wrike: handleStatus answered connected:false,
-// Profile swapped the Connected badge for a Connect button, and the proxy
-// answered 401 on a session whose token was sitting in the database, valid.
-// Nothing was actually wrong with their account.
+// Returns the row, or null when Supabase says there's no such session. Throws
+// SupabaseUnavailable when it couldn't be asked. Callers read null as "not
+// connected", so a database stall must never come back as null.
 async function getTokenRowBySession(env, sessionToken) {
   let rows;
   let lastError;
@@ -571,19 +500,15 @@ async function getTokenRowBySession(env, sessionToken) {
   }
   if (lastError) throw new SupabaseUnavailable(`token row read failed: ${lastError.message}`);
   const stored = rows[0] || null;
-  // Prefer credentials we minted but couldn't store: the stored row's refresh
-  // token is dead once Wrike has rotated it, so the in-memory pair is the only
-  // working one until the background write lands.
+  // Prefer credentials we minted but couldn't store: once Wrike has rotated, the
+  // stored refresh token is dead and the in-memory pair is the only working one.
   const pending = unpersistedTokens.get(sessionToken);
   return pending || stored;
 }
 
-// Keyed by session_token, NOT wrike_user_id — the same Wrike account can be
-// connected from several browsers/environments at once (e.g. localhost +
-// the deployed site), and each keeps its own row. Keying by wrike_user_id
-// used to make every new connect overwrite (upsert) or every disconnect/
-// refresh wipe (delete/patch) *every* environment's session sharing that
-// account, causing a 401 cascade in whichever one didn't just touch it.
+// Keyed by session_token, not wrike_user_id: one Wrike account can be connected
+// from several browsers or environments, each with its own row, and keying by
+// user made one environment's connect or disconnect break the others.
 async function upsertTokenRow(env, row) {
   const res = await sbFetch(env, `/wrike_oauth_tokens?on_conflict=session_token`, {
     method: "POST",
@@ -613,10 +538,9 @@ async function deleteTokenRow(env, sessionToken) {
   if (!res.ok) throw new Error(`row delete failed: ${res.status}`);
 }
 
-// Signing out must not leave a usable token behind: the row is gone from the
-// member's reach the moment the cookie clears, but panelWrikeToken picks up
-// whichever stored token is freshest, so an orphan would still be live. Keep
-// trying, detached from the response.
+// Signing out must not leave a usable token behind: panelWrikeToken uses the
+// freshest stored token, so an orphaned row would still be live. Keep retrying
+// the delete, detached from the response.
 async function deleteTokenRowPersistently(env, sessionToken) {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -637,24 +561,15 @@ async function deleteTokenRowPersistently(env, sessionToken) {
 // getWebhookConfig.
 class SupabaseUnavailable extends Error {}
 
-// Returns the row, or null when Supabase positively reports no webhook is
-// configured. Throws SupabaseUnavailable when Supabase couldn't be reached or
-// refused the read (402 over-quota, 5xx, network error).
+// Returns the row, or null when Supabase says no webhook is configured. Throws
+// SupabaseUnavailable when Supabase couldn't be reached or refused (402, 5xx,
+// network). The difference matters: answering Wrike "not configured" during an
+// outage gets the webhook suspended account-wide, and that outlasts the outage.
 //
-// These two used to collapse into the same null, and handleWebhookEvent turned
-// any null into a 404 — so while Supabase was over its quota and 402ing, every
-// Wrike delivery was answered "webhook_not_configured". That reads to Wrike as
-// an endpoint that no longer exists, and it suspends the webhook account-wide.
-// The outage was transient; the suspension it caused was not, since clearing it
-// needs a manual admin re-register long after Supabase recovered.
-//
-// The row is cached per isolate because every Wrike delivery needs the secret
-// to verify its signature, and that read sat on Wrike's delivery-timeout clock
-// on every single event. See handleWebhookEvent for why that clock matters.
-// Staleness is bounded two ways: a short TTL, and a forced re-read whenever a
-// signature fails to match (an admin re-register rotates the secret, and a
-// stale cached one would otherwise 401 deliveries — the exact answer that gets
-// the webhook suspended).
+// Cached per isolate, because every delivery needs the secret and that read is
+// on Wrike's delivery-timeout clock. Staleness is bounded by a short TTL and a
+// forced re-read when a signature doesn't match (an admin re-register rotates
+// the secret).
 let webhookConfigCache = null;
 let webhookConfigCachedAt = 0;
 let webhookConfigForcedAt = 0;
@@ -707,19 +622,15 @@ async function upsertWebhookConfig(env, { webhookId, secret }) {
   return row;
 }
 
-// Takes the whole delivery's rows at once, in one call, so a multi-event
-// delivery costs one round trip rather than one per event. The function writes
-// wrike_webhook_events as before and copies status and assignment changes into
-// wrike_task_activity in the same statement. See migration 20260923181757 for
-// why that's a function call, not a second request or new columns.
+// One call per delivery for all its events. The database function writes
+// wrike_webhook_events and copies status and assignment changes into
+// wrike_task_activity (see migration 20260923181757).
 async function insertWebhookEvents(env, rows) {
   if (!rows.length) return;
   try {
     const res = await sbFetch(env, `/rpc/record_wrike_webhook_events`, {
       method: "POST",
-      // return=minimal: this is a fire-and-forget insert, we don't need the rows
-      // echoed back — asking for the representation just adds a SELECT that can
-      // fail on its own.
+      // return=minimal: fire-and-forget, nothing to read back.
       headers: { Prefer: "return=minimal" },
       body: JSON.stringify({ events: rows }),
     });
@@ -727,8 +638,7 @@ async function insertWebhookEvents(env, rows) {
       console.error(`[webhook] insert failed ${res.status}:`, await res.text().catch(() => ""));
     }
   } catch (err) {
-    // Runs after the response has already gone back to Wrike, so there is no
-    // status left to influence — log and drop. The periodic sync backfills.
+    // Wrike already has its response, so just log. The periodic sync backfills.
     console.error("[webhook] insert threw:", err.message);
   }
 }
@@ -787,9 +697,8 @@ async function refreshAccessToken(env, refreshToken) {
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    // 400/401 is Wrike saying the refresh token itself is no good — the member
-    // really must reconnect. A 5xx or a rate-limit is Wrike having a bad
-    // moment and must not be dressed up as a sign-out.
+    // 400/401 means the refresh token itself is bad and the member must reconnect.
+    // A 5xx or rate limit is temporary and must not look like a sign-out.
     if (res.status === 400 || res.status === 401) {
       throw new WrikeAuthInvalid(`Wrike rejected the refresh token: ${res.status} ${detail}`);
     }
@@ -799,23 +708,14 @@ async function refreshAccessToken(env, refreshToken) {
 }
 
 // Refresh one token row, sharing a single in-flight refresh per session_token.
-// Returns the updated row; throws if the refresh itself fails.
+// Returns the updated row; throws if the refresh fails.
 //
-// THE ONLY PLACE THAT SHOULD CALL refreshAccessToken + updateTokenRow. Wrike
-// rotates the refresh_token on use, so two concurrent refreshes of the same row
-// mean the second spends an already-dead token and fails with
-// token_refresh_failed — even though the first has just written a perfectly
-// valid one to the DB. refreshInFlight is what stops that, and it only works if
-// every caller goes through it.
-//
-// The proxy always did. The panel feed did not: it called refreshAccessToken
-// directly, so a panel request and that member's own browser session hitting a
-// near-expired token at the same moment raced each other, and the person at the
-// browser could be signed out by an After Effects panel on someone else's
-// machine. One implementation now, so the two cannot drift apart again.
-// Keep trying to store credentials Wrike has already rotated to. Runs detached
-// from the request that triggered it (via waitUntil), because the request is
-// usually the thing that just died.
+// THE ONLY PLACE THAT SHOULD CALL refreshAccessToken + updateTokenRow, the proxy
+// and the panel included. Wrike rotates the refresh token on use, and two
+// concurrent refreshes of one row sign the member out (see refreshInFlight).
+// retryTokenPersist below keeps trying to store credentials Wrike has already
+// rotated to, detached via waitUntil because the triggering request is usually
+// the one that just died.
 async function retryTokenPersist(env, sessionToken, patch) {
   for (const delay of TOKEN_PERSIST_RETRY_DELAYS_MS) {
     await new Promise((r) => setTimeout(r, delay));
@@ -828,8 +728,8 @@ async function retryTokenPersist(env, sessionToken, patch) {
       console.error("[token] background persist retry failed:", err.message);
     }
   }
-  // Out of attempts. The in-memory pair stays put — it is still the only
-  // working one, and this isolate can go on using it until it is recycled.
+  // Out of attempts. The in-memory pair is still the only working one, so keep
+  // using it until this isolate is recycled.
   console.error("[token] background persist gave up; session survives only in this isolate");
 }
 
@@ -848,10 +748,9 @@ async function refreshTokenRow(env, row, ctx) {
             expires_at: new Date(Date.now() + Number(refreshed.expires_in || 3600) * 1000).toISOString(),
             updated_at: new Date().toISOString(),
           };
-          // Past this line Wrike has already burned the old refresh token, so
-          // failing to store the new one is not a failure we may propagate —
-          // it would sign the member out over a database blip. Hold the new
-          // pair, keep serving from it, and retry the write in the background.
+          // Wrike has already burned the old refresh token, so a failed save must not
+          // propagate (it would sign the member out over a database blip). Hold the new
+          // pair, serve from it, and retry the save in the background.
           try {
             const saved = await updateTokenRow(env, key, patch, SB_AUTH_TIMEOUT_MS);
             unpersistedTokens.delete(key);
@@ -871,9 +770,7 @@ async function refreshTokenRow(env, row, ctx) {
       })()
     );
   }
-  // Every concurrent caller — the one that started this refresh and any that
-  // arrived while it was in flight — awaits the SAME promise and gets the SAME
-  // resulting row, instead of each spending its own refresh_token.
+  // Every concurrent caller awaits the same promise and gets the same row.
   return refreshInFlight.get(key);
 }
 
@@ -957,11 +854,9 @@ async function handleOAuthCallback(request, url, env, isHttps) {
   return new Response(null, { status: 302, headers });
 }
 
-// Signing out is a local act: clearing the cookie is what ends the session, and
-// that needs no database at all. This used to read the row first and then
-// delete it, so a slow database made "Disconnect" hang — with the retrying read
-// added on top, for up to 15s before the delete even started. The read was
-// never needed: the row's primary key IS the session token.
+// Signing out is clearing the cookie, which needs no database. The row is
+// deleted in the background (its primary key is the session token), so a slow
+// database can't make Disconnect hang.
 async function handleDisconnect(request, env, ctx) {
   const cookies = parseCookies(request);
   const session = cookies[SESSION_COOKIE];
@@ -984,8 +879,7 @@ async function handleStatus(request, env) {
   try {
     row = await getTokenRowBySession(env, session);
   } catch (err) {
-    // "I couldn't check" is not "you are not connected". Saying the latter is
-    // what turned a database stall into an apparent Wrike sign-out.
+    // "Couldn't check" is not "not connected".
     console.error("[status] token lookup unavailable:", err.message);
     return json({ error: "status_unavailable" }, { status: 503 });
   }
@@ -1010,11 +904,8 @@ async function handleWebhookRegister(request, url, env) {
   }
   if (!row) return json({ error: "not_connected" }, { status: 401 });
 
-  // Wrike validates hookUrl synchronously by calling back to it during
-  // creation — a localhost/private-network origin can never be reached from
-  // Wrike's servers, so this can never succeed from a dev environment. Reject
-  // it up front with a clear reason instead of a generic 502 after Wrike
-  // rejects it (which — see below — used to also corrupt the shared config).
+  // Wrike calls hookUrl back during creation, which it can't do for localhost.
+  // Refuse up front with a clear reason.
   if (["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname) || url.hostname.endsWith(".local")) {
     return json({
       error: "unreachable_origin",
@@ -1025,15 +916,10 @@ async function handleWebhookRegister(request, url, env) {
   const hookUrl = `${url.origin}/api/wrike/webhook`;
   const authHeader = { Authorization: `Bearer ${row.access_token}` };
 
-  // Preserve whatever config is live right now. If Wrike rejects the new
-  // webhook below, we restore this instead of leaving the shared config
-  // half-written — a blank webhookId plus a secret that no longer matches
-  // whatever webhook Wrike is still actually delivering with, which silently
-  // 401s (and drops) every future delivery until someone notices the outage.
-  // Bail out early and legibly if Supabase is unreachable. Registering writes
-  // the new secret to Supabase before Wrike validates the hook URL, so there
-  // is no version of this that succeeds while the database is down — without
-  // this the run would get as far as that write and surface an opaque 500.
+  // Keep the live config so a failed create below can restore it rather than
+  // leave a half-written one (whose secret wouldn't match what Wrike is still
+  // sending). Stop early if Supabase is unreachable: registering has to save the
+  // new secret before Wrike validates the URL.
   let previousConfig;
   try {
     // Forced: this value is the rollback target if the create below fails, so
@@ -1047,12 +933,9 @@ async function handleWebhookRegister(request, url, env) {
     }, { status: 503 });
   }
 
-  // Delete any webhooks already pointing at this Worker before creating a new
-  // one. Each register generates a fresh secret, but wrike_webhook_config can
-  // only hold one — so every previously-created webhook keeps firing signed
-  // with a secret we no longer have, failing signature verification (401) and
-  // inserting nothing while a valid delivery hides among the rejects. Clearing
-  // them first guarantees exactly one live webhook whose secret matches config.
+  // Delete any webhooks already pointing here first. Config holds one secret, and
+  // older webhooks keep firing with secrets we no longer have, failing every
+  // signature check. This leaves exactly one live webhook matching config.
   try {
     const listRes = await fetch(`https://${row.api_host}/api/v4/webhooks`, { headers: authHeader });
     if (listRes.ok) {
@@ -1072,9 +955,8 @@ async function handleWebhookRegister(request, url, env) {
 
   const secret = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
 
-  // Wrike validates hookUrl synchronously as part of webhook creation — it
-  // calls back to /api/wrike/webhook and expects a signed handshake response
-  // before the create call returns, so the secret must already be saved.
+  // Wrike validates hookUrl during creation by calling it with a signed handshake,
+  // so the secret must already be saved.
   await upsertWebhookConfig(env, { webhookId: "", secret });
 
   const body = new URLSearchParams({ hookUrl, secret });
@@ -1104,27 +986,20 @@ async function handleWebhookRegister(request, url, env) {
   return json({ ok: true, webhookId });
 }
 
-// Public endpoint Wrike calls directly (no session cookie). Handles both the
-// one-time secret-verification challenge Wrike sends when validating hookUrl
-// and real event deliveries. Per developers.wrike.com/webhooks, BOTH request
-// types carry X-Hook-Secret and X-Hook-Signature — header presence can't
-// distinguish them (a routing mistake this code made twice before landing
-// here). The real discriminator is the body: the verification challenge is
-// {"requestType":"WebHook secret verification"}; real deliveries are a JSON
-// array of event objects. Both are signature-verified the same way first.
+// Public endpoint Wrike calls directly (no session cookie): both the one-time
+// secret-verification challenge and real deliveries. Both carry X-Hook-Secret
+// and X-Hook-Signature, so headers can't tell them apart; the body can (the
+// challenge is {"requestType":"WebHook secret verification"}, deliveries are an
+// array). Both are signature-checked first.
 async function handleWebhookEvent(request, env, ctx) {
   let config;
   try {
     config = await getWebhookConfig(env);
   } catch (err) {
-    // Supabase didn't answer, so we can't read the secret — meaning we can
-    // neither verify nor record this delivery. Answering Wrike with an error
-    // would be the honest status, but Wrike responds to a failing endpoint by
-    // suspending the webhook for the whole account, and that suspension
-    // outlives the outage that caused it. Acknowledge and drop instead: the
-    // periodic Wrike sync (useWrikeCache) re-fetches tasks independently of
-    // this feed, so an outage costs freshness until it recovers rather than
-    // taking live sync down until someone notices and re-registers by hand.
+    // Without Supabase we can't read the secret, so we can neither verify nor
+    // record this. Acknowledge anyway: an error makes Wrike suspend the webhook
+    // account-wide, and that lasts long after the outage. The periodic sync covers
+    // the gap.
     console.error("[webhook] config unavailable, ACKing to keep hook alive:", err.message);
     return json({ ok: true, dropped: "config_unavailable" });
   }
@@ -1135,10 +1010,9 @@ async function handleWebhookEvent(request, env, ctx) {
 
   let expectedBodySignature = await hmacSha256Hex(config.secret, rawBody);
   if (!timingSafeEqual(signatureHeader, expectedBodySignature)) {
-    // Could be a forgery — or could be our own cached secret going stale
-    // because an admin just re-registered and rotated it. Re-read once before
-    // rejecting: answering a genuine Wrike delivery with a 401 is precisely
-    // what gets the webhook suspended account-wide.
+    // A forgery, or our cached secret is stale because an admin just re-registered.
+    // Re-read once before rejecting: a 401 to a genuine delivery gets the webhook
+    // suspended.
     let fresh = null;
     try {
       fresh = await refreshWebhookConfig(env);
@@ -1190,13 +1064,10 @@ async function handleWebhookEvent(request, env, ctx) {
       user_ids: evt.addedResponsibles || evt.removedResponsibles || null,
     }));
 
-  // Acknowledge first, write after. Wrike times a delivery out and counts it as
-  // a failure, and enough consecutive failures suspend the webhook for the
-  // whole account — a state that needs a manual admin re-register to leave. So
-  // nothing that can be slow belongs in front of this response: the write goes
-  // to waitUntil, which keeps the isolate alive to finish it after Wrike has
-  // its 200. The signature is already verified above, so we only defer work we
-  // know was genuinely ours to do.
+  // Acknowledge first, write after. Wrike counts a slow delivery as a failure,
+  // and enough failures suspend the webhook account-wide until an admin
+  // re-registers it. The signature is already verified, so the write can safely
+  // run after the response, via waitUntil.
   ctx.waitUntil(insertWebhookEvents(env, rows));
 
   return json({ ok: true });
@@ -1211,9 +1082,7 @@ async function handleProxy(request, url, env, ctx) {
   try {
     row = await getTokenRowBySession(env, session);
   } catch (err) {
-    // Transient: tell the caller to come back, don't tell it the member is
-    // disconnected. A 401 here is what made every stalled read look like a
-    // signed-out session.
+    // Transient: tell the caller to retry, not that the member is disconnected.
     console.error("[proxy] token lookup unavailable:", err.message);
     return json({ error: "backend_unavailable" }, { status: 503 });
   }
@@ -1247,9 +1116,8 @@ async function handleProxy(request, url, env, ctx) {
       await refreshToken();
     } catch (err) {
       console.error("[proxy] proactive refresh failed", err);
-      // Only Wrike rejecting the credentials means reconnect. Anything else —
-      // Wrike 5xx, a network blip, a stalled database — is temporary, and
-      // answering 401 for it signs the member out over nothing.
+      // Only Wrike rejecting the credentials means reconnect. Anything else is
+      // temporary, and a 401 for it would sign the member out over nothing.
       if (err instanceof WrikeAuthInvalid) {
         return json({ error: "token_refresh_failed" }, { status: 401 });
       }
@@ -1259,12 +1127,9 @@ async function handleProxy(request, url, env, ctx) {
 
   let wrikeRes = await callWrike();
 
-  // Reactive refresh: Wrike can invalidate a token *before* its clock-expiry
-  // (the user re-auths elsewhere, a webhook re-registration rotates it). A 401
-  // means the stored access token is dead even though we thought it valid —
-  // refresh once and retry, so a single prematurely-invalidated token doesn't
-  // 401 every call until it happens to reach its expiry timestamp. If the
-  // refresh token itself is dead, the retry 401s too and the user must re-auth.
+  // Reactive refresh: Wrike can invalidate a token before its expiry time. Refresh
+  // once and retry; if the refresh token is dead too, the retry 401s and the
+  // member must reconnect.
   if (wrikeRes.status === 401) {
     try {
       await refreshToken();
@@ -1275,10 +1140,7 @@ async function handleProxy(request, url, env, ctx) {
   }
 
   if (!wrikeRes.ok) {
-    // The proxy used to pass failures through silently — every "why did this
-    // one request 400" investigation needed a browser Network-tab screenshot
-    // because wrangler tail showed nothing. Log Wrike's actual error body so
-    // future failures are visible from the Worker side too.
+    // Log Wrike's error body so failures are visible in the Worker logs.
     const text = await wrikeRes.text().catch(() => "");
     console.error(`[proxy] Wrike ${wrikeRes.status} on ${request.method} ${restPath}${url.search}:`, text);
     const resHeaders = new Headers(wrikeRes.headers);
@@ -1294,25 +1156,17 @@ async function handleProxy(request, url, env, ctx) {
 // ── Panel jobs feed ──────────────────────────────────────────────────────────
 // Serves the XYi Toolbox panel's "Active Jobs" card from wrike_tasks_cache.
 //
-// AUTH is a shared header key, not the session cookie the browser app uses: a
-// CEP panel has no session, and its origin is `null` so cookies never attach
-// cross-origin. That is acceptable here ONLY because this route is read-only
-// and returns what every studio member can already read in Wrike — it grants
-// no privilege anyone lacks. It is emphatically not a Wrike token: those are
-// read AND write and carry an individual's identity, which is why the panel
-// never sees one.
+// AUTH is a shared header key, not a session: a CEP panel has none, and its
+// origin is `null`. That's acceptable ONLY because this is read-only and returns
+// what any studio member can already see in Wrike. The panel never sees a Wrike
+// token (those can write and carry a person's identity).
 //
-// FILTERING BY MEMBER happens here rather than client-side so the panel gets a
-// short payload, but it is a convenience, not a security boundary — the key
-// holder could ask for anyone. The panel sends the member name its machine is
-// tagged with; profiles maps that to a Wrike user id.
+// Filtering by member happens here to keep the payload small. It's a
+// convenience, not a security boundary.
 //
-// Reads the CACHE, never Wrike: wrike_tasks_cache is kept current by the app
-// and the webhook, so this costs one Supabase query and no Wrike API budget.
-// Wrike's `status` field only ever holds a BASE status. "Backlog"/"In Progress"
-// are CUSTOM status names living behind customStatusId and never appear here --
-// confirmed against the live cache, which contained only Completed/Active/
-// Cancelled. Filtering on the custom names was therefore dead weight.
+// Reads the cache, not Wrike: one Supabase query, no Wrike API budget.
+// `status` only ever holds the base status (Active, Completed, Deferred,
+// Cancelled); custom names like "In Progress" are behind customStatusId.
 const PANEL_ACTIVE_STATUSES = ["Active", "Deferred"];
 
 function panelCors(extra = {}) {
@@ -1331,13 +1185,10 @@ function panelPreflight() {
   return new Response(null, { status: 204, headers: panelCors() });
 }
 
-// A usable Wrike token for the panel routes, which have no session of their
-// own -- only the shared panel key. Takes the freshest connected member's and
-// refreshes it through the proxy's own helpers when it is about to expire.
-// /workflows and the board's task query are both account-level reads that
-// return the same thing whoever asks.
-//
-// Returns null rather than throwing: every caller degrades to the cached path.
+// A usable Wrike token for the panel routes, which have only the shared key:
+// the freshest connected member's, refreshed through refreshTokenRow when
+// needed. Only used for account-level reads that return the same thing for
+// anyone. Returns null rather than throwing; callers fall back to the cache.
 async function panelWrikeToken(env) {
   const rowsRes = await sbFetch(
     env,
@@ -1348,33 +1199,20 @@ async function panelWrikeToken(env) {
   let row = tokenRows && tokenRows[0];
   if (!row) return null;
   if (new Date(row.expires_at).getTime() - Date.now() < 60_000) {
-    // Shares the proxy's in-flight refresh rather than racing it — see
-    // refreshTokenRow. This used to refresh directly, which could invalidate a
-    // browser session's token mid-request.
+    // Through refreshTokenRow, so it can't race that member's own browser session.
     row = await refreshTokenRow(env, row);
   }
   return row;
 }
 
-// Wrike's custom status NAMES ("Render review", "On hold", "Backlog") live
-// behind customStatusId and are NOT in the task cache -- the comment above
-// PANEL_ACTIVE_STATUSES says exactly that. The website resolves them by
-// fetching /workflows and building an id->name map (Profile.jsx,
-// statusNameMap); the panel feed had no equivalent, so every subtask reached
-// the panel as its base group ("Active") and a batch already in Render review
-// looked ready to localise.
+// Custom status NAMES ("Render review", "On hold") aren't in the task cache; they
+// come from /workflows, as the website's statusNameMap does. Without them every
+// subtask showed as "Active" in the panel.
 //
-// CACHED IN MODULE SCOPE with a long TTL. Workflows change about never, and
-// this endpoint's whole promise is "one Supabase query, no Wrike API budget"
-// -- a fetch per request would break that. A cold isolate pays one call.
-//
-// The token is ANY connected member's: /workflows is account-level read-only
-// metadata, identical whoever asks, and the panel key already grants what any
-// studio member can read in Wrike. There is no session here to take one from.
-//
-// NEVER THROWS. Any failure returns {} and callers fall back to the base
-// status exactly as before -- a missing status name must not take the feed
-// down with it.
+// Cached in module scope with a long TTL (workflows almost never change), so the
+// feed stays at one Supabase query. Any member's token will do for this
+// account-level read. NEVER THROWS: on failure returns {} and callers show the
+// base status.
 let panelStatusMapCache = { at: 0, map: null };
 const PANEL_STATUS_MAP_TTL = 60 * 60 * 1000;
 
@@ -1405,28 +1243,16 @@ async function panelStatusNameMap(env) {
   }
 }
 
-// LIVE FETCH for the panel's refresh button (?refresh=1). Everything else
-// reads wrike_tasks_cache, which is only as current as the last time somebody
-// had the Motion board open in a browser -- that is what made a job the board
-// showed under Luke invisible to the panel, and what made identical requests
-// return 7 jobs one minute and 112 the next.
+// LIVE FETCH for the panel's refresh button (?refresh=1). The cache is only as
+// current as the last time someone had the Motion board open. User-triggered
+// only, so a normal panel open still costs no Wrike budget.
 //
-// Deliberately USER-TRIGGERED, never automatic: a normal panel open still costs
-// one Supabase query and no Wrike budget.
+// Does NOT write to wrike_tasks_cache: the cache holds enriched tasks, and raw
+// Wrike rows would replace them with thinner data under the website.
 //
-// IT DOES NOT WRITE TO wrike_tasks_cache. The Motion board upserts ENRICHED
-// tasks there (folder names, status names, its own derived fields) and the
-// website reads them back. Writing RAW Wrike tasks into the same rows would
-// quietly replace richer data with thinner data underneath the website. The
-// panel takes the truth for its own response and leaves the cache to its owner.
-//
-// Mirrors the board's own query (useMotionBoardTasks.js fetchBoardTasks) --
-// same fields, same paging, same dueDate shape (Wrike rejects a trailing "Z"
-// on this filter, unlike updatedDate).
-// superTaskIds is REQUESTED, unlike the board's own list: the filter below
-// drops subtasks so they aren't listed as jobs in their own right, and without
-// this field every subtask would look top-level and appear twice -- once as
-// itself, once inside its parent.
+// Same query as the board (useMotionBoardTasks.js), including the dueDate
+// format without a trailing "Z". superTaskIds is also requested so subtasks
+// can be dropped instead of appearing twice.
 const PANEL_LIVE_FIELDS = "[customFields,parentIds,responsibleIds,subTaskIds,superTaskIds,description]";
 
 function panelWrikeDate(d) {
@@ -1434,9 +1260,8 @@ function panelWrikeDate(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-// Subtasks by id, straight from Wrike. Wrike takes a comma-separated id list
-// on /tasks/{ids}; 100 is its documented ceiling, so this chunks.
-// Returns [] on any failure so the caller falls back to the cache.
+// Subtasks by id, straight from Wrike, in chunks of 100 (Wrike's limit).
+// Returns [] on failure so the caller falls back to the cache.
 async function panelLiveSubtasks(env, ids) {
   const row = await panelWrikeToken(env);
   if (!row || !ids.length) return [];
@@ -1445,19 +1270,13 @@ async function panelLiveSubtasks(env, ids) {
   for (let i = 0; i < unique.length; i += 100) {
     const chunk = unique.slice(i, i + 100).join(",");
     try {
-      // NO fields= ON A BY-ID REQUEST. Wrike's get-tasks-by-id returns those
-      // fields by default and 400s ("Fields parameter value 'subTaskIds' not
-      // allowed") when they are named -- useWrikeCache.js documents it. This
-      // sent PANEL_LIVE_FIELDS anyway, so every chunk failed and a refresh
-      // reported "live returned 0 of 13": any subtask the cache had never
-      // seen stayed nameless in the XYi panel, while TimeHub's own task
-      // modal (a bare by-id call) showed it fine.
+      // NO fields= ON A BY-ID REQUEST: Wrike returns these fields by default and 400s
+      // when they're named (see useWrikeCache.js).
       const res = await fetch(`https://${row.api_host}/api/v4/tasks/${chunk}`, {
         headers: { Authorization: `Bearer ${row.access_token}` },
       });
       if (!res.ok) {
-        // Returns what it HAS rather than []. Discarding every earlier chunk
-        // because a later one failed turned a partial result into a total one.
+        // Return what we have so far rather than discarding earlier chunks.
         console.warn("[panel/jobs] live subtask fetch failed", res.status);
         return out;
       }
@@ -1491,8 +1310,7 @@ async function panelLiveTasks(env, teamIds) {
 
   let out = [];
   let nextPageToken = null;
-  // Bounded: a runaway pager on someone's refresh click must not spend the
-  // whole Wrike budget.
+  // Bounded, so a runaway pager can't spend the Wrike budget.
   for (let page = 0; page < 10; page++) {
     const qs = nextPageToken
       ? `nextPageToken=${nextPageToken}`
@@ -1513,21 +1331,14 @@ async function panelLiveTasks(env, teamIds) {
 }
 
 // ── /api/panel/comment ───────────────────────────────────────────────────────
-// A job's LATEST Wrike comment, for the XYi panel. Amends are written on the
-// PARENT task as one comment listing deliverable filenames, each followed by
-// its note; the panel splits it and puts each note on its deliverable's row.
-// TaskDetailModal already reads exactly this (latest comment, when the status
-// says amend) through the session proxy, which a panel cannot use.
+// A job's latest Wrike comments, for the XYi panel. Amends are written on the
+// PARENT task as one comment listing deliverables, each with its note; the panel
+// puts each note on its deliverable's row.
 //
-// COST: one Wrike call (GET /tasks/{id}/comments), cached per task for
-// PANEL_COMMENT_TTL in module scope, so reopening the tracker doesn't ask
-// again; `fresh=1` (the panel's refresh button) bypasses it. The author is
-// named from `profiles`, not from a second Wrike call to /contacts.
-//
-// The task id goes into a Wrike URL, so it must look like one (letters,
-// digits, _ and -) -- anything else is refused rather than spliced.
-// Plain text only: `plainText=true`, and any tag that survives is stripped
-// here, so the panel never has markup to render.
+// One Wrike call (GET /tasks/{id}/comments), cached per task for
+// PANEL_COMMENT_TTL; `fresh=1` bypasses the cache. Author names come from
+// `profiles`. The task id must look like a Wrike id before it goes into a URL.
+// Plain text only.
 const PANEL_COMMENT_TTL = 3 * 60 * 1000;
 const PANEL_COMMENT_RECENT = 8;
 const panelCommentCache = new Map();
@@ -1552,9 +1363,7 @@ async function handlePanelComment(request, url, env) {
     return json({ error: "unauthorized" }, { status: 401, headers: panelCors() });
   }
   const task = (url.searchParams.get("task") || "").trim();
-  // Wrike ids are MIXED case and may carry _ or - (MAAAAAEQLrrJ,
-  // MAAAAABrMQm_): the first version allowed capitals only and refused every
-  // real job with a 400. Still nothing that means something in a URL path.
+  // Wrike ids are mixed case and may include _ or - (MAAAAAEQLrrJ, MAAAAABrMQm_).
   if (!/^[A-Za-z0-9_-]{4,40}$/.test(task)) {
     return json({ error: "bad_task" }, { status: 400, headers: panelCors() });
   }
@@ -1581,11 +1390,9 @@ async function handlePanelComment(request, url, env) {
     return json({ error: "wrike_unreachable" }, { status: 502, headers: panelCors() });
   }
 
-  // The newest few, not just the newest: the AMENDS are not always last -- on
-  // NO 2 a hand-off ("@Sara DOOH Motions x8: /Volumes/...") landed after
-  // Michael's per-deliverable notes. The panel picks the newest comment that
-  // is shaped like amends from these; `comment` stays the newest, for any
-  // caller that only wants that. Same one Wrike call either way.
+  // The newest few, not just the newest: the amends aren't always last (a hand-off
+  // can follow them). The panel picks the newest one shaped like amends;
+  // `comment` stays the newest.
   const recent = comments
     .filter((c) => c && panelPlainText(c.text))
     .sort((a, b) => new Date(b.createdDate || 0) - new Date(a.createdDate || 0))
@@ -1617,11 +1424,8 @@ async function handlePanelJobs(request, url, env) {
   const member = (url.searchParams.get("member") || "").trim();
   let wrikeUserId = "";
   if (member) {
-    // ORDERED and RANKED, because `profiles` can hold more than one row for a
-    // person. Unordered + .find() silently took whichever duplicate PostgREST
-    // returned first: "Luke" resolved to KUAYJKOM instead of Luke Trott's
-    // KUAQK77L, so every Wrike query asked about the wrong person and came
-    // back empty. An arbitrary pick is not a tie-break.
+    // Ordered and ranked, because `profiles` can hold more than one row per person;
+    // taking whichever came first resolved names to the wrong user.
     const profRes = await sbFetch(
       env,
       "/profiles?select=wrike_user_id,first_name,last_name,department,updated_at&order=updated_at.desc"
@@ -1629,10 +1433,8 @@ async function handlePanelJobs(request, url, env) {
     if (profRes.ok) {
       const profiles = (await profRes.json()) || [];
       const wanted = member.trim().toLowerCase();
-      // Best match wins, not first seen: an exact full name beats a first
-      // name, which beats a surname. The panel tags a machine with a display
-      // name ("Antonio"), usually the first name -- but "Trott" is how this
-      // studio refers to Luke, so a surname has to resolve too.
+      // Best match wins: exact full name, then first name, then surname (the panel
+      // usually tags machines by first name, but some people go by surname).
       const score = (p) => {
         const first = (p.first_name || "").trim().toLowerCase();
         const last = (p.last_name || "").trim().toLowerCase();
@@ -1647,26 +1449,19 @@ async function handlePanelJobs(request, url, env) {
       for (const p of profiles) {
         if (!p || !p.wrike_user_id) continue;
         const sc = score(p);
-        // Ties go to the more recently updated row (the query is ordered), so
-        // the answer is at least deterministic rather than luck.
+        // Ties go to the most recently updated row, so the answer is deterministic.
         if (sc > bestScore) { bestScore = sc; best = p; }
       }
       if (best) wrikeUserId = best.wrike_user_id;
     }
   }
   if (member && !wrikeUserId) {
-    // Say so rather than returning [] — an empty list would read as "no work"
-    // when the real answer is "we could not match that name".
+    // Say so rather than return [], which would read as "no work".
     return json({ error: "unknown_member", member, jobs: [] }, { status: 404, headers: panelCors() });
   }
 
-  // FILTER IN THE DATABASE, not in JS. The first version pulled
-  // `select=id,task_data&limit=5000` and filtered here -- but PostgREST caps
-  // responses at 1000 rows by default and the query had no ORDER BY, so it
-  // returned an arbitrary slice that was 986/1000 Completed tasks. Active jobs
-  // simply never made it into the payload, and because the slice was unordered
-  // it differed between requests. Filtering server-side keeps the result small
-  // enough that no cap applies.
+  // FILTER IN THE DATABASE: PostgREST caps responses at 1000 rows, and filtering
+  // an unordered capped slice in JS lost the active jobs.
   const statusFilter = `task_data->>status=in.(${PANEL_ACTIVE_STATUSES.join(",")})`;
   const assigneeFilter = wrikeUserId
     ? `&task_data->responsibleIds=cs.${encodeURIComponent(JSON.stringify([wrikeUserId]))}`
@@ -1682,13 +1477,10 @@ async function handlePanelJobs(request, url, env) {
   }
   let rows = await res.json();
 
-  // ?refresh=1 -- the panel's refresh button. Replaces the cached rows with a
-  // live read from Wrike for the whole team, then carries on through exactly
-  // the same filters and shaping below, so refreshed and cached responses can
-  // never diverge in their rules.
-  //
-  // Falls back silently to the cached rows if the live read fails: a refresh
-  // that returns yesterday's data beats a refresh that returns an error.
+  // ?refresh=1, the panel's refresh button: replace the cached rows with a live
+  // read for the whole team, then apply the same filters below, so refreshed and
+  // cached answers follow the same rules. Falls back to the cached rows if the
+  // live read fails.
   let liveUsed = false;
   if (url.searchParams.get("refresh") === "1") {
     const teamIds = [];
@@ -1700,15 +1492,9 @@ async function handlePanelJobs(request, url, env) {
     }
     const live = await panelLiveTasks(env, teamIds);
     if (live && live.length) {
-      // FLATTEN dates.due -> dueDate. The cache holds tasks the Motion board
-      // has already ENRICHED (wrikeEnrich.js: `dueDate: task.dates?.due`), but
-      // Wrike's own API returns the date nested under `dates`. Handing raw
-      // tasks straight through meant every one failed isBoardTask's dueDate
-      // check and a live refresh returned an empty list -- worse than the
-      // stale data it replaced.
-      //
-      // Only the fields the filters below actually read are normalised; the
-      // rest of the raw task is passed through untouched.
+      // Flatten dates.due -> dueDate: cached tasks are already enriched that way, raw
+      // Wrike tasks aren't, and isBoardTask reads dueDate. Only the fields the filters
+      // read are normalised.
       rows = live.map((t) => ({
         id: t.id,
         task_data: {
@@ -1724,18 +1510,9 @@ async function handlePanelJobs(request, url, env) {
   const statusNames = await panelStatusNameMap(env);
   const customName = (t) => (t && t.customStatusId ? statusNames[t.customStatusId] || "" : "");
 
-  // Subtask names live in rows that the filters above deliberately exclude (a
-  // subtask can be Completed while its parent is Active, and is usually
-  // assigned to nobody). Fetch just the ones referenced, by id.
-  // ONLY THE JOBS THAT SURVIVE. This used to walk every row, which on the
-  // CACHED path meant 18 parents and on a LIVE refresh meant 245 -- so a
-  // refresh asked for hundreds of subtask ids to serve six jobs, and any
-  // shortfall in that lookup landed on whichever jobs happened to be late in
-  // the list. Symptom: DINTH DE and FI came back with their names blank on
-  // refresh and correct on a normal load, while a job whose subtasks Wrike
-  // had also returned as top-level rows was unaffected.
-  //
-  // Filtering first makes both paths ask for the same ~20 ids.
+  // Subtask names live in rows the filters exclude (a subtask can be Completed
+  // under an Active parent), so look them up by id. Only for jobs that survive the
+  // filter, so cached and refreshed paths ask for the same few ids.
   const panelKeeps = (t) => {
     if (!t || !t.title) return false;
     if (!isBoardTask(t, "Today") && !isBoardTask(t, "Tomorrow")) return false;
@@ -1756,64 +1533,46 @@ async function handlePanelJobs(request, url, env) {
   let subCacheError = null;
   let subLiveError = null;
   if (wantedSubIds.length) {
-    // CACHE FIRST, ALWAYS -- then overlay live rows on top. The previous
-    // version treated these as either/or: a live refresh used Wrike's rows and
-    // skipped the cache entirely, so when those rows came back without usable
-    // titles the whole table rendered blank. Worse than the stale names it
-    // replaced, and only visible on refresh.
-    //
-    // Additive means the worst case is cached names, never no names.
+    // Cache first, then overlay live rows, so the worst case is cached names, never
+    // blank ones.
     const ids = wantedSubIds.slice(0, 400).map((i) => `"${i}"`).join(",");
     const subRes = await sbFetch(env, `/wrike_tasks_cache?select=id,task_data&id=in.(${ids})`);
     if (subRes.ok) {
       subRows = await subRes.json();
     } else {
-      // Was a bare `if (ok)` with no else, so a failed lookup was
-      // indistinguishable from a job that genuinely has no subtasks -- the
-      // panel just showed empty names and blamed the feed.
+      // Record the failure so a failed lookup isn't mistaken for no subtasks.
       subCacheError = `${subRes.status} ${(await subRes.text().catch(() => "")).slice(0, 120)}`;
       console.error("[panel/jobs] subtask cache query failed:", subCacheError);
     }
 
-    // MIRROR WHAT TIMEHUB SHOWS. TimeHub's task modal reads subtasks live
-    // from Wrike; this read only the cache, so a subtask the cache had never
-    // seen (four of SF Motion Outdoor ID's five) came through nameless and
-    // the panel could not send it. On an ordinary load, fetch live ONLY the
-    // ids the cache could not name -- usually none, so no Wrike call at all;
-    // on a refresh, all of them, as before.
+    // Match what TimeHub shows: on a normal load, fetch live only the subtask ids
+    // the cache can't name (usually none, so no Wrike call); on a refresh, all of them.
     const cachedNames = new Set(
       (subRows || []).filter((r) => r && r.task_data && r.task_data.title).map((r) => String(r.id))
     );
     const missingSubIds = wantedSubIds.filter((id) => !cachedNames.has(String(id)));
     const liveSubIds = liveUsed ? wantedSubIds : missingSubIds;
     if (liveSubIds.length) {
-      // Only rows that actually carry a title overlay the cached copy -- a
-      // live row without one would blank a name we already had.
+      // Only live rows with a title overlay the cached copy.
       const live = await panelLiveSubtasks(env, liveSubIds);
       for (const row of live) {
         if (row && row.task_data && row.task_data.title) subRows.push(row);
       }
-      // A short result means Wrike gave back fewer subtasks than were asked
-      // for -- worth surfacing rather than leaving as blank names.
+      // Fewer subtasks back than asked for: surface it.
       if (live.length < liveSubIds.length) {
         subLiveError = `live returned ${live.length} of ${liveSubIds.length}`;
       }
     }
   }
 
-  // subTaskIds gives IDs only. The cache holds every task it has seen,
-  // subtasks included, so their names are resolvable from the same rows --
-  // no second query and no Wrike call. A subtask that is not cached falls
-  // back to an empty name, which the panel renders as an unparseable row
-  // rather than inventing one.
+  // Subtask names come from the cache rows (it holds subtasks too), so no extra
+  // query. An uncached subtask gets an empty name rather than an invented one.
   const byId = new Map();
   for (const row of [...(rows || []), ...(subRows || [])]) {
     if (row?.id && row?.task_data) byId.set(String(row.id), row.task_data);
   }
 
-  // ?debug=1 -- counts at each filter stage, so "why is only one job showing"
-  // is answerable with data instead of guesses. Key-gated like everything else
-  // here, and returns no task content beyond titles.
+  // ?debug=1: counts at each filter stage, key-gated, titles only.
   if (url.searchParams.get("debug")) {
     const seenStatuses = {};
     let withTitle = 0, topLevel = 0, mine = 0, active = 0, hasResponsible = 0, withDueDate = 0;
@@ -1832,9 +1591,8 @@ async function handlePanelJobs(request, url, env) {
         mineTitles.push({ title: t.title, status: t.status || "(none)", sub: !isTop });
       }
       const hasDue = t.dueDate && t.dueDate !== "No Due Date";
-      // End of TOMORROW, matching the two-window filter the real route uses --
-      // a diagnostic that disagrees with the thing it diagnoses is worse than
-      // no diagnostic.
+      // End of TOMORROW, matching the real route's window, so the diagnostic agrees
+      // with what it diagnoses.
       const dueCutoff = new Date(new Date().setHours(23, 59, 59, 999));
       dueCutoff.setDate(dueCutoff.getDate() + 1);
       const dueOk = hasDue && !isNaN(new Date(t.dueDate).getTime()) && new Date(t.dueDate) <= dueCutoff;
@@ -1846,8 +1604,7 @@ async function handlePanelJobs(request, url, env) {
       cacheRows: (rows || []).length,
       wantedSubIds: wantedSubIds.length,
       subRowsFetched: (subRows || []).length,
-      // Split out, because their SUM told us nothing: a healthy total could
-      // hide either source returning nothing at all.
+      // Separate, because a healthy total could hide one source returning nothing.
       subCacheError,
       subLiveError,
       keptRows: keptRows.length,
@@ -1864,17 +1621,14 @@ async function handlePanelJobs(request, url, env) {
     }, { headers: panelCors() });
   }
 
-  // SELECTION IS SHARED with the board -- src/lib/jobFilter.js, the same
-  // isBoardTask() TodaysList.js calls. Not a copy of its rules: the same code.
-  // That matters because the rules are subtler than they look (the "Today"
-  // window starts at the EPOCH, so it means due-today-or-overdue), and an
-  // earlier version of this route reimplemented them and quietly disagreed.
+  // Selection uses src/lib/jobFilter.js's isBoardTask(), the same code the board
+  // uses, not a copy of its rules (they're subtler than they look: "Today" means
+  // due today or overdue).
 
   const jobs = [];
   for (const row of keptRows) {
-    // Already filtered by panelKeeps above -- deliberately NOT repeated here.
-    // The subtask lookup and this loop have to agree on which jobs exist, and
-    // two copies of the rules is precisely how they stop agreeing.
+    // Already filtered by panelKeeps above. Not repeated, so the subtask lookup
+    // and this loop can't disagree about which jobs exist.
     const t = row.task_data;
     const status = t.status || "";
 
@@ -1895,16 +1649,11 @@ async function handlePanelJobs(request, url, env) {
         return {
           id: String(id),
           name: sub?.title || "",
-          // Wrike's status GROUP -- only ever Active/Completed/Deferred/
-          // Cancelled. Kept as-is so nothing that already reads it changes.
+          // Wrike's status group (Active/Completed/Deferred/Cancelled), kept as-is.
           status: sub?.status || "",
-          // ADDITIVE. The custom workflow status the board actually shows
-          // ("Delivering", "Backlog", "Motion"), which the parent task above
-          // has always sent and the subtasks never did. The panel needs it to
-          // tell a batch that still wants localising from one already in
-          // flight -- the group alone reports every one of those as Active.
-          // Same cached task_data the parent reads it from, so no extra query
-          // and no extra Wrike call.
+          // The custom workflow status the board shows ("Delivering", "Backlog"), which
+          // the panel needs to tell a batch waiting for localisation from one in flight.
+          // From the same cached task_data, so no extra query.
           customStatusName: customName(sub) || sub?.customStatusName || "",
         };
       }),
@@ -1916,15 +1665,12 @@ async function handlePanelJobs(request, url, env) {
     });
   }
 
-  // Freshest first: most jobs carry no due date at all, so updated is the only
-  // ordering that reflects real activity.
+  // Freshest first: most jobs have no due date, so updated is the useful order.
   jobs.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
 
-  // Header, not a wrapper object: the response has always been a bare array
-  // and changing that shape would be a breaking change for one bit of
-  // diagnostics.
-  // X-Panel-Build is a hand-bumped marker so "is my fix deployed?" is one curl
-  // rather than a deduction from behaviour. Bump it with any change here.
+  // The response stays a bare array (changing its shape would break the panel),
+  // so diagnostics go in headers. X-Panel-Build is a hand-bumped marker for "is my
+  // fix deployed?". Bump it with any change here.
   return json(jobs, {
     headers: panelCors({
       "X-Panel-Live": liveUsed ? "1" : "0",
