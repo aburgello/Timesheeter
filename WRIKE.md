@@ -246,48 +246,108 @@ the comments alone often get wrong.
 
 ## PM and operations
 
-The project managers use the Management area (`src/components/Management.jsx`),
-and this is where TimeHub writes back to Wrike as well as reading it.
+The project managers work in the Administration area
+(`src/components/Management.jsx`, with each section in
+`src/components/management/`). Most of what happens there is about keeping two
+lists in step:
 
-**The Job Book** is the `jobs` table in Supabase: one row per job, with its
-job number, film, client, description, costs and status. It's the reference
-everything else defers to. It fills up in two ways: automatically, a bare row
-gets added the first time a job number is seen in someone's timesheet, and in
-bulk through the Studio Scan.
+- **Wrike's folders**, where the work actually happens. Each studio
+  (Universal, Sony, Paramount…) has a folder, each film has a project inside
+  it, and each job has a folder named after its job code, such as
+  `XY026047_French_Canada_Assets`.
+- **The Job Book**, TimeHub's own list of every job: code, film, client,
+  description, costs and status (the `jobs` table). Timesheets, the jobs feed
+  and the export to the company timesheet site all rely on it.
 
-**The Studio Scan** ("Scan Wrike for job numbers") reads the entire folder tree,
-finds every folder whose name starts with an XY code, and works out each job's
-film, client, region and description from where it sits. It then compares that
-with the Job Book and shows you two lists: jobs that are in Wrike but not in
-the book yet, and jobs that are in the book but disagree with Wrike (filed under
-the wrong film, with the wrong description, or with folder junk stuck in the
-job number). Nothing is written until you confirm, and it only ever writes to
-the Job Book, never to Wrike. If the same job number turns up on more than one
-folder, the scan prefers a live folder over an archived copy and shows you the
-clash rather than silently picking one.
+TimeHub reads Wrike to fill the Job Book. In one place, Push to Wrike, it also
+writes to Wrike, to set up a new film's job folders.
 
-**Jobs setup and "Push to Wrike"** go the other way, setting up a new film's
-jobs in Wrike. Each studio that's set up for this has a master template folder
-in Wrike with a slot for every kind of job. A PM picks the film and activates the slots they need, and
-the push then:
+**Films.** TimeHub keeps its own list of films (the `films` table). Film sync
+("Sync from Wrike" on the Films list, or "sync them from Wrike" in Jobs setup
+when a studio has no films yet) looks inside one studio's Wrike folder, lists
+every film project that isn't in TimeHub yet (underscores become spaces, so
+`Angry_Birds_3_Movie` becomes "Angry Birds 3 Movie"), and adds the ones you
+confirm. It only ever adds films, never deletes, so a film someone added by
+hand is never lost. It runs only when someone presses it.
 
-1. copies the studio's template into the film's Wrike project
-2. renames each activated slot's folder to its job code (it refuses outright
-   to write anything inside the template itself)
-3. sets the "Job Number" custom field on that folder and on every task and
-   subtask inside it, so time logged there is tagged with the right job
+**How a job gets into the Job Book.** There are five ways in, from most to
+least automatic:
 
-There's also a "re-tag" mode that skips the copy and just re-applies job
-numbers to a film's existing folders, picking up anything added since. Both
-check everything against live Wrike first (is the template there, is the film's
-project there, does the Job Number field exist) and refuse to run unless it all
-holds. You see a preview of exactly what will change before anything is
-written. The template's "Item Price" custom field is read to fill in job costs
-where the PM is allowed to see it.
+1. *Automatically, from timesheets.* When "Pull times" or the Tracker meets a
+   job code the Job Book has never seen, a row is added for it
+   (`useJobLookup`'s `ensureJob`). These rows are deliberately bare: the code,
+   plus the film and client if the Wrike folders gave them. The description is
+   left empty so the Studio Scan notices the row and fills it in properly. If
+   the job already exists, only blank fields are filled; nothing is
+   overwritten.
+2. *Jobs setup, for planned new work.* A PM picks a studio and a film, sees
+   the studio's template of job types (the "slots": French Canada Assets,
+   1 Sheets and so on) and clicks the ones the film needs. Each click reserves
+   the next free job code: one higher than the highest code in either the Job
+   Book or anyone's timesheet. If two PMs take the same number at once, the
+   second is given the next one.
+3. *The Studio Scan*, for catching up with Wrike. See below.
+4. *By hand*, adding or editing a job in the Job Book, including editing one
+   field across many jobs at once.
+5. *The jobs feed CSV import*, which also creates bare rows for any codes it
+   hasn't seen.
 
-**Film sync** adds films to TimeHub's own film list (the `films` table) from
-the film projects that exist in Wrike's studio folders. It only ever adds and
-never deletes.
+**The Studio Scan** ("Scan Wrike for job numbers", in the Job Book) runs only
+when a PM clicks it. It reads Wrike's whole folder tree, about 9,700 folders,
+and finds every folder whose name starts with an XY code. For each it works
+out the job code and description from the folder name
+(`XY025563_Germany_Launch_Assets` becomes "Germany Launch Assets"), the client
+by climbing up to the studio folder and adding the region where there is one
+("Universal Pictures UK"), and the film from the folder between the studio and
+the job. Year folders, housekeeping folders such as `_Old` and `_Masters`, and
+Print/Digital folders are skipped on the way, and a live folder wins over an
+archived copy of the same job.
+
+It then shows two lists: jobs in Wrike that aren't in the Job Book yet, and
+jobs in the book that disagree with Wrike (filed under the wrong film, a
+different description, or a bare code still waiting for one). You tick what to
+accept. "Keep" tells the scan to stop raising a job you've decided is right as
+it stands. If two live folders share a job code, it shows you the clash instead
+of guessing. The scan writes only to the Job Book, never to Wrike. The code is
+`scanStudioJobNumbers` in `src/lib/wrikeCampaign.js`; before changing it, run
+the regression check described in HANDOVER.md.
+
+**Push to Wrike** is the only part that writes to Wrike. Once a film's jobs are
+set up in the Job Book, it creates the matching folders:
+
+1. It copies the studio's master template folder into the film's Wrike
+   project.
+2. It renames each chosen slot's folder to its job code
+   (`JOBNUMBER_French_Canada_Assets` becomes `XY026047_French_Canada_Assets`).
+3. It sets the Job Number custom field on that folder and turns on Wrike's
+   cascading for it, so Wrike copies the number down to every task inside,
+   including ones added later. Time logged there is then tagged with the right
+   job without anyone doing anything.
+4. It records on the Job Book row which Wrike folder the job now owns.
+
+You always see a preview of exactly what will change, and nothing is written
+until you confirm. It refuses to run if anything is off: no template, no film
+project, or no Job Number field. It never writes inside the template itself and
+never hands one job's folder to another job. **Re-tag** is the lighter
+version: no copy, it just re-applies job numbers to a film's existing folders,
+which is useful after tasks have been added.
+
+The template folders also carry an "Item Price" field in Wrike. Jobs setup
+reads it to suggest a job's cost, for PMs who can see that field in Wrike.
+
+**What runs by itself and what doesn't:**
+
+| Automatic | Only when a PM clicks |
+|---|---|
+| Bare Job Book rows for new job codes seen in timesheets | The Studio Scan, and accepting its corrections |
+| Filling a blank film or client on an existing job | Film sync |
+| The shared task cache and live updates from Wrike | Activating slots and creating jobs |
+| The daily refresh of the folder, people and status lists | Push to Wrike and Re-tag |
+| Job Number copied down to new tasks (Wrike does this after a push) | Editing, bulk-editing or deleting jobs, and CSV import |
+
+In short: timesheets feed new job codes in on their own, the Studio Scan is how
+a PM tidies them up and fills in the details, and Jobs setup plus Push to Wrike
+is how a new film's jobs get created in TimeHub and Wrike together.
 
 **The Jobs feed** is a team-wide view of everyone's timesheet rows for
 operations, served by the Worker at `/api/jobs-feed`. It also accepts a CSV
