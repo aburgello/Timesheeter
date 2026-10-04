@@ -51,9 +51,12 @@ export function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
                     {/* Same HubRow, just compact — identical gradient sweep
                         and hover behavior as the parent row, not a
                         hand-rolled approximation of it. */}
+                    {/* A "soon" item is greyed out and can't be opened: there's
+                        nothing behind it yet. */}
                     {group.items.map((item) => (
+                      <div key={item.id} aria-disabled={item.soon || undefined}
+                        className={item.soon ? "opacity-50 grayscale pointer-events-none select-none" : undefined}>
                       <HubRow
-                        key={item.id}
                         compact
                         section={{ ...item, gradient: group.gradient }}
                         onClick={() => onOpenItem(item.id)}
@@ -65,6 +68,7 @@ export function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
                           ) : null
                         }
                       />
+                      </div>
                     ))}
                   </div>
                 </div>

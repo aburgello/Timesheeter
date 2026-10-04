@@ -113,7 +113,8 @@ const ACTIONS = [
 // a manager (lib/access.js) — everyone else on that desk keeps Settings.
 const DEPARTMENT_ACTIONS = {
   PM: ["jobsSetup", "jobbook", "jobs", "settings"],
-  Operations: ["projectTime", "timesheetCompletion", "settings"],
+  // timesheetCompletion comes back here once that report exists.
+  Operations: ["projectTime", "settings"],
 };
 
 export default function QuickActions({ activePage, department, wrikeUserId, onNavigate, onOpenNotes, onScanPdf }) {
