@@ -135,7 +135,7 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
 
   if (activePage === "home") return null;
 
-  // Same department registry the Rail and command palette read, so the bubble
+  // Same department registry Home and the Rail read, so the bubble
   // can never offer a page this member has no access to. Entries with no
   // `requires` (Scan PDF) are always allowed.
   const allowed = pageIdsFor(department, wrikeUserId);

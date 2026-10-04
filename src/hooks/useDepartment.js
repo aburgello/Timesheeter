@@ -25,7 +25,7 @@ export function setDepartmentPreview(dept) {
 // The signed-in member's department (profiles.department: PM | Motion |
 // Digital | AM | Operations | Print, or null), or — while an admin preview is
 // active — whichever department they're previewing. Drives which pages Home,
-// the Rail, and the command palette offer — see src/lib/departments.js.
+// the Rail and the quick-actions bubble offer — see src/lib/departments.js.
 //
 // localStorage-cached so navigation renders with the right page set on the
 // first frame; the profiles row is still consulted in the background so a
