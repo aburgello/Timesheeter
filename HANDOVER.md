@@ -69,14 +69,36 @@ tests/                    unit tests, run with npm test
 bookmarklet.src.js        the timesheet-site bookmarklet (source)
 ```
 
-Three files are very large and are where changes are riskiest:
-`components/Management.jsx` (about 6,300 lines, the whole Administration
-area), `components/Canvas.js` (about 5,900, the notes canvas and the campaign and DOOH boards) and
-`components/LegacyTimesheets.js` (about 4,000, the timesheet). Each holds
-several screens' worth of code. If you need to change one of them, the safest
-approach is to move the part you're changing out into `lib/` or its own
-component file first, with tests, the way `lib/wrikeCampaign.js` was. Don't
-attempt a big rewrite.
+`components/Management.jsx` is the entry point for Administration. It used to
+be one 6,300-line file. It's now about 380 lines: the page shell and its
+navigation. Each section and modal lives in its own file in
+`components/management/` (`JobBookSection.jsx`, `StudioJobScanModal.jsx`,
+`PushToWrikeModal.jsx`, `PeopleSection.jsx` and so on), and each file opens
+with a line saying what it contains. Shared form controls are in `fields.jsx`,
+and lists used by several sections are in `constants.js`.
+
+Two files are still very large and are where changes are riskiest:
+`components/Canvas.js` (about 5,900 lines, the notes canvas and the campaign
+and DOOH boards) and `components/LegacyTimesheets.js` (about 4,000, the
+timesheet). Most of each is a single component, so splitting them means
+pulling state and logic out into hooks and helpers rather than moving code.
+If you need to change one of them, the safest approach is to move the part
+you're changing out into `lib/` or its own component first, with tests, the
+way `lib/wrikeCampaign.js` was. Don't attempt a big rewrite.
+
+**Following history across the split.** Code that moved into
+`components/management/` keeps its history, but plain `git blame` (and
+GitHub's blame page) will credit every line to the split commit. Use:
+
+```
+git blame -C5 -C5 src/components/management/JobBookSection.jsx
+```
+
+That traces moved lines back to the commit that really wrote them. In
+testing it recovered all but the new header and import lines of each file
+(for example 625 of 635 lines in `StudioJobScanModal.jsx`). The lower
+threshold matters: the default `-C` doesn't recognise this move. On GitHub,
+open `components/Management.jsx` as it was before the split commit instead.
 
 **How the code is commented.** Comments mostly explain *why*, often with the
 incident that made a rule necessary, including the date and the numbers
@@ -131,9 +153,25 @@ match. Never edit an old migration.
 
 ## Deploying
 
-`npm run deploy` builds the site and deploys the Worker with Wrangler. It
-isn't automatic: merging to `main` doesn't deploy anything. Full setup is in
-DEPLOY.md.
+**Merging to `main` on `aburgello/Timesheeter` deploys to the live site.**
+Cloudflare Workers Builds is connected to that repository. A push to its
+`main` builds and deploys the `timesheeter` Worker within a couple of
+minutes, and every other branch gets a preview build with its own URL,
+which is posted as a check on the pull request. So the pull request's checks
+are the last stop before production. Read them before merging.
+
+To check a deploy really went live, compare the `assets/index-….js` file
+named in the live site's page with the one in `dist/client/index.html`
+from a local `npm run build` of the same commit. They match when the
+site is serving that commit.
+
+`npm run deploy` still works for deploying by hand from your machine. Full
+setup is in DEPLOY.md.
+
+The other two copies of the repository (`aburgelloxyi/TimeHub` and
+`xyidesign/timehub`) aren't connected to Cloudflare as far as anyone has
+checked, so pushing there doesn't deploy. Confirm that under Workers →
+timesheeter → Settings → Build before relying on it.
 
 
 ## Accounts, secrets and configuration
@@ -225,5 +263,5 @@ These were found during a review in October 2026 and haven't been resolved.
    panel stops working.
 7. **Frozen timesheet days are stored in the browser**, so they don't follow a
    person between computers.
-8. **Three very large files** (see above), which make changes there riskier
-   than they need to be.
+8. **Two very large files** remain, Canvas.js and LegacyTimesheets.js (see
+   above), which make changes there riskier than they need to be.

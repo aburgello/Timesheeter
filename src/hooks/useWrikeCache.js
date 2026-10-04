@@ -20,6 +20,8 @@ import {
   PRINT_HUB_RE,
 } from "../lib/wrikeEnrich";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
+import { fetchAllFolders } from "../lib/wrikeCampaign";
+import { fetchWrikeMeta } from "../lib/wrikeMeta";
 
 const FIELDS_FILTER = encodeURIComponent(
   "[customFields,parentIds,responsibleIds,subTaskIds,description]"
@@ -53,56 +55,6 @@ let bootStarted = false;
 // in-memory object and the local IndexedDB mirror keep it, and the one
 // consumer that read it without an id fallback (Canvas) now reconstructs it.
 const stripForStorage = ({ permalink, ...rest }) => rest;
-
-// ---------------------------------------------------------------------------
-// Fetch folders, contacts, workflows from Wrike
-// ---------------------------------------------------------------------------
-async function fetchWrikeMeta() {
-  // Paginate folders — childIds is NOT returned by default on the flat /folders
-  // list, so request it explicitly. We store childIds and build a reverse
-  // childToParent map for upward tree climbing (parentIds is never returned).
-  const folderDictionary = {};
-  const FOLDER_FIELDS = encodeURIComponent("[childIds]");
-  let folderUrl = `/api/wrike/folders?fields=${FOLDER_FIELDS}`;
-  while (folderUrl) {
-    const fRes = await fetch(folderUrl);
-    if (!fRes.ok) { console.warn("[WrikeCache] folders fetch failed", fRes.status); break; }
-    const fJson = await fRes.json();
-    // Drop recycle-bin nodes, exactly as fetchAllFolders does (wrikeCampaign.js).
-    // The FolderTree default returns the workspace AND the recycle bin in one
-    // flat list, so without this the dictionary every climber walks contains
-    // deleted folders — and a recycled film folder can name a live task's film.
-    // It was happening: real ancestry chains in this account read
-    // "XY022391 › Wicked › NM › 2024 › Recycle Bin › _Old".
-    // Scope-less rows are kept, so if Wrike stops returning scope we degrade to
-    // the old behaviour rather than emptying the tree.
-    fJson.data?.forEach((f) => {
-      if (/^Rb/i.test(f.scope || "")) return;
-      folderDictionary[f.id] = { id: f.id, title: f.title, childIds: f.childIds || [] };
-    });
-    folderUrl = fJson.nextPageToken
-      ? `/api/wrike/folders?fields=${FOLDER_FIELDS}&nextPageToken=${fJson.nextPageToken}`
-      : null;
-  }
-  console.log(`[WrikeCache] folder dictionary loaded: ${Object.keys(folderDictionary).length} folders`);
-
-  const [cRes, wRes] = await Promise.all([
-    fetch("/api/wrike/contacts"),
-    fetch("/api/wrike/workflows"),
-  ]);
-
-  const contactDictionary = {};
-  (await cRes.json()).data?.forEach((u) => {
-    contactDictionary[u.id] = `${u.firstName || ""} ${u.lastName || ""}`.trim();
-  });
-
-  const statusDictionary = {};
-  (await wRes.json()).data?.forEach((wf) => {
-    wf.customStatuses?.forEach((s) => { statusDictionary[s.id] = s.name; });
-  });
-
-  return { folderDictionary, contactDictionary, statusDictionary };
-}
 
 // ---------------------------------------------------------------------------
 // Paginate through Wrike tasks updated after `sinceIso`
@@ -458,24 +410,11 @@ export function useWrikeCache() {
         let c2p = buildChildToParents(fd);
         if (Object.keys(fd).length < 500 || Object.keys(c2p).length === 0) {
           console.log("[WrikeCache] folder dict sparse or missing childIds — fetching fresh from Wrike");
-          const freshFd = {};
-          const FF = encodeURIComponent("[childIds]");
-          let folderUrl = `/api/wrike/folders?fields=${FF}`;
-          let logged = false;
-          while (folderUrl) {
-            try {
-              const fRes = await fetch(folderUrl);
-              if (!fRes.ok) { console.warn("[WrikeCache] folders fetch failed", fRes.status); break; }
-              const fJson = await fRes.json();
-              if (!logged && fJson.data?.[0]) {
-                console.log("[WrikeCache] sample folder:", JSON.stringify(fJson.data[0]));
-                logged = true;
-              }
-              fJson.data?.forEach((f) => { freshFd[f.id] = { id: f.id, title: f.title, childIds: f.childIds || [] }; });
-              folderUrl = fJson.nextPageToken
-                ? `/api/wrike/folders?fields=${FF}&nextPageToken=${fJson.nextPageToken}`
-                : null;
-            } catch { break; }
+          let freshFd = {};
+          try {
+            freshFd = await fetchAllFolders();
+          } catch (e) {
+            console.warn("[WrikeCache] fresh folder fetch failed, keeping the cached copy:", e.message);
           }
           if (Object.keys(freshFd).length > 100) {
             fd = freshFd;
@@ -609,8 +548,22 @@ export function useWrikeCache() {
         ? toWrikeDate(new Date(new Date().setMonth(new Date().getMonth() - LOOKBACK_MONTHS)))
         : toWrikeDate(meta.last_synced_at);
 
-      // Refresh folder/contact/status dicts if stale or missing
-      const metaAge = now - lastSync;
+      // Refresh folder/contact/status dicts if stale or missing.
+      //
+      // "Stale" used to be measured from last_synced_at, which every sync
+      // moves forward. With the team syncing every 15 minutes it never got a
+      // day old, so the dictionaries only refreshed when someone forced a
+      // full sync: new starters weren't recognised as Motion-team assignees,
+      // and renamed folders and new workflow statuses never appeared.
+      // dictionaries_refreshed_at is their own clock, moved only by a refresh
+      // that came back complete (see fetchWrikeMeta). A database without that
+      // column yet (see its migration) falls back to the old measure, so this
+      // can be deployed before or after the migration is applied.
+      const hasDictClock = !!meta && "dictionaries_refreshed_at" in meta;
+      const dictRefreshedAt = hasDictClock
+        ? (meta.dictionaries_refreshed_at ? new Date(meta.dictionaries_refreshed_at).getTime() : 0)
+        : lastSync;
+      const metaAge = now - dictRefreshedAt;
       const folderDictSize = Object.keys(meta?.folder_dictionary || {}).length;
       const needsMetaRefresh = fullRefresh || metaAge > META_MAX_AGE_MS || !meta?.folder_dictionary || folderDictSize < 10;
 
@@ -618,9 +571,11 @@ export function useWrikeCache() {
       let contactDictionary = meta?.contact_dictionary || {};
       let statusDictionary  = meta?.status_dictionary  || {};
       const existingFilmMappings = meta?.film_code_mappings || {};
+      let dictionariesComplete = false;
 
       if (needsMetaRefresh) {
-        ({ folderDictionary, contactDictionary, statusDictionary } = await fetchWrikeMeta());
+        ({ folderDictionary, contactDictionary, statusDictionary, complete: dictionariesComplete } =
+          await fetchWrikeMeta({ folderDictionary, contactDictionary, statusDictionary }));
       }
 
       // Fetch tasks changed since last sync
@@ -754,7 +709,9 @@ export function useWrikeCache() {
         console.log(`[WrikeCache] film code mappings: ${Object.keys(mergedFilmMappings).length} total, ${Object.keys(newMappings).length} new this sync`);
       }
 
-      // Persist updated meta to the shared row
+      // Persist updated meta to the shared row. The dictionaries written back
+      // are either fresh and whole, or the copies already there: fetchWrikeMeta
+      // returns the previous copy of any list it couldn't fetch in full.
       await supabase.from("wrike_sync_meta").upsert({
         wrike_user_id: SHARED_META_ID,
         last_synced_at: new Date().toISOString(),
@@ -762,6 +719,12 @@ export function useWrikeCache() {
         contact_dictionary: needsMetaRefresh ? contactDictionary : (meta?.contact_dictionary ?? {}),
         status_dictionary:  needsMetaRefresh ? statusDictionary  : (meta?.status_dictionary  ?? {}),
         film_code_mappings: mergedFilmMappings,
+        // Only sent when the column exists, so a database that hasn't had the
+        // migration yet keeps accepting this upsert. Not moved by an incomplete
+        // refresh, so the next sync tries again instead of waiting a day.
+        ...(hasDictClock && dictionariesComplete
+          ? { dictionaries_refreshed_at: new Date().toISOString() }
+          : {}),
       });
       enrichCtxRef.current = {
         folderDictionary,
@@ -938,18 +901,10 @@ export function useWrikeCache() {
 
       // Fetch a fresh folder dict if the cached one is too sparse to tree-climb
       if (Object.keys(fd).length < 100) {
-        const FF = encodeURIComponent("[childIds]");
-        let url = `/api/wrike/folders?fields=${FF}`;
-        while (url) {
-          try {
-            const r = await fetch(url);
-            if (!r.ok) break;
-            const j = await r.json();
-            j.data?.forEach((f) => { fd[f.id] = { id: f.id, title: f.title, childIds: f.childIds || [] }; });
-            url = j.nextPageToken
-              ? `/api/wrike/folders?fields=${FF}&nextPageToken=${j.nextPageToken}`
-              : null;
-          } catch { break; }
+        try {
+          fd = await fetchAllFolders();
+        } catch (e) {
+          console.warn("[FilmScan] folder fetch failed:", e.message);
         }
         console.log(`[FilmScan] fetched ${Object.keys(fd).length} folders`);
       }

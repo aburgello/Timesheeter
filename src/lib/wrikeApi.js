@@ -88,3 +88,75 @@ export async function logTimeToWrike(taskId, seconds, trackedDate = localIsoDate
     return { ok: false, id: null };
   }
 }
+
+// A person's timelogs between two local dates ("YYYY-MM-DD", both inclusive).
+//
+// Every caller used to ask for /contacts/{id}/timelogs with no date range and
+// throw away everything outside the day or week it wanted, so each pull
+// downloaded the member's ENTIRE Wrike timelog history, and that grows by
+// every hour anyone logs, for as long as the account exists.
+//
+// Two things keep this from changing what callers see:
+//  · The range asked of Wrike is padded by a day on each side. Wrike doesn't
+//    document whether `end` is inclusive, and a log on the boundary must not
+//    go missing. Callers still filter to their exact dates, as they always have.
+//  · If the filtered request fails at any point, this makes the old unfiltered
+//    one instead, so the worst case is the behaviour from before this existed.
+//
+// `by` picks which date the range applies to: "trackedDate" (the day the time
+// was for, what the pulls want) or "createdDate" (when it was entered, what the
+// Profile's "recent activity" list sorts by).
+//
+// Follows nextPageToken: the endpoint pages, and a long range could span more
+// than one. Returns [] when nothing could be fetched, which is what every
+// caller got before from a failed response (`json.data || []`).
+const addDays = (isoDate, n) => {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  return localIsoDate(new Date(y, m - 1, d + n));
+};
+
+export async function fetchContactTimelogs(contactId, { from, to, plainText = false, by = "trackedDate" } = {}) {
+  if (!contactId) return [];
+  const base = `/api/wrike/contacts/${contactId}/timelogs`;
+  const extra = plainText ? "plainText=true" : "";
+
+  const unfiltered = async () => {
+    try {
+      const res = await fetch(extra ? `${base}?${extra}` : base);
+      return (await res.json()).data || [];
+    } catch {
+      return [];
+    }
+  };
+
+  if (!from || !to) return unfiltered();
+
+  const range = encodeURIComponent(
+    JSON.stringify({ start: addDays(from, -1), end: addDays(to, 1) })
+  );
+  let url = `${base}?${by}=${range}${extra ? `&${extra}` : ""}`;
+  const logs = [];
+  try {
+    while (url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      logs.push(...(json.data || []));
+      url = json.nextPageToken
+        ? `${base}?nextPageToken=${encodeURIComponent(json.nextPageToken)}`
+        : null;
+    }
+  } catch (e) {
+    // Any failure, first page or a later one, falls back to the whole
+    // unfiltered list rather than returning part of the range: a partial
+    // list would silently leave hours out of a pull.
+    console.warn(`[wrikeApi] dated timelog fetch failed (${e.message}), fetching unfiltered`);
+    return unfiltered();
+  }
+  // An empty answer is also treated as "the filter may not have worked". An
+  // earlier version of this app noted a "broken trackedDate query param" and
+  // gave up on it, without recording how it was broken, so an empty result is
+  // re-checked the old way rather than trusted. That costs one full download
+  // on a day with nothing logged, which is no worse than every pull used to be.
+  return logs.length ? logs : unfiltered();
+}

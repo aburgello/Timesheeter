@@ -1,7 +1,8 @@
-# Runs on every pull request and every push to main. Nothing deploys from here:
-# deploying is still `npm run deploy`, by hand. This only answers "is this change
-# safe to merge?" so that question stops depending on someone remembering to
-# run the tests locally.
+# Runs on every pull request and every push to main. This workflow deploys
+# nothing itself, but on aburgello/Timesheeter a merge to main IS a production
+# deploy, through Cloudflare Workers Builds, which is a separate check on the
+# same pull request. So this is what answers "is this change safe to merge?"
+# before it goes live, instead of someone remembering to run the tests.
 #
 # Deliberately NOT run here: `npm run scan:diff`. It compares the scanner's
 # output against the live Wrike folder tree, which changes every day as people

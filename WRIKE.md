@@ -69,7 +69,10 @@ below), and writes the results into a Supabase table called
 in its own local storage so the page loads quickly next time. Once a day the
 sync also refreshes the folder tree, the list of people and the list of
 workflow statuses, and stores those in `wrike_sync_meta` under a single row
-named `shared`.
+named `shared`. The day is counted from the last refresh of those lists
+(`dictionaries_refreshed_at`), not the last sync. A refresh only replaces a
+list it downloaded in full. If Wrike fails partway, the previous copy stays and
+the next sync tries again.
 
 A task counts as relevant to the Motion team if its title matches certain
 keywords, if it sits in a digital folder, if someone on the Motion team is

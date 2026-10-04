@@ -2,6 +2,7 @@ import { DAYS_OF_WEEK } from "../constants";
 import { guessFieldsFromTask, filmFromJobNumber } from "../utils/wrikeHelpers";
 import { ukDateForWeekday, localDateFromIso } from "../utils/dates";
 import { fetchExistingTimelogIds } from "../lib/supabaseClient";
+import { fetchContactTimelogs } from "../lib/wrikeApi";
 import {
   splitTerritories,
   territoryKey,
@@ -137,12 +138,11 @@ export function useTaskActions(state) {
 
       // Fetch timelogs (contacts-scoped = same endpoint as Legacy, more reliable)
       // and active timers in parallel
-      const [timelogsRes, timersRes] = await Promise.all([
-        fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`),
+      const [logs, timersRes] = await Promise.all([
+        fetchContactTimelogs(wrikeUserId, { from: todayStr, to: todayStr }),
         fetch("/api/wrike/timers"),
       ]);
 
-      const logs = (await timelogsRes.json()).data || [];
       const activeTimers = (await timersRes.json()).data || [];
 
       // Filter to today using local date string (avoids UTC-midnight shift)

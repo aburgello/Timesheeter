@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabaseClient";
 import { enrichTasks, buildChildToParents } from "../lib/wrikeEnrich";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "./useWrikeCache";
+import { fetchAllFolders } from "../lib/wrikeCampaign";
 import { motionTeamShortName, normalizeName } from "../constants";
 
 const FIELDS = encodeURIComponent("[customFields,parentIds,responsibleIds,subTaskIds,description]");
@@ -62,17 +63,14 @@ export async function fetchFolderDictionary() {
   if (Object.keys(folderDictionary).length < 100) {
     // Cache empty/sparse (e.g. fresh deploy, no sync has run yet) — fall
     // back to a fresh fetch, same self-heal pattern useWrikeCache.js uses.
-    const fresh = {};
-    const FF = encodeURIComponent("[childIds]");
-    let url = `/api/wrike/folders?fields=${FF}`;
-    while (url) {
-      try {
-        const r = await fetch(url);
-        if (!r.ok) break;
-        const j = await r.json();
-        j.data?.forEach((f) => { fresh[f.id] = { id: f.id, title: f.title, childIds: f.childIds || [] }; });
-        url = j.nextPageToken ? `/api/wrike/folders?fields=${FF}&nextPageToken=${j.nextPageToken}` : null;
-      } catch { break; }
+    // fetchAllFolders retries rate limits, drops the recycle bin, and throws
+    // rather than returning part of the tree. This used to be its own loop
+    // that did none of those.
+    let fresh = {};
+    try {
+      fresh = await fetchAllFolders();
+    } catch (e) {
+      console.warn("[MotionBoard] folder fetch failed:", e.message);
     }
     if (Object.keys(fresh).length > 0) folderDictionary = fresh;
   }

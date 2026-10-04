@@ -17,6 +17,7 @@ import {
   whenIdentityReady,
   selectAll,
 } from "../lib/supabaseClient";
+import { fetchContactTimelogs } from "../lib/wrikeApi";
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import {
@@ -1137,9 +1138,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       weekEnd.setDate(weekEnd.getDate() + 6);              // Sunday
       const weekEndStr = toLocalDateStr(weekEnd);
 
-      const timelogRes = await fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`);
-      const timelogJson = await timelogRes.json();
-      const logs = (timelogJson.data || []).filter((l) => {
+      const weekLogs = await fetchContactTimelogs(wrikeUserId, { from: weekStartStr, to: weekEndStr });
+      const logs = weekLogs.filter((l) => {
         const d = l.trackedDate?.split("T")[0];
         return d && d >= weekStartStr && d <= weekEndStr;  // ISO dates sort lexically
       });
@@ -1822,8 +1822,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       let currentTasks = await handleSyncMyJobs(true);
       if (!currentTasks) currentTasks = activeWrikeData;
 
-      // Use contacts-scoped endpoint — avoids the broken trackedDate query param
-      // Filter to target date(s) client-side using local date strings
+      // Contacts-scoped endpoint, asked only for the target dates (see
+      // fetchContactTimelogs for how a refused or empty date filter falls back
+      // to the full list), then filtered to them client-side using local date
+      // strings.
       const localIso = (d) =>
         `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
           d.getDate()
@@ -1843,9 +1845,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           : [localIso(yesterday), localIso(now)];
       const targetDateSet = new Set(targetDates);
 
-      const res = await fetch(`/api/wrike/contacts/${wrikeUserId}/timelogs`);
-      const json = await res.json();
-      const logs = (json.data || []).filter((l) =>
+      // targetDates are ISO strings, so the lexical sort is the date order.
+      const sortedTargets = [...targetDates].sort();
+      const ranged = await fetchContactTimelogs(wrikeUserId, {
+        from: sortedTargets[0],
+        to: sortedTargets[sortedTargets.length - 1],
+      });
+      const logs = ranged.filter((l) =>
         targetDateSet.has(l.trackedDate?.split("T")[0])
       );
 
