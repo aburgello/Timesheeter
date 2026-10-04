@@ -107,9 +107,11 @@ export async function logTimeToWrike(taskId, seconds, trackedDate = localIsoDate
 // was for, what the pulls want) or "createdDate" (when it was entered, what the
 // Profile's "recent activity" list sorts by).
 //
-// Follows nextPageToken: the endpoint pages, and a long range could span more
-// than one. Returns [] when nothing could be fetched, which is what every
+// Asks for Wrike's largest page and stops at the first page that isn't full
+// (see the loop for why the token alone can't be trusted to say "more"). Returns [] when nothing could be fetched, which is what every
 // caller got before from a failed response (`json.data || []`).
+const TIMELOG_PAGE = 1000; // Wrike's maximum
+
 const addDays = (isoDate, n) => {
   const [y, m, d] = isoDate.split("-").map(Number);
   return localIsoDate(new Date(y, m - 1, d + n));
@@ -134,17 +136,27 @@ export async function fetchContactTimelogs(contactId, { from, to, plainText = fa
   const range = encodeURIComponent(
     JSON.stringify({ start: addDays(from, -1), end: addDays(to, 1) })
   );
-  let url = `${base}?${by}=${range}${extra ? `&${extra}` : ""}`;
+  const query = `${by}=${range}&pageSize=${TIMELOG_PAGE}${extra ? `&${extra}` : ""}`;
+  let url = `${base}?${query}`;
   const logs = [];
   try {
     while (url) {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      logs.push(...(json.data || []));
-      url = json.nextPageToken
-        ? `${base}?nextPageToken=${encodeURIComponent(json.nextPageToken)}`
-        : null;
+      const page = json.data || [];
+      logs.push(...page);
+      // A short page is the last one, whatever else came with it. Wrike sends
+      // a nextPageToken even then, and asking for that "next page" with the
+      // token alone is a 400. That 400 is what made the first live version of
+      // this fall back to the full history on every pull (seen 2026-10-04).
+      // For one member over a few days a page is never full, so in practice
+      // this is always a single request.
+      if (page.length < TIMELOG_PAGE || !json.nextPageToken) break;
+      // A genuinely full page: repeat the query with the token, in case Wrike
+      // wants the filter restated. If it still refuses, the catch below falls
+      // back to the full list rather than returning part of the range.
+      url = `${base}?${query}&nextPageToken=${encodeURIComponent(json.nextPageToken)}`;
     }
   } catch (e) {
     // Any failure, first page or a later one, falls back to the whole
