@@ -12,13 +12,13 @@ import {
 } from "lucide-react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
-import { TERRITORY_FLAGS, MOTION_TEAM_NAME_MAP, normalizeName } from "../constants";
+import { TERRITORY_FLAGS } from "../constants";
 import { supabase } from "../lib/supabaseClient";
 import { useBoardNow, ActiveDot } from "./shared/BoardNow";
 import { fullName as cleanFullName } from "../lib/formatName";
-import { useMotionBoardTasks } from "../hooks/useMotionBoardTasks";
+import { useBoardTasks } from "../hooks/useBoardTasks";
 import PageHeader from "./shared/PageHeader";
-import { boardLabelFor } from "../lib/departments";
+import { boardLabelFor, countedStatusFor } from "../lib/departments";
 import { mapPool, fetchRetrying } from "../lib/fetchPool";
 
 // How many attachment lookups may be in flight at once. Wrike's limit is per
@@ -31,26 +31,10 @@ import TaskDetailModal, { FilePreviewLightbox } from "./TaskDetailModal";
 
 gsap.registerPlugin(useGSAP);
 
-const TEAM_MEMBERS = ["Antonio", "Aaron", "Jacqui", "Maria", "Nicholas", "Luke", "Turk"];
-
-// Each artist owns a lane ("track") and an identity gradient — the same
-// colour-as-identity system Home's rows use for pages, applied to people.
-// Gradients are tuned so white display-size type holds ≥3:1 on the left
-// edge; any lane whose gradient can't carry white flips to dark ink
-// (ink: "dark") — the same rule Home applies to its amber row.
-const MEMBER_LANES = {
-  Antonio: { gradient: "from-blue-500 to-indigo-600",   ink: "light", dot: "bg-blue-500" },
-  Aaron:   { gradient: "from-purple-500 to-violet-600", ink: "light", dot: "bg-purple-500" },
-  Jacqui:  { gradient: "from-fuchsia-500 to-pink-600",  ink: "light", dot: "bg-fuchsia-500" },
-  Maria:   { gradient: "from-emerald-600 to-teal-600",  ink: "light", dot: "bg-emerald-600" },
-  Nicholas:{ gradient: "from-cyan-600 to-sky-600",      ink: "light", dot: "bg-cyan-600" },
-  Luke:    { gradient: "from-orange-600 to-red-600",    ink: "light", dot: "bg-orange-600" },
-  Turk:    { gradient: "from-red-600 to-rose-600",      ink: "light", dot: "bg-red-600" },
-};
-
-// Palette for department boards whose roster comes from profiles (Print and
-// any future department) — assigned by lane index. Reuses the Motion lanes'
-// tuned gradients + the same white/dark ink contrast rule.
+// Lane colours, assigned by position in the (alphabetical) roster. Each
+// gradient keeps white display-size type at ≥3:1 on its left edge; the two
+// that can't carry white use dark ink, the same rule Home applies to its
+// amber row.
 const LANE_PALETTE = [
   { gradient: "from-blue-500 to-indigo-600",    ink: "light", dot: "bg-blue-500" },
   { gradient: "from-emerald-600 to-teal-600",   ink: "light", dot: "bg-emerald-600" },
@@ -64,12 +48,15 @@ const LANE_PALETTE = [
   { gradient: "from-slate-500 to-slate-700",    ink: "light", dot: "bg-slate-500" },
 ];
 
-// Derive a board team from profiles tagged with `department` (Print, and any
-// department that later gets its own board). Members, lane colours, the
-// Wrike-id→member map (for id-based task assignment) and the id list for the
-// task fetch all come straight from the profiles rows. Disabled → empty, so
-// the Motion board (which passes enabled=false) never triggers the query.
-function useDepartmentTeam(department, enabled) {
+// The board's team: everyone whose profile is tagged with `department`.
+// Members, lane colours, the Wrike id → lane map that tasks are assigned by,
+// and the id list for the task fetch all come from those rows. No department
+// (an untagged viewer) means an empty team and no query.
+//
+// Lanes are labelled by first name, with the surname added only where two
+// people in the department share a first name.
+function useDepartmentTeam(department) {
+  const enabled = !!department;
   const empty = { members: [], lanes: {}, wrikeIdToMember: {}, teamWrikeIds: [] };
   const [team, setTeam] = useState({ ...empty, loading: enabled });
 
@@ -87,8 +74,13 @@ function useDepartmentTeam(department, enabled) {
         const rows = (data || []).filter((p) => p.wrike_user_id);
         const members = [], lanes = {}, wrikeIdToMember = {}, teamWrikeIds = [];
         const seen = new Set();
+        const firstOf = (p) => (p.first_name || "").trim();
+        const firstNameCount = {};
+        rows.forEach((p) => { firstNameCount[firstOf(p)] = (firstNameCount[firstOf(p)] || 0) + 1; });
         rows.forEach((p, i) => {
-          const base = cleanFullName(p.first_name, p.last_name, p.wrike_user_id);
+          const base = firstOf(p) && firstNameCount[firstOf(p)] === 1
+            ? firstOf(p)
+            : cleanFullName(p.first_name, p.last_name, p.wrike_user_id);
           // Keep lane keys unique even if two people share a display name.
           let label = base, n = 2;
           while (seen.has(label)) label = `${base} (${n++})`;
@@ -336,51 +328,28 @@ function AttachmentThumb({ attachment, large = false, onPreview }) {
 export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isActive = true, department }) {
   const triggerToast = _triggerToast ?? ((msg) => console.warn("Toast:", msg));
 
-  // Every non-Motion department (Print, AM, Digital, ...) drives the board off
-  // its own profiles-tagged roster; Motion keeps its hardcoded team. `board`
-  // is the single config the rest of the component reads — members, lane
-  // colours, and how tasks map to people.
-  const usesDeptRoster = !!department && department !== "Motion";
-  const deptTeam = useDepartmentTeam(department, usesDeptRoster);
-  const board = useMemo(() => (
-    usesDeptRoster
-      ? {
-          members: deptTeam.members,
-          lanes: deptTeam.lanes,
-          matchBy: "id",
-          wrikeIdToMember: deptTeam.wrikeIdToMember,
-        }
-      : {
-          members: TEAM_MEMBERS,
-          lanes: MEMBER_LANES,
-          matchBy: "name",
-          nameMap: MOTION_TEAM_NAME_MAP,
-        }
-  ), [usesDeptRoster, department, deptTeam]);
+  // Every board is its department's profiles-tagged roster; tasks land in a
+  // lane by Wrike id.
+  const deptTeam = useDepartmentTeam(department);
+  const board = useMemo(() => ({
+    members: deptTeam.members,
+    lanes: deptTeam.lanes,
+    wrikeIdToMember: deptTeam.wrikeIdToMember,
+  }), [deptTeam]);
 
-  // Live "working now" state for this board — shared by every task's dot.
-  const now = useBoardNow(department || "Motion");
-  // Which lane is the current user's own — the only lane whose tasks they can
-  // mark as what *they're* working on. Dept boards map id→label directly;
-  // Motion's lanes are keyed by first name, which matches the profile.
+  // Live "working now" state for this board, shared by every task's dot.
+  const now = useBoardNow(department);
+  // The viewer's own lane: the only one whose tasks they can mark as theirs.
   const myBoardName = board.wrikeIdToMember?.[now.myId] || now.me?.name;
 
-  // Each non-Motion department scopes its board state cache under its own
-  // key so saved assignments never collide across departments or with
-  // Motion's.
-  const storageKey = usesDeptRoster
-    ? `${department.toLowerCase()}_board_state_v1`
-    : "motion_board_state_v1";
+  // Saved board state, kept per department so boards never collide.
+  const storageKey = `${(department || "team").toLowerCase()}_board_state_v1`;
 
-  // Motion resolves its team internally (undefined); every other department
-  // feeds its roster's Wrike ids so the fetch only pulls that team's tasks.
-  const { boardTasks } = useMotionBoardTasks(usesDeptRoster ? deptTeam.teamWrikeIds : undefined);
+  const { boardTasks } = useBoardTasks(deptTeam.teamWrikeIds);
   const boardRef = useRef(null);
   const wasActiveRef = useRef(false);
 
-  const [assignments, setAssignments] = useState(
-    TEAM_MEMBERS.reduce((acc, name) => ({ ...acc, [name]: [] }), {})
-  );
+  const [assignments, setAssignments] = useState({});
   const [timeframe, setTimeframe] = useState("Today");
   const [focusedPerson, setFocusedPerson] = useState(null);
   const [hideStale, setHideStale] = useState(true);
@@ -644,28 +613,10 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
         dueDate: task.dueDate || null,
       };
 
-      if (board.matchBy === "id") {
-        // Print (profiles-derived): assign by Wrike responsibleId → member,
-        // no slate. responsibleIds survive enrichment via the task spread.
-        const targets = [...new Set((task.responsibleIds || []).map((id) => board.wrikeIdToMember[id]).filter(Boolean))];
-        targets.forEach((boardName) => {
-          if (freshAssignments[boardName]) freshAssignments[boardName].push(card);
-        });
-        return;
-      }
-
-      // Motion (name-based): everyone's tasks land in their own lane via the
-      // hardcoded name map. Exact match on emoji-stripped full names (see
-      // normalizeName): a trailing "🐱" no longer has to line up, and a short
-      // key like "Turk" can't accidentally match a longer name that merely
-      // contains it. A task assigned to nobody on the roster isn't shown —
-      // there used to be a lead's slate catching those, and there isn't now.
-      if (!task.assignees) return;
-      const assigneeNames = task.assignees.split(",").map((a) => normalizeName(a));
-      Object.entries(board.nameMap).forEach(([wrikeName, boardName]) => {
-        if (assigneeNames.includes(normalizeName(wrikeName)) && freshAssignments[boardName]) {
-          freshAssignments[boardName].push(card);
-        }
+      // Into the lane of every board member assigned to it.
+      const targets = [...new Set((task.responsibleIds || []).map((id) => board.wrikeIdToMember[id]).filter(Boolean))];
+      targets.forEach((boardName) => {
+        if (freshAssignments[boardName]) freshAssignments[boardName].push(card);
       });
     });
     for (const key in freshAssignments) freshAssignments[key] = sortTasksByStatus(freshAssignments[key]);
@@ -675,7 +626,7 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
 
   // Rebuild the board from scratch whenever boardTasks gets a new reference —
   // the initial narrow fetch on mount, or a webhook-triggered update
-  // (useMotionBoardTasks.js). No periodic polling involved on either side.
+  // (useBoardTasks.js). No periodic polling involved on either side.
   useEffect(() => {
     if (!boardTasks || boardTasks.length === 0) return;
     handleAutoAssign(timeframe);
@@ -689,7 +640,12 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
   // touching the underlying data or the Today/Tomorrow/Next Week window.
   const isStale = (d) => isStaleFn(d);
   const allAssigned = Object.values(assignments).flat();
-  const motionCount = allAssigned.filter((t) => (t.tag || "").toLowerCase().includes("motion")).length;
+  // A department can have the header count a Wrike status instead of overdue
+  // tasks (Motion counts tasks in its "Motion" status); see departments.js.
+  const countedStatus = countedStatusFor(department);
+  const statusCount = countedStatus
+    ? allAssigned.filter((t) => (t.tag || "").toLowerCase().includes(countedStatus.toLowerCase())).length
+    : 0;
   const overdueCount = allAssigned.filter((t) => isOverdue(t.dueDate)).length;
   const staleCount = allAssigned.filter((t) => isStale(t.dueDate)).length;
 
@@ -704,8 +660,8 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
             <div className="text-[9px] font-black uppercase tracking-widest text-white/70">on the board</div>
           </div>
           <div className="text-right">
-            <div className="font-display text-2xl font-bold text-white leading-none">{usesDeptRoster ? overdueCount : motionCount}</div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-white/70">{usesDeptRoster ? "overdue" : "motion"}</div>
+            <div className="font-display text-2xl font-bold text-white leading-none">{countedStatus ? statusCount : overdueCount}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/70">{countedStatus ? countedStatus.toLowerCase() : "overdue"}</div>
           </div>
         </div>
         <div className="hidden sm:block w-px h-8 bg-white/20 mr-1" />
@@ -811,9 +767,9 @@ export default function TodaysList({ wrikeData, triggerToast: _triggerToast, isA
         <div className="bg-white rounded-2xl border border-[#dce4ec] shadow-sm overflow-hidden">
           {board.members.length === 0 && (
             <p className="text-sm text-slate-400 italic px-6 py-8 text-center">
-              {usesDeptRoster
+              {department
                 ? `No ${department} team members yet — tag people's department as “${department}” in Administration › People.`
-                : "No team members."}
+                : "You're not in a department yet, so there's no team board to show. Ask an admin to set your department in Administration › People."}
             </p>
           )}
           {board.members.map((person, laneIdx) => {

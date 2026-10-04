@@ -52,7 +52,7 @@ import {
 import { resolveJobNumber, bookFilmTitle } from "../utils/wrikeHelpers";
 import { resolveCountriesWithSource } from "../utils/countryCodes";
 import { getFolderCountries, getFolderFamily, buildChildToParents, jobFolderDescription, resolveFilmName, filmFromTask } from "../lib/wrikeEnrich";
-import { fetchFolderDictionary } from "../hooks/useMotionBoardTasks";
+import { fetchFolderDictionary } from "../hooks/useBoardTasks";
 import { countryFieldIds, warmCountryFields } from "../lib/countryField";
 import { secondsToHM } from "../utils/timeHelpers";
 import { coinDrop } from "../utils/coinDrop";

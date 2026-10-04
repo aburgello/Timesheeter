@@ -54,15 +54,15 @@ quietly depends on at least one person staying connected.
 
 ## The three ways data comes in
 
-**The shared sync.** This is how the Motion Board and most of the app get their
-tasks. It lives in `src/hooks/useWrikeCache.js`. Roughly every fifteen minutes,
+**The shared sync.** This is how Canvas, search, the Toolbox panel and most of
+the app get their tasks (the team boards fetch their own; see below). It lives in `src/hooks/useWrikeCache.js`. Roughly every fifteen minutes,
 the first person to have the app open checks a shared timestamp in Supabase. If
 nobody has synced in the last fifteen minutes, their browser does it for
 everyone. If somebody has, it doesn't call Wrike at all. One person's browser
 doing the work for the whole team is what keeps us inside Wrike's rate limits.
 
 A sync asks Wrike for every task changed since the last sync (two months back
-on a full refresh), keeps only the ones relevant to the Motion team, works out
+on a full refresh), keeps only the ones some team needs, works out
 what film, client and market each one belongs to (see "Making sense of a task"
 below), and writes the results into a Supabase table called
 `wrike_tasks_cache`. Every browser reads from that table, and also keeps a copy
@@ -80,11 +80,24 @@ named `shared`. The day is counted from the last refresh of those lists
 list it downloaded in full. If Wrike fails partway, the previous copy stays and
 the next sync tries again.
 
-A task counts as relevant to the Motion team if its title matches certain
-keywords, if it sits in a digital folder, if someone on the Motion team is
-assigned to it, or if it has a subtask that meets one of those. When a task
-stops being relevant, for example because it's reassigned to another team, it
-is removed from the cache so a stale copy doesn't linger.
+A task is kept if it's assigned to anyone in a department that has a team board
+(Motion, Print, AM and Digital today; PM and Operations don't use the board or
+Canvas, so their tasks aren't kept), if its title matches certain keywords
+(DOOH, DINTH, MATRIX, Print launch hubs), if it sits in a digital folder, or if
+it has a subtask that meets one of those. Team membership comes from each
+person's department in their profile, matched by Wrike id. When a task stops
+qualifying, for example because it's reassigned to someone in PM, it is
+removed from the cache so a stale copy doesn't linger.
+
+**The team boards.** Every department with a board (Motion Board, Print Board
+and so on) gets the same page, built from the people tagged with that
+department. Each board fetches its own team's tasks that are due soon, once
+when it opens, and keeps them fresh from the webhooks below
+(`src/hooks/useBoardTasks.js`). What differs between departments (which pages
+they see, the Launch Tracker for Print, DOOH Specs for Motion) is set in one
+place, `src/lib/departments.js`. A department added in Administration gets the
+standard setup automatically, and someone with no department sees a board
+asking them to get tagged.
 
 **Webhooks, for anything that changes in between.** Fifteen minutes is too slow
 to watch a task move, so Wrike is also set up to notify us the moment a task
@@ -103,9 +116,9 @@ which lets exactly one claimant win each event). The winner fetches the task
 from Wrike, updates the shared cache, and removes the task from the cache if
 Wrike reported it deleted. The other tabs pick up the result from the cache a
 few seconds later instead of calling Wrike themselves. Separately, the
-Legacy, Profile and Motion Board pages fetch a changed task only if it's
+Legacy, Profile and team board pages fetch a changed task only if it's
 already on their list, or the change could add it (a new task, a new
-assignment, and for the Motion Board a new date or status).
+assignment, and for a team board a new date or status).
 
 One rule matters a lot here: the Worker always answers Wrike with "OK", even
 when something on our side has gone wrong. If Wrike gets errors back, it
@@ -362,6 +375,14 @@ comment, which is where amends get written. It authenticates with a shared key
 (`PANEL_KEY`) rather than a Wrike login. The job list is read from
 `wrike_tasks_cache`, not from Wrike, so it costs nothing against the rate
 limit. Only the latest comment is fetched live.
+
+The machine is tagged with a person's name (usually a first name), which the
+Worker matches against profiles: an exact full name first, then first name,
+then surname. The panel is the Motion team's tool, so when a name matches people
+in several departments the Motion member wins ("Luke" is Luke Trott, not Luke
+Steer in Print). That's the one deliberate Motion preference left in the code
+(`PANEL_PREFERRED_DEPARTMENT` in `worker/index.js`). A Motion member's tasks
+are always in the cache, because Motion has a team board.
 
 
 ## Everything that writes to Wrike

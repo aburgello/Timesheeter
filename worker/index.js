@@ -1169,6 +1169,9 @@ async function handleProxy(request, url, env, ctx) {
 // Cancelled); custom names like "In Progress" are behind customStatusId.
 const PANEL_ACTIVE_STATUSES = ["Active", "Deferred"];
 
+// Whose name wins when the panel's member name matches more than one person.
+const PANEL_PREFERRED_DEPARTMENT = "Motion";
+
 function panelCors(extra = {}) {
   return {
     // The panel's origin is `null` (file://), which cannot be allow-listed by
@@ -1250,7 +1253,7 @@ async function panelStatusNameMap(env) {
 // Does NOT write to wrike_tasks_cache: the cache holds enriched tasks, and raw
 // Wrike rows would replace them with thinner data under the website.
 //
-// Same query as the board (useMotionBoardTasks.js), including the dueDate
+// Same query as the board (useBoardTasks.js), including the dueDate
 // format without a trailing "Z". superTaskIds is also requested so subtasks
 // can be dropped instead of appearing twice.
 const PANEL_LIVE_FIELDS = "[customFields,parentIds,responsibleIds,subTaskIds,superTaskIds,description]";
@@ -1444,13 +1447,20 @@ async function handlePanelJobs(request, url, env) {
         if (last === wanted) return 1;
         return 0;
       };
+      // The panel is the Motion team's After Effects tool, so on a tie a Motion
+      // member wins: "Luke" is Luke Trott, not Luke Steer in Print, whichever
+      // profile was edited last. Other ties go to the most recently updated
+      // row (the query's order), so the answer is deterministic.
+      const preferred = (p) => (p.department === PANEL_PREFERRED_DEPARTMENT ? 1 : 0);
       let best = null;
       let bestScore = 0;
       for (const p of profiles) {
         if (!p || !p.wrike_user_id) continue;
         const sc = score(p);
-        // Ties go to the most recently updated row, so the answer is deterministic.
-        if (sc > bestScore) { bestScore = sc; best = p; }
+        if (sc > bestScore || (sc > 0 && sc === bestScore && preferred(p) > preferred(best))) {
+          bestScore = sc;
+          best = p;
+        }
       }
       if (best) wrikeUserId = best.wrike_user_id;
     }

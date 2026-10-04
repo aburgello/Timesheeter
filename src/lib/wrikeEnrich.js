@@ -1,4 +1,4 @@
-import { FILM_MAPPINGS, motionTeamShortName, TERRITORIES, REGION_ALIASES, MAGI_MARKET_CODES, MAGI_MARKET_FOLDERS, COUNTRY_SUFFIX_EXCEPTIONS } from "../constants.js";
+import { FILM_MAPPINGS, TERRITORIES, REGION_ALIASES, MAGI_MARKET_CODES, MAGI_MARKET_FOLDERS, COUNTRY_SUFFIX_EXCEPTIONS } from "../constants.js";
 import { countriesFromFolderNames } from "../utils/countryCodes";
 import { familyFromFolderName } from "../utils/categoryFamily";
 import { countryFieldIds } from "./countryField";
@@ -373,38 +373,28 @@ export const keepsDescription = (title) => {
 };
 
 // ---------------------------------------------------------------------------
-// Filter raw tasks down to Motion team relevance
+// Filter raw tasks down to what the shared cache keeps
 // ---------------------------------------------------------------------------
-export function filterToMotionTeam(tasks, folderDictionary, contactDictionary) {
+// A task is kept if it's assigned to anyone in `teamIds` (the Wrike ids of
+// everyone in a department with a team board; see loadTeamIds), if its title
+// marks it as DOOH, DINTH, MATRIX or a Print launch hub, if it sits directly in
+// a Digital folder, or if one of its subtasks qualifies in any of those ways.
+export function filterToTeams(tasks, folderDictionary, teamIds) {
   const tasksById = new Map(tasks.map((t) => [t.id, t]));
+  const onTeam = (t) => t.responsibleIds?.some((id) => teamIds.has(id));
+  const keyword = (title) => {
+    const upper = title.toUpperCase();
+    return upper.includes("DOOH") || upper.includes("DINTH") || upper.includes("MATRIX");
+  };
+  const inDigital = (t) =>
+    t.parentIds?.some((pid) => folderDictionary[pid]?.title?.toUpperCase().includes("DIGITAL"));
 
   return tasks.filter((task) => {
     if (!task.title) return false;
-    const upper = task.title.toUpperCase();
-
-    const matchesKeywords =
-      upper.includes("DOOH") || upper.includes("DINTH") || upper.includes("MATRIX") ||
-      PRINT_HUB_RE.test(task.title);
-    const matchesAssignee = task.responsibleIds?.some(
-      (id) => motionTeamShortName(contactDictionary[id])
-    );
-    const matchesDigital = task.parentIds?.some((pid) =>
-      folderDictionary[pid]?.title?.toUpperCase().includes("DIGITAL")
-    );
-
-    if (matchesKeywords || matchesDigital || matchesAssignee) return true;
-
+    if (keyword(task.title) || PRINT_HUB_RE.test(task.title) || inDigital(task) || onTeam(task)) return true;
     return task.subTaskIds?.some((subId) => {
       const sub = tasksById.get(subId);
-      if (!sub?.title) return false;
-      const subUpper = sub.title.toUpperCase();
-      return (
-        subUpper.includes("DOOH") ||
-        subUpper.includes("DINTH") ||
-        subUpper.includes("MATRIX") ||
-        sub.parentIds?.some((pid) => folderDictionary[pid]?.title?.toUpperCase().includes("DIGITAL")) ||
-        sub.responsibleIds?.some((id) => motionTeamShortName(contactDictionary[id]))
-      );
+      return !!sub?.title && (keyword(sub.title) || inDigital(sub) || onTeam(sub));
     }) ?? false;
   });
 }

@@ -21,7 +21,7 @@ import {
 } from "../lib/sharedTaskSync";
 import {
   enrichTasks,
-  filterToMotionTeam,
+  filterToTeams,
   hydrateMissingFolders,
   parseWrikeData,
   getStudioName,
@@ -34,6 +34,7 @@ import {
 import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
 import { fetchAllFolders } from "../lib/wrikeCampaign";
 import { fetchWrikeMeta } from "../lib/wrikeMeta";
+import { usesTeamBoard } from "../lib/departments";
 
 const FIELDS_FILTER = encodeURIComponent(
   "[customFields,parentIds,responsibleIds,subTaskIds,description]"
@@ -199,6 +200,29 @@ function deriveFolderCampaigns(folderDictionary) {
     }
   }
   return campaigns;
+}
+
+// ---------------------------------------------------------------------------
+// Whose tasks the shared cache keeps
+// ---------------------------------------------------------------------------
+// Wrike ids of everyone in a department with a team board (see
+// departments.js usesTeamBoard). Throws if profiles can't be read or come back
+// empty, so a sync never mistakes "couldn't load the team" for "nobody is on
+// it" and purges the cache.
+let teamIdsCache = { at: 0, ids: null };
+const TEAM_IDS_TTL_MS = 5 * 60 * 1000;
+
+async function loadTeamIds() {
+  if (teamIdsCache.ids && Date.now() - teamIdsCache.at < TEAM_IDS_TTL_MS) return teamIdsCache.ids;
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("wrike_user_id, department")
+    .not("department", "is", null);
+  if (error) throw new Error(`team roster unavailable: ${error.message}`);
+  const ids = (data || []).filter((p) => p.wrike_user_id && usesTeamBoard(p.department)).map((p) => p.wrike_user_id);
+  if (!ids.length) throw new Error("team roster is empty");
+  teamIdsCache = { at: Date.now(), ids: new Set(ids) };
+  return teamIdsCache.ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +600,7 @@ export function useWrikeCache() {
 
       // Light probe first: "did we sync recently?" must not drag the multi-MB
       // dictionary blobs across the wire. sync() fires speculatively (mount,
-      // Motion Board tab switches) and usually skips — only a real sync below
+      // board tab switches) and usually skips — only a real sync below
       // pays for the full meta row.
       if (!fullRefresh) {
         const { data: probe } = await supabase
@@ -644,7 +668,7 @@ export function useWrikeCache() {
         }
       }
 
-      // Keep only Motion-relevant tasks (the filter uses fields every page has).
+      // Keep only tasks some team needs (the filter uses fields every page has).
       // Launch-hub subtasks are relevant by membership, not title (digital waves'
       // subtasks have no "_Print_" marker), so anything under a known hub is kept.
       const hubSubIds = new Set(
@@ -652,8 +676,9 @@ export function useWrikeCache() {
           .filter((t) => t.title && PRINT_HUB_RE.test(t.title))
           .flatMap((t) => t.subTaskIds || [])
       );
+      const teamIds = await loadTeamIds();
       const relevantMap = new Map(
-        filterToMotionTeam(rawTasks, folderDictionary, contactDictionary).map((t) => [t.id, t])
+        filterToTeams(rawTasks, folderDictionary, teamIds).map((t) => [t.id, t])
       );
       for (const t of rawTasks) {
         if (hubSubIds.has(t.id)) relevantMap.set(t.id, t);
@@ -734,7 +759,7 @@ export function useWrikeCache() {
           await supabase.from("wrike_tasks_cache").delete().in("id", droppedIds.slice(i, i + 200));
         }
         await removeLocalTasks(droppedIds);
-        console.log(`[WrikeCache] purged ${droppedIds.length} task(s) no longer Motion-relevant`);
+        console.log(`[WrikeCache] purged ${droppedIds.length} task(s) no team needs any more`);
       }
 
       // Collect code→filmName mappings discovered in this sync and merge with existing
@@ -911,7 +936,7 @@ export function useWrikeCache() {
     if (!raw.length) return;
 
     // Same relevance check sync() applies — a webhook-changed task that no
-    // longer (or never did) pass filterToMotionTeam must not be added to the
+    // longer (or never did) pass filterToTeams must not be added to the
     // shared cache, and must be purged if it's there from before. Launch-hub
     // subtasks are relevant by membership (see sync()) — a status change on a
     // digital wave's per-market subtask must update it, not purge it.
@@ -920,8 +945,16 @@ export function useWrikeCache() {
         .filter((t) => t.title && PRINT_HUB_RE.test(t.title))
         .flatMap((t) => t.subTaskIds || [])
     );
+    let teamIds;
+    try {
+      teamIds = await loadTeamIds();
+    } catch (e) {
+      // Without the roster we can't tell what to keep; the next sync covers it.
+      console.warn("[WrikeCache] webhook update skipped:", e.message);
+      return;
+    }
     const relevantMap = new Map(
-      filterToMotionTeam(raw, ctx.folderDictionary, ctx.contactDictionary).map((t) => [t.id, t])
+      filterToTeams(raw, ctx.folderDictionary, teamIds).map((t) => [t.id, t])
     );
     for (const t of raw) {
       if (hubSubIds.has(t.id)) relevantMap.set(t.id, t);
@@ -970,7 +1003,7 @@ export function useWrikeCache() {
     return subscribeToWrikeTaskEvents(handleWebhookTaskIds);
   }, [wrikeUserId, handleWebhookTaskIds]);
 
-  // --- Broad film-code mapping scan (all tasks, not just Motion-filtered) ---
+  // --- Broad film-code mapping scan (all tasks, not just the cached ones) ---
   // Fetches every task from the last 2 years with minimal fields (parentIds only),
   // runs getFilmName via tree-climb on each, and persists newly discovered code→name
   // pairs without touching last_synced_at or the task cache.

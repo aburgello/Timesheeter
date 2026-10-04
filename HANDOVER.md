@@ -17,8 +17,8 @@ README.md just covers running it locally.
 TimeHub is the studio's internal web app. People use it to turn their Wrike
 work into timesheets for the company timesheet site, and PMs use it to keep the
 Job Book (the list of every job, its film, client and costs) in step with how
-jobs are set up in Wrike. It also has the Motion Board, notes (Canvas), a
-profile page with live Wrike timers, and an Administration area.
+jobs are set up in Wrike. It also has a team board for each department, notes
+(Canvas), a profile page with live Wrike timers, and an Administration area.
 
 
 ## The pieces
