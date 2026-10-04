@@ -131,9 +131,25 @@ match. Never edit an old migration.
 
 ## Deploying
 
-`npm run deploy` builds the site and deploys the Worker with Wrangler. It
-isn't automatic: merging to `main` doesn't deploy anything. Full setup is in
-DEPLOY.md.
+**Merging to `main` on `aburgello/Timesheeter` deploys to the live site.**
+Cloudflare Workers Builds is connected to that repository. A push to its
+`main` builds and deploys the `timesheeter` Worker within a couple of
+minutes, and every other branch gets a preview build with its own URL,
+which is posted as a check on the pull request. So the pull request's checks
+are the last stop before production. Read them before merging.
+
+To check a deploy really went live, compare the `assets/index-….js` file
+named in the live site's page with the one in `dist/client/index.html`
+from a local `npm run build` of the same commit. They match when the
+site is serving that commit.
+
+`npm run deploy` still works for deploying by hand from your machine. Full
+setup is in DEPLOY.md.
+
+The other two copies of the repository (`aburgelloxyi/TimeHub` and
+`xyidesign/timehub`) aren't connected to Cloudflare as far as anyone has
+checked, so pushing there doesn't deploy. Confirm that under Workers →
+timesheeter → Settings → Build before relying on it.
 
 
 ## Accounts, secrets and configuration
