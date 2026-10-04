@@ -6,7 +6,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Users, Pencil, X, Check, Search, RefreshCw } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
-import { isServiceAccount, DEPT_GROUPS, departmentForGroup, hasLeft } from "../../lib/people";
+import { isServiceAccount, DEPT_GROUPS, hasLeft } from "../../lib/people";
+import { syncPeopleFromWrike } from "../../lib/peopleSync";
 import { confirmAction } from "../../lib/confirm";
 import { cleanNamePart } from "../../lib/formatName";
 import HubRow from "../shared/HubRow";
@@ -66,79 +67,21 @@ export function PeopleSection() {
     updateField(p.wrike_user_id, { first_name: first || null, last_name: last || null });
   };
 
-  // Adds people from Wrike, fills in departments from Wrike groups, and marks
-  // people whose Wrike account has been deleted as having left. It never
-  // overrides anything set here: names, departments and "left" all stick.
+  // What it does and doesn't change: lib/peopleSync.js.
   const syncFromWrike = async () => {
     if (!localStorage.getItem("wrike_user_id")) { setSyncMsg("Wrike not connected — connect it in Profile → Settings first."); return; }
     setSyncing(true);
     setSyncMsg("");
     try {
-      const [contactsRes, groupsRes] = await Promise.all([
-        fetch("/api/wrike/contacts"),
-        fetch("/api/wrike/groups"),
-      ]);
-      if (!contactsRes.ok) throw new Error(`Wrike contacts error ${contactsRes.status}`);
-      const contacts = ((await contactsRes.json()).data || []).filter((c) => c.type === "Person");
-
-      // Department per Wrike group, matched exactly (departmentForGroup). Someone
-      // in groups for two different departments is left for a person to decide.
-      const deptMap = {};
-      const conflicted = new Set();
-      const unmatchedGroups = [];
-      if (groupsRes.ok) {
-        for (const group of (await groupsRes.json()).data || []) {
-          const dept = departmentForGroup(group.title, departments);
-          if (!dept) { if (group.title) unmatchedGroups.push(group.title); continue; }
-          for (const memberId of group.memberIds || []) {
-            if (deptMap[memberId] && deptMap[memberId] !== dept) conflicted.add(memberId);
-            deptMap[memberId] = dept;
-          }
-        }
-      }
-      conflicted.forEach((id) => delete deptMap[id]);
-
-      const { data: existingRows } = await supabase.from("profiles").select("*");
-      const existing = new Map((existingRows || []).map((r) => [r.wrike_user_id, r]));
-
-      let added = 0, departmentsFilled = 0, markedLeft = 0;
-      for (const c of contacts) {
-        const row = existing.get(c.id);
-        if (c.deleted) {
-          // Deleted in Wrike: never add them, and mark an existing profile as left.
-          if (row && !hasLeft(row)) {
-            const { error } = await supabase.from("profiles")
-              .update({ left_at: new Date().toISOString() }).eq("wrike_user_id", c.id);
-            if (!error) markedLeft++;
-          }
-          continue;
-        }
-        const payload = {
-          wrike_user_id: c.id,
-          email: c.profiles?.[0]?.email || null,
-          avatar_url: c.avatarUrl || null,
-        };
-        // A name tidied up here (Wrike is where "Trott ⚡️" comes from) survives.
-        if (!row || !(row.first_name || row.last_name)) {
-          payload.first_name = c.firstName || null;
-          payload.last_name = c.lastName || null;
-        }
-        // Departments from Wrike only fill a blank; one set here is kept.
-        if (deptMap[c.id] && !row?.department) {
-          payload.department = deptMap[c.id];
-          departmentsFilled++;
-        }
-        const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "wrike_user_id" });
-        if (!error && !row) added++;
-      }
-
-      const parts = [`Synced ${contacts.filter((c) => !c.deleted).length} people from Wrike`];
-      if (added) parts.push(`${added} new`);
-      if (departmentsFilled) parts.push(`${departmentsFilled} department${departmentsFilled === 1 ? "" : "s"} filled in from Wrike groups`);
-      if (markedLeft) parts.push(`${markedLeft} marked as left (deleted in Wrike)`);
-      if (conflicted.size) parts.push(`${conflicted.size} in groups for two departments, left as they were`);
+      const r = await syncPeopleFromWrike(supabase);
+      const parts = [`Synced ${r.people} people from Wrike`];
+      if (r.added) parts.push(`${r.added} new`);
+      if (r.departmentsFilled) parts.push(`${r.departmentsFilled} department${r.departmentsFilled === 1 ? "" : "s"} filled in from Wrike groups`);
+      if (r.markedLeft) parts.push(`${r.markedLeft} marked as left (deleted in Wrike)`);
+      if (r.conflicted) parts.push(`${r.conflicted} in groups for two departments, left as they were`);
+      if (r.failed) parts.push(`${r.failed} couldn't be saved`);
       let msg = parts.join(" · ") + ".";
-      if (unmatchedGroups.length) msg += ` Groups matching no department: ${unmatchedGroups.join(", ")}.`;
+      if (r.unmatchedGroups.length) msg += ` Groups matching no department: ${r.unmatchedGroups.join(", ")}.`;
       setSyncMsg(msg);
       await load();
     } catch (err) {

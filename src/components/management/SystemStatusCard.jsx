@@ -15,7 +15,7 @@ const DOT = {
 async function loadStatus() {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const [meta, event, cache, removed, hooks] = await Promise.all([
-    supabase.from("wrike_sync_meta").select("last_synced_at,dictionaries_refreshed_at").eq("wrike_user_id", "shared").maybeSingle(),
+    supabase.from("wrike_sync_meta").select("last_synced_at,dictionaries_refreshed_at,people_synced_at").eq("wrike_user_id", "shared").maybeSingle(),
     supabase.from("wrike_webhook_events").select("occurred_at").order("occurred_at", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("wrike_tasks_cache").select("id", { count: "estimated", head: true }),
     supabase.from("wrike_tasks_cache_removed").select("id", { count: "exact", head: true }).gt("removed_at", since),
@@ -24,6 +24,7 @@ async function loadStatus() {
   return {
     lastSyncedAt: meta.data?.last_synced_at ?? null,
     dictionariesAt: meta.data?.dictionaries_refreshed_at ?? null,
+    peopleSyncedAt: meta.data?.people_synced_at,
     lastEventAt: event.data?.occurred_at ?? null,
     webhook: hooks ? findOurWebhook(hooks.data, window.location.origin) : undefined,
     cacheRows: cache.error ? null : cache.count,

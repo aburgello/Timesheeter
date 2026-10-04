@@ -35,7 +35,7 @@ function freshness(iso, now, staleAfter) {
 
 // webhook: { status: "Active" | "Suspended" | ... } for ours, null when Wrike
 // has none pointing here, undefined when Wrike couldn't be asked.
-export function statusLines({ lastSyncedAt, dictionariesAt, lastEventAt, webhook, cacheRows, removedRecently }, now = new Date()) {
+export function statusLines({ lastSyncedAt, dictionariesAt, peopleSyncedAt, lastEventAt, webhook, cacheRows, removedRecently }, now = new Date()) {
   const lines = [
     {
       id: "sync",
@@ -50,6 +50,14 @@ export function statusLines({ lastSyncedAt, dictionariesAt, lastEventAt, webhook
       // Refreshed once a day by whoever syncs first.
       level: ageOf(dictionariesAt, now) <= 2 * DAY ? "ok" : "warn",
     },
+    // undefined before that column exists.
+    ...(peopleSyncedAt === undefined ? [] : [{
+      id: "people",
+      label: "People synced from Wrike",
+      value: timeAgo(peopleSyncedAt, now),
+      // Daily, when an administrator opens TimeHub.
+      level: ageOf(peopleSyncedAt, now) <= 3 * DAY ? "ok" : "warn",
+    }]),
     {
       id: "event",
       label: "Last live update from Wrike",

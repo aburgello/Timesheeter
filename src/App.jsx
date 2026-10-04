@@ -28,8 +28,9 @@ import { useWrikeCache } from "./hooks/useWrikeCache";
 import { PRINT_HUB_RE } from "./lib/wrikeEnrich";
 import { pageIdsFor, pagesFor } from "./lib/departments";
 import { useDepartment } from "./hooks/useDepartment";
-import { MANAGER_PAGE_IDS } from "./lib/access";
-import { setWrikeUserId } from "./lib/supabaseClient";
+import { MANAGER_PAGE_IDS, isManager } from "./lib/access";
+import { setWrikeUserId, supabase, whenIdentityReady } from "./lib/supabaseClient";
+import { autoSyncPeople } from "./lib/peopleSync";
 import { startWrikeOAuth } from "./lib/wrikeApi";
 import { warmCountryFields } from "./lib/countryField";
 import { loadCountryAliases } from "./lib/countryAliases";
@@ -191,6 +192,18 @@ export default function App() {
     loadCountryAliases();
   }, []);
 
+  // An administrator's visit runs the daily people sync from Wrike, once the
+  // browser is idle. See lib/peopleSync.js.
+  useEffect(() => {
+    const uid = localStorage.getItem("wrike_user_id");
+    if (!uid || !isManager(uid)) return;
+    const run = () => whenIdentityReady()
+      .then(() => autoSyncPeople(supabase))
+      .catch((err) => console.warn("[People] daily sync failed:", err.message));
+    const handle = window.requestIdleCallback ? window.requestIdleCallback(run, { timeout: 30000 }) : setTimeout(run, 10000);
+    return () => (window.cancelIdleCallback ? window.cancelIdleCallback(handle) : clearTimeout(handle));
+  }, []);
+
   // Reset scroll on page swap — AnimatePresence swaps the content but the
   // window scroll survives it, so navigating from deep in one page would
   // land mid-way down the next. The wash overlay (when present) hides the
@@ -257,6 +270,7 @@ export default function App() {
     sync,
     syncNow,
     scanFilmMappings,
+    editFilmCode,
   } = useWrikeCache();
 
   // The team board now has its own webhook-fed data source, but the shared
@@ -683,6 +697,7 @@ export default function App() {
                 scanFilmMappings={scanFilmMappings}
                 isScanning={isScanning}
                 filmCodeMappings={filmCodeMappings}
+                editFilmCode={editFilmCode}
               />
             )}
             {activePage === "wriketest" && (
