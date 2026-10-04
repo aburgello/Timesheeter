@@ -3,6 +3,10 @@
 -- misses removals entirely and misses any row rewritten without a Wrike change
 -- (repairs, backfills). Read by src/lib/sharedTaskSync.js.
 
+-- Give up rather than queue behind live reads of this busy table (and make
+-- them queue behind us). Re-run if it times out.
+set local lock_timeout = '3s';
+
 -- Existing rows get an old timestamp, so a browser's first catch-up after this
 -- fetches only rows written since, not the whole 80 MB table.
 alter table public.wrike_tasks_cache
