@@ -4,7 +4,6 @@ import { enrichTasks, buildChildToParents } from "../lib/wrikeEnrich";
 import { subscribeToWrikeTaskEvents, idsWorthFetching } from "../lib/wrikeWebhookSubscription";
 import { fetchTasksByIds } from "./useWrikeCache";
 import { fetchAllFolders } from "../lib/wrikeCampaign";
-import { motionTeamShortName, normalizeName } from "../constants";
 
 const FIELDS = encodeURIComponent("[customFields,parentIds,responsibleIds,subTaskIds,description]");
 
@@ -36,21 +35,9 @@ async function fetchContactDictionary() {
   return { contacts, contactDictionary };
 }
 
-function resolveTeamIds(contacts) {
-  return contacts
-    .filter((c) => {
-      const name = `${c.firstName || ""} ${c.lastName || ""}`.trim();
-      // Emoji-insensitive: a display name like "Maria Cerrato 🐱" still resolves
-      // to the roster (see motionTeamShortName). Without this, a task assigned
-      // only to an emoji-decorated member never reaches the board.
-      return motionTeamShortName(name) || normalizeName(name).includes("Riccardo");
-    })
-    .map((c) => c.id);
-}
-
 export async function fetchFolderDictionary() {
   // Reuse the last synced copy — folder structure changes rarely, no need to
-  // refetch the whole tree on every Motion Board mount.
+  // refetch the whole tree on every board mount.
   const { data: meta } = await supabase
     .from("wrike_sync_meta")
     .select("folder_dictionary,status_dictionary")
@@ -70,7 +57,7 @@ export async function fetchFolderDictionary() {
     try {
       fresh = await fetchAllFolders();
     } catch (e) {
-      console.warn("[MotionBoard] folder fetch failed:", e.message);
+      console.warn("[Board] folder fetch failed:", e.message);
     }
     if (Object.keys(fresh).length > 0) folderDictionary = fresh;
   }
@@ -92,7 +79,7 @@ async function fetchBoardTasks(teamIds, dueDateEnd) {
       : `/api/wrike/tasks?status=Active&dueDate=${dueDateFilter}&responsibles=${responsiblesFilter}&fields=${FIELDS}&pageSize=1000`;
     const res = await fetch(url);
     if (!res.ok) {
-      console.warn("[MotionBoard] tasks fetch failed", res.status, await res.text().catch(() => ""));
+      console.warn("[Board] tasks fetch failed", res.status, await res.text().catch(() => ""));
       break;
     }
     const json = await res.json();
@@ -103,20 +90,12 @@ async function fetchBoardTasks(teamIds, dueDateEnd) {
   return rawTasks;
 }
 
-// Narrow, independent board data source — fetches only Active tasks due today
-// through the end of next work week, assigned to a team, once on mount. No
-// periodic polling: freshness after that comes entirely from Wrike webhooks
-// (worker/index.js -> wrike_webhook_events -> Supabase Realtime), unlike the
-// shared useWrikeCache() hook other tabs use, which still needs the full
-// historical dataset for logging time.
-//
-// `externalTeamIds`:
-//   - undefined → Motion mode: resolve the team from contacts via the
-//     hardcoded MOTION_TEAM_NAME_MAP (+ Riccardo), exactly as before.
-//   - array     → Print (or any profiles-derived) mode: use these Wrike user
-//     IDs directly as the team; wait until the array is non-empty, and
-//     refetch if it changes.
-export function useMotionBoardTasks(externalTeamIds) {
+// The board's own data: Active tasks due by the end of next work week,
+// assigned to anyone in `teamIds` (the department's Wrike ids), fetched once
+// when the team is known and kept fresh by Wrike webhooks afterwards. Separate
+// from useWrikeCache, which holds the long history Canvas and timesheets need.
+// No team (still loading, or an untagged viewer) means nothing is fetched.
+export function useBoardTasks(teamIds = []) {
   const [boardTasks, setBoardTasks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -129,14 +108,12 @@ export function useMotionBoardTasks(externalTeamIds) {
     dueDateEnd: endOfNextWorkWeek(),
   });
 
-  const external = externalTeamIds !== undefined;
   // Stable key so the effect refetches only when the actual id set changes,
   // not on every render's fresh array identity.
-  const externalKey = external ? [...externalTeamIds].sort().join(",") : null;
+  const teamKey = [...teamIds].sort().join(",");
 
   useEffect(() => {
-    // External mode with no ids yet (roster still loading) — nothing to fetch.
-    if (external && (!externalTeamIds || externalTeamIds.length === 0)) {
+    if (!teamIds.length) {
       setBoardTasks([]);
       setIsLoading(false);
       return;
@@ -145,11 +122,10 @@ export function useMotionBoardTasks(externalTeamIds) {
     setIsLoading(true);
     (async () => {
       try {
-        const [{ contacts, contactDictionary }, { folderDictionary, statusDictionary }] = await Promise.all([
+        const [{ contactDictionary }, { folderDictionary, statusDictionary }] = await Promise.all([
           fetchContactDictionary(),
           fetchFolderDictionary(),
         ]);
-        const teamIds = external ? externalTeamIds : resolveTeamIds(contacts);
         const dueDateEnd = endOfNextWorkWeek();
         const childToParent = buildChildToParents(folderDictionary);
         ctxRef.current = { folderDictionary, contactDictionary, statusDictionary, childToParent, teamIds, dueDateEnd };
@@ -168,11 +144,11 @@ export function useMotionBoardTasks(externalTeamIds) {
             updated_date: t.updatedDate ?? null,
           }));
           supabase.from("wrike_tasks_cache").upsert(rows).then(({ error: upsertError }) => {
-            if (upsertError) console.warn("[MotionBoard] shared cache upsert failed", upsertError);
+            if (upsertError) console.warn("[Board] shared cache upsert failed", upsertError);
           });
         }
       } catch (err) {
-        console.error("[MotionBoard] initial fetch failed", err);
+        console.error("[Board] initial fetch failed", err);
         if (!cancelled) setError(err.message);
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -180,7 +156,7 @@ export function useMotionBoardTasks(externalTeamIds) {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [externalKey]);
+  }, [teamKey]);
 
   // Ids on the board, for the webhook handler below (state would be stale there).
   const shownIdsRef = useRef(new Set());

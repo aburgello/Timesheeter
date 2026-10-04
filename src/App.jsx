@@ -54,7 +54,7 @@ import { loadCountryAliases } from "./lib/countryAliases";
 
 // ── Route-level code splitting ───────────────────────────────────────────────
 // Every page except Home is its own chunk, so first paint only carries the
-// shell + Home — a Motion artist never downloads Administration (2.6k lines),
+// shell + Home — a designer never downloads Administration (2.6k lines),
 // a PM never downloads the Canvas or pdfjs. Loaders live in a map keyed by
 // page id so the idle prefetch below can warm exactly the pages this
 // member's department can reach (same registry as the Rail/palette).
@@ -277,7 +277,7 @@ export default function App() {
     scanFilmMappings,
   } = useWrikeCache();
 
-  // Motion Board now has its own webhook-fed data source, but the shared
+  // The team board now has its own webhook-fed data source, but the shared
   // cache still feeds Canvas/Hub/Timesheeter. Opening the board is a good
   // moment to nudge a background refresh of that shared cache (soft — a
   // single-field probe that no-ops if data is <15min old).
@@ -323,7 +323,7 @@ export default function App() {
     return () => clearTimeout(t);
   }, [department, wrikeUserId]);
 
-  // Motion Board mounts on first visit (not at startup — its chunk shouldn't
+  // The team board mounts on first visit (not at startup — its chunk shouldn't
   // load for members who never open it), then stays mounted so board state
   // survives switching away, same as before the code split.
   const [boardVisited, setBoardVisited] = useState(
@@ -930,10 +930,10 @@ export default function App() {
 
       <ConfirmHost />
 
-      {/* Motion Board stays mounted (display:none when inactive) so its board
+      {/* The team board stays mounted (display:none when inactive) so its
           state survives switching away — kept outside the transition below
           so it's never unmounted/remounted by AnimatePresence. It sources
-          its own data independently (useMotionBoardTasks) rather than from
+          its own data independently (useBoardTasks) rather than from
           globalWrikeData below; wrikeData is only passed through for the
           task detail modal's lookups. */}
       {boardVisited && (

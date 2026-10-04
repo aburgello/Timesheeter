@@ -2,9 +2,8 @@ import React, { useState, useEffect } from "react";
 import { fullName } from "../lib/formatName";
 import { X, Shield, Users, Clock, Key, RefreshCw, CheckCircle, AlertCircle, Zap, Eye } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
-import { ALL_DEPARTMENTS } from "../lib/departments";
 import { useDepartmentPreviewState, setDepartmentPreview } from "../hooks/useDepartment";
-import { isServiceAccount } from "../lib/people";
+import { isServiceAccount, hasLeft } from "../lib/people";
 
 export default function AdminModal({ onClose }) {
   const [profiles, setProfiles] = useState([]);
@@ -12,6 +11,13 @@ export default function AdminModal({ onClose }) {
   const [taskCounts, setTaskCounts] = useState({});
   const [webhookState, setWebhookState] = useState({ status: "idle", message: "" });
   const departmentPreview = useDepartmentPreviewState();
+  // The real list (Administration › Departments), so a department added there
+  // can be previewed straight away.
+  const [departments, setDepartments] = useState([]);
+  useEffect(() => {
+    supabase.from("job_departments").select("name").order("name")
+      .then(({ data }) => setDepartments((data || []).map((d) => d.name).filter(Boolean)));
+  }, []);
 
   const registerWebhook = async () => {
     setWebhookState({ status: "loading", message: "" });
@@ -38,7 +44,7 @@ export default function AdminModal({ onClose }) {
           // Wrike's own service accounts (AM Team, Magic Wrike, All
           // proofreaders) sync into profiles like any real contact but
           // aren't people — never count them toward team stats here.
-          const realProfiles = profileData.filter((p) => !isServiceAccount(p.wrike_user_id));
+          const realProfiles = profileData.filter((p) => !isServiceAccount(p.wrike_user_id) && !hasLeft(p));
           setProfiles(realProfiles);
 
           // Fetch task counts per user
@@ -156,7 +162,7 @@ export default function AdminModal({ onClose }) {
           >
             You
           </button>
-          {ALL_DEPARTMENTS.map((dept) => (
+          {departments.map((dept) => (
             <button
               key={dept}
               onClick={() => setDepartmentPreview(dept)}

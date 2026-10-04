@@ -25,14 +25,14 @@ export const PAGES = {
   },
   todayslist: {
     id: "todayslist",
-    label: "Motion Board",
+    label: "Team Board",
     desc: "Team task allocation",
     icon: LayoutList,
     gradient: PAGE_GRADIENTS.todayslist,
   },
   canvas: {
     id: "canvas",
-    label: "Digi Canvas",
+    label: "Campaign Canvas",
     desc: "MATRIX visualiser",
     icon: Layout,
     gradient: PAGE_GRADIENTS.canvas,
@@ -67,71 +67,62 @@ export const PAGES = {
   },
 };
 
-// Every valid profiles.department value (matches the Postgres check
-// constraint) — used by the admin "preview as department" switcher so it
-// never drifts out of sync with what the database actually allows.
-export const ALL_DEPARTMENTS = ["AM", "Digital", "Motion", "Operations", "PM", "Print"];
-
-// ── Who sees what ────────────────────────────────────────────────────────────
-// Keyed by profiles.department (check constraint: PM | Motion | Digital |
-// AM | Operations | Print). AM and Digital mirror Motion/Print's own-board
-// setup (see boardLabelFor + TodaysList.js's usesDeptRoster) rather than
-// falling through to DEFAULT_PAGE_IDS, so every department has an explicit,
-// intentional set instead of an unconfigured default.
-// Administration is in no department's set: it belongs to the people named in
-// MANAGEMENT_IDS (lib/access.js), who get it and the Job Book added on top of
-// whatever their department lists — see pageIdsFor. The Job Book is otherwise
-// the Project Managers' alone, so Operations is down to its timesheets.
-// The Timesheeter (Tracker) is hidden for everyone: every department reaches
-// its time through Timesheets (legacy). The page's code is kept, not deleted.
-// Undo by putting "timesheet" back in the lists below and back in App.jsx's
-// VALID_PAGES, which is what stops a stale #timesheet link rendering it.
-export const DEPARTMENT_PAGES = {
-  Motion: ["todayslist", "canvas", "legacy", "profile"],
-  Print: ["todayslist", "canvas", "legacy", "profile"],
-  AM: ["todayslist", "canvas", "legacy", "profile"],
-  Digital: ["todayslist", "canvas", "legacy", "profile"],
-  PM: ["jobbook", "legacy", "profile"],
-  Operations: ["legacy", "profile"],
+// ── Departments ──────────────────────────────────────────────────────────────
+// The department list itself is the job_departments table (Administration ›
+// Departments); profiles.department references it. This is only what differs
+// between departments. A department missing from here gets TEAM_DEFAULTS, so
+// one added in Administration works straight away with the standard setup.
+//
+//   pages     the pages it sees (Administration and the Job Book are added on
+//             top for the people in MANAGEMENT_IDS; see pageIdsFor)
+//   features  department-specific Canvas tools: "launchTracker" (per-market
+//             print requests), "doohSpecs" (screen specs by country)
+//   quickFilter  the first job-search chip on the Timesheeter
+//   countedStatus  a Wrike status the board header counts, in place of the
+//             default "overdue" count
+//
+// The Timesheeter (Tracker) page is hidden for everyone: time goes through
+// Timesheets (legacy). Its code is kept. Undo by putting "timesheet" back in
+// the lists below and in App.jsx's VALID_PAGES.
+const TEAM_DEFAULTS = {
+  pages: ["todayslist", "canvas", "legacy", "profile"],
+  features: [],
+  quickFilter: "DOOH",
 };
 
-// What an untagged profile sees, and what everyone sees while the department
-// loads.
-export const DEFAULT_PAGE_IDS = ["todayslist", "canvas", "legacy", "profile"];
+export const DEPARTMENTS = {
+  Motion: { features: ["doohSpecs"], countedStatus: "Motion" },
+  Print: { features: ["launchTracker"], quickFilter: "LAUNCH" },
+  AM: {},
+  Digital: {},
+  PM: { pages: ["jobbook", "legacy", "profile"] },
+  Operations: { pages: ["legacy", "profile"] },
+};
 
-// The team board (todayslist) is one page whose identity follows the viewer's
-// department — every non-Motion department sees its own "{Department} Board"
-// with its own profiles-tagged roster (see TodaysList.js's usesDeptRoster);
-// Motion keeps the plain "Motion Board" label and its hardcoded team. Keeps a
-// single page id/route while letting the nav label (Home rows, Rail, command
-// palette) and the board header adapt per department.
-export function boardLabelFor(department) {
-  return !department || department === "Motion" ? "Motion Board" : `${department} Board`;
-}
+const settingsFor = (department) => ({ ...TEAM_DEFAULTS, ...(DEPARTMENTS[department] || {}) });
 
-// Same idea for Campaign Canvas, now that its content (Team Board, End of
-// Campaign notes, DOOH Specs) varies per department too — "Digi Canvas" stays
-// the label for Motion/Digital (its original audience), everyone else gets
-// their own name so "Digi" doesn't show up for a department it isn't about.
-export function canvasLabelFor(department) {
-  return !department || department === "Motion" || department === "Digital"
-    ? "Digi Canvas"
-    : `${department} Canvas`;
-}
+// Someone with no department yet: their timesheets and profile, and a board
+// that asks them to get tagged. Nothing is assumed about which team they're in.
+const UNTAGGED_PAGE_IDS = ["todayslist", "legacy", "profile"];
 
-// The job-string quick filters on the Timesheeter. Print's outdoor work goes
-// out as launches, not DOOH, so the first chip is named for what that
-// department actually searches — the rest of the list is common to everyone.
+export const hasFeature = (department, feature) =>
+  !!department && settingsFor(department).features.includes(feature);
+
+// Departments whose members' Wrike tasks the shared cache keeps: the ones with a
+// team board. The Canvas, search and the Toolbox panel all read that cache.
+export const usesTeamBoard = (department) =>
+  !!department && settingsFor(department).pages.includes("todayslist");
+
+export const countedStatusFor = (department) =>
+  (department && settingsFor(department).countedStatus) || null;
+
+export const boardLabelFor = (department) => (department ? `${department} Board` : "Team Board");
+export const canvasLabelFor = (department) => (department ? `${department} Canvas` : "Campaign Canvas");
+
 export function jobQuickFiltersFor(department) {
-  const first = department === "Print" ? "LAUNCH" : "DOOH";
-  return [first, "Titles", "Print", "Digital", "Internal"];
+  return [settingsFor(department).quickFilter, "Titles", "Print", "Digital", "Internal"];
 }
 
-// The Timesheeter's subtitle follows the viewer's department the same way the
-// board and canvas labels do — Motion sees "Motion Peeps", Print sees "Print
-// Peeps", and so on — so the page doesn't greet every department as Motion.
-// No department resolved yet (first paint before profiles loads, or an
-// untagged profile) falls back to a neutral line rather than guessing.
 export function trackerSubtitleFor(department) {
   return department
     ? `Timesheet Tracker for the ${department} Peeps`
@@ -143,7 +134,7 @@ export function trackerSubtitleFor(department) {
 // the Rail, the command palette, the quick-actions bubble, App's own guard)
 // asks this, so a page can't be hidden in one place and reachable in another.
 export function pageIdsFor(department, wrikeUserId) {
-  const ids = DEPARTMENT_PAGES[department] || DEFAULT_PAGE_IDS;
+  const ids = department ? settingsFor(department).pages : UNTAGGED_PAGE_IDS;
   if (!isManager(wrikeUserId)) return ids;
   return [...MANAGER_PAGE_IDS.filter((id) => !ids.includes(id)), ...ids];
 }

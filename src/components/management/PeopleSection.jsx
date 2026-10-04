@@ -7,10 +7,15 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Users, Pencil, X, Check, Search, RefreshCw } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
-import { isServiceAccount, DEPT_GROUPS } from "../../lib/people";
+import { isServiceAccount, DEPT_GROUPS, departmentForGroup, hasLeft } from "../../lib/people";
+import { confirmAction } from "../../lib/confirm";
 import { cleanNamePart } from "../../lib/formatName";
 import HubRow from "../shared/HubRow";
 import { StrictSelect } from "./fields";
+
+// Leavers sit in their own group at the bottom, after the departments.
+const LEFT_GROUP = { label: "Left the company", gradient: "from-slate-300 to-slate-500" };
+const GROUPS = [...DEPT_GROUPS, LEFT_GROUP];
 
 export function PeopleSection() {
   const [people, setPeople]         = useState([]);
@@ -62,82 +67,96 @@ export function PeopleSection() {
     updateField(p.wrike_user_id, { first_name: first || null, last_name: last || null });
   };
 
+  // Adds people from Wrike, fills in departments from Wrike groups, and marks
+  // people whose Wrike account has been deleted as having left. It never
+  // overrides anything set here: names, departments and "left" all stick.
   const syncFromWrike = async () => {
     if (!localStorage.getItem("wrike_user_id")) { setSyncMsg("Wrike not connected — connect it in Profile → Settings first."); return; }
     setSyncing(true);
     setSyncMsg("");
     try {
-      // Fetch contacts and groups in parallel
       const [contactsRes, groupsRes] = await Promise.all([
         fetch("/api/wrike/contacts"),
         fetch("/api/wrike/groups"),
       ]);
       if (!contactsRes.ok) throw new Error(`Wrike contacts error ${contactsRes.status}`);
+      const contacts = ((await contactsRes.json()).data || []).filter((c) => c.type === "Person");
 
-      const contacts = ((await contactsRes.json()).data || []).filter(c => c.type === "Person" && !c.deleted);
-
-      // Build wrikeUserId → department map from group membership.
-      // Match group title against the editable job_departments list
-      // (case-insensitive substring).
+      // Department per Wrike group, matched exactly (departmentForGroup). Someone
+      // in groups for two different departments is left for a person to decide.
       const deptMap = {};
+      const conflicted = new Set();
+      const unmatchedGroups = [];
       if (groupsRes.ok) {
-        const groups = (await groupsRes.json()).data || [];
-        for (const group of groups) {
-          const title = group.title || "";
-          const dept = departments.find(d =>
-            title.toLowerCase() === d.toLowerCase() ||
-            title.toLowerCase().includes(d.toLowerCase()) ||
-            d.toLowerCase().includes(title.toLowerCase())
-          );
-          if (dept) {
-            for (const memberId of (group.memberIds || [])) deptMap[memberId] = dept;
+        for (const group of (await groupsRes.json()).data || []) {
+          const dept = departmentForGroup(group.title, departments);
+          if (!dept) { if (group.title) unmatchedGroups.push(group.title); continue; }
+          for (const memberId of group.memberIds || []) {
+            if (deptMap[memberId] && deptMap[memberId] !== dept) conflicted.add(memberId);
+            deptMap[memberId] = dept;
           }
         }
       }
+      conflicted.forEach((id) => delete deptMap[id]);
 
-      // Which people we already hold a name for. This sync exists to ADD people
-      // and keep contact details fresh, not to re-impose Wrike's spelling — a
-      // name tidied up here (Wrike is where "Trott ⚡️" and dropped surnames
-      // come from) must survive the next run.
-      const { data: existingRows } = await supabase
-        .from("profiles")
-        .select("wrike_user_id, first_name, last_name");
-      const alreadyNamed = new Set(
-        (existingRows || [])
-          .filter((r) => r.first_name || r.last_name)
-          .map((r) => r.wrike_user_id)
-      );
+      const { data: existingRows } = await supabase.from("profiles").select("*");
+      const existing = new Map((existingRows || []).map((r) => [r.wrike_user_id, r]));
 
-      let added = 0;
-      let keptNames = 0;
+      let added = 0, departmentsFilled = 0, markedLeft = 0;
       for (const c of contacts) {
+        const row = existing.get(c.id);
+        if (c.deleted) {
+          // Deleted in Wrike: never add them, and mark an existing profile as left.
+          if (row && !hasLeft(row)) {
+            const { error } = await supabase.from("profiles")
+              .update({ left_at: new Date().toISOString() }).eq("wrike_user_id", c.id);
+            if (!error) markedLeft++;
+          }
+          continue;
+        }
         const payload = {
           wrike_user_id: c.id,
           email: c.profiles?.[0]?.email || null,
           avatar_url: c.avatarUrl || null,
         };
-        if (alreadyNamed.has(c.id)) {
-          keptNames++;
-        } else {
+        // A name tidied up here (Wrike is where "Trott ⚡️" comes from) survives.
+        if (!row || !(row.first_name || row.last_name)) {
           payload.first_name = c.firstName || null;
           payload.last_name = c.lastName || null;
         }
-        // Only overwrite department when Wrike groups give us a clear answer
-        if (deptMap[c.id]) payload.department = deptMap[c.id];
+        // Departments from Wrike only fill a blank; one set here is kept.
+        if (deptMap[c.id] && !row?.department) {
+          payload.department = deptMap[c.id];
+          departmentsFilled++;
+        }
         const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "wrike_user_id" });
-        if (!error) added++;
+        if (!error && !row) added++;
       }
-      const deptCount = Object.keys(deptMap).length;
-      setSyncMsg(
-        `Synced ${added} members · ${deptCount} department assignments from Wrike groups.` +
-          (keptNames ? ` Kept ${keptNames} existing name${keptNames === 1 ? "" : "s"}.` : "")
-      );
+
+      const parts = [`Synced ${contacts.filter((c) => !c.deleted).length} people from Wrike`];
+      if (added) parts.push(`${added} new`);
+      if (departmentsFilled) parts.push(`${departmentsFilled} department${departmentsFilled === 1 ? "" : "s"} filled in from Wrike groups`);
+      if (markedLeft) parts.push(`${markedLeft} marked as left (deleted in Wrike)`);
+      if (conflicted.size) parts.push(`${conflicted.size} in groups for two departments, left as they were`);
+      let msg = parts.join(" · ") + ".";
+      if (unmatchedGroups.length) msg += ` Groups matching no department: ${unmatchedGroups.join(", ")}.`;
+      setSyncMsg(msg);
       await load();
     } catch (err) {
       setSyncMsg(`Sync failed: ${err.message}`);
     } finally {
       setSyncing(false);
     }
+  };
+
+  const markLeft = async (p) => {
+    const ok = await confirmAction({
+      title: "Mark as left the company?",
+      message: `${cleanNamePart(p.first_name) || "This person"} will drop off team boards and out of the People list. Their timesheet history is kept, and you can restore them from "Left the company".`,
+      confirmLabel: "Mark as left",
+      danger: true,
+    });
+    if (ok) updateField(p.wrike_user_id, { left_at: new Date().toISOString() });
   };
 
   // Bucket people into department groups. Keyed against DEPT_GROUPS (the
@@ -154,13 +173,16 @@ export function PeopleSection() {
   }, [people, search]);
 
   const buckets = useMemo(() => {
-    const out = Object.fromEntries(DEPT_GROUPS.map(g => [g.label, []]));
+    const out = Object.fromEntries(GROUPS.map(g => [g.label, []]));
     for (const p of filteredPeople) {
-      const key = p.department && DEPT_GROUPS.some(g => g.label === p.department) ? p.department : "—";
+      const key = hasLeft(p)
+        ? LEFT_GROUP.label
+        : p.department && DEPT_GROUPS.some(g => g.label === p.department) ? p.department : "—";
       out[key].push(p);
     }
     return out;
   }, [filteredPeople]);
+  const currentCount = people.filter((p) => !hasLeft(p)).length;
 
   // Searching suspends the accordion. A search that could only ever reveal
   // one department's matches would hide most of its own results, so while
@@ -275,6 +297,20 @@ export function PeopleSection() {
               options={["No position", ...positions.map(pos => pos.title)]}
             />
           </div>
+          {/* Only once the database has profiles.left_at (see its migration). */}
+          {"left_at" in p && (hasLeft(p) ? (
+            <button onClick={() => updateField(p.wrike_user_id, { left_at: null })}
+              title="Back at the company"
+              className="shrink-0 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border border-[#dce4ec] text-[#122027] hover:border-[#12a0e1]">
+              Restore
+            </button>
+          ) : (
+            <button onClick={() => markLeft(p)}
+              title="Left the company"
+              className="shrink-0 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border border-[#dce4ec] text-[#768994] hover:text-red-600 hover:border-red-200">
+              Left
+            </button>
+          ))}
         </div>
       </div>
     );
@@ -287,7 +323,7 @@ export function PeopleSection() {
         <div className="flex items-center gap-3">
           {!loading && (
             <span className="text-[10px] font-black text-[#768994] uppercase tracking-widest shrink-0 tabular-nums">
-              {search.trim() ? `${filteredPeople.length} of ${people.length}` : people.length} people
+              {search.trim() ? `${filteredPeople.length} of ${people.length}` : currentCount} people
             </span>
           )}
           {/* Search — same input treatment as SimpleListSection's list search */}
@@ -342,7 +378,7 @@ export function PeopleSection() {
               down — a department header behaves exactly like a group row
               (gradient sweep, chevron rotates open) instead of the small
               colour-pill toggle this used to be. */}
-          {DEPT_GROUPS.map(group => {
+          {GROUPS.map(group => {
             const items = buckets[group.label] || [];
             if (items.length === 0) return null;
             const isOpen = isGroupOpen(group.label);

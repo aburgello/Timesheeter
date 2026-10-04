@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabaseClient";
 import { toggleDarkMode } from "../lib/theme";
 import { useColumnResize } from "../lib/useColumnResize";
-import { getFilmName, PRINT_HUB_RE } from "../lib/wrikeEnrich";
+import { getFilmName, belongsToFilm, PRINT_HUB_RE } from "../lib/wrikeEnrich";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import RichNoteEditor from "./shared/RichNoteEditor";
 import PresenceStack from "./shared/PresenceStack";
@@ -13,7 +13,7 @@ const ExcalidrawPageEditor = lazy(() => import("./shared/ExcalidrawPageEditor"))
 import PageHeader, { pageHeaderActionClass } from "./shared/PageHeader";
 import HubRow from "./shared/HubRow";
 import { useDepartment } from "../hooks/useDepartment";
-import { boardLabelFor } from "../lib/departments";
+import { boardLabelFor, hasFeature } from "../lib/departments";
 import { PAGE_GRADIENTS } from "../lib/pageGradients";
 import { reportError } from "../lib/monitoring";
 import { FILM_MAPPINGS } from "../constants.js";
@@ -58,7 +58,7 @@ import {
   User,
   Maximize2,
   Minimize2,
-  Printer,
+  SwatchBook,
   PenTool,
 } from "lucide-react";
 
@@ -2834,7 +2834,7 @@ function PrintLaunchTrackerCard({ isOpen, onToggle, hubs, taskById }) {
 
   return (
     <CollapsibleCard
-      icon={Printer}
+      icon={SwatchBook}
       title="Launch Tracker"
       subtitle={`Per-market print requests · ${active.length} live`}
       isOpen={isOpen}
@@ -2878,12 +2878,26 @@ function PrintLaunchTrackerCard({ isOpen, onToggle, hubs, taskById }) {
   );
 }
 
-export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], triggerToast: _triggerToast, isLoading = false, syncNow, isSyncing = false, isAdmin = false, scanFilmMappings, isScanning = false, filmCodeMappings = {} }) {
+// Canvas content (team notes, folders, end-of-campaign notes) belongs to a
+// department, so someone without one sees a notice rather than another
+// team's notes. Untagged people don't get this page in their menus anyway.
+export default function CampaignCanvas(props) {
+  const department = useDepartment();
+  if (!department) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-100 px-6">
+        <p className="text-sm text-slate-500 max-w-md text-center">
+          You&apos;re not in a department yet, so there&apos;s no team canvas to show. Ask an admin to set your
+          department in Administration › People.
+        </p>
+      </div>
+    );
+  }
+  return <CampaignCanvasForDepartment {...props} department={department} />;
+}
+
+function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaigns = [], triggerToast: _triggerToast, isLoading = false, syncNow, isSyncing = false, isAdmin = false, scanFilmMappings, isScanning = false, filmCodeMappings = {} }) {
   const triggerToast = _triggerToast ?? ((msg) => console.warn("Toast:", msg));
-  // Same null-falls-back-to-Motion convention used everywhere else
-  // department-gated (see src/lib/departments.js) — an unset profile
-  // department behaves like Motion rather than showing nothing.
-  const department = useDepartment() || "Motion";
   const [campaigns, setCampaigns] = useState(INITIAL_CAMPAIGNS);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMatrix, setSelectedMatrix] = useState(null);
@@ -3005,8 +3019,12 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
 
   // --- Launch Tracker (Print): hub tasks + id lookup for their subtasks ---
   const taskById = useMemo(() => new Map(wrikeData.map((t) => [t.id, t])), [wrikeData]);
+  // Only hubs that belong to a film: a film from Wrike's folders, or a name
+  // that starts with a film code (EBZR_, TRSC_ …, translated or not). That
+  // leaves out the template copies ("3._ArtworkName_Launch_Markets",
+  // "_Launch_Markets"), whose only "film" is the start of their own name.
   const printLaunchHubs = useMemo(
-    () => wrikeData.filter((t) => t.title && PRINT_HUB_RE.test(t.title)),
+    () => wrikeData.filter((t) => t.title && PRINT_HUB_RE.test(t.title) && belongsToFilm(t)),
     [wrikeData]
   );
   const [uploadingCountry, setUploadingCountry] = useState(null);
@@ -4579,8 +4597,8 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
           const canvasTools = [
             { id: "campaigns", icon: Film,     label: "Campaigns",  desc: "Every campaign, by studio", count: liveCount === campaigns.length ? `${campaigns.length} live` : `${liveCount} live · ${campaigns.length - liveCount} delivered` },
             { id: "notes",     icon: Folder,   label: "Notes Canvas", desc: `${department} team board · personal spaces`, count: null },
-            ...(department === "Print"  ? [{ id: "launch", icon: Printer, label: "Launch Tracker", desc: "Per-market print requests", count: `${printLaunchHubs.length} live` }] : []),
-            ...(department === "Motion" ? [{ id: "dooh",   icon: Globe,   label: "DOOH Specs", desc: "Screen specs by country", count: `${doohCountries.length} countries` }] : []),
+            ...(hasFeature(department, "launchTracker")  ? [{ id: "launch", icon: SwatchBook, label: "Launch Tracker", desc: "Per-market print requests", count: `${printLaunchHubs.length} live` }] : []),
+            ...(hasFeature(department, "doohSpecs") ? [{ id: "dooh",   icon: Globe,   label: "DOOH Specs", desc: "Screen specs by country", count: `${doohCountries.length} countries` }] : []),
             // End of Campaign Notes has no tile: it lives at the foot of Notes
             // Canvas, where the team is already writing things down for each
             // other. Behind its own tile it read as one more admin surface
@@ -4875,7 +4893,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
               {/* Each reference surface is now a tool of its own, reached from
                   the hub, so it opens expanded — there's nothing to collapse it
                   against. */}
-              {canvasView === "launch" && department === "Print" && (
+              {canvasView === "launch" && hasFeature(department, "launchTracker") && (
                 <PrintLaunchTrackerCard
                   isOpen
                   onToggle={undefined}
@@ -4886,7 +4904,7 @@ export default function CampaignCanvas({ wrikeData = [], folderCampaigns = [], t
               {/* ============ DOOH SPECS ============ */}
               {/* DOOH specs are Motion-specific (out-of-home media specs) —
                   other departments get different content here later. */}
-              {canvasView === "dooh" && department === "Motion" && (
+              {canvasView === "dooh" && hasFeature(department, "doohSpecs") && (
               <CollapsibleCard
                 icon={Globe}
                 title="DOOH Specs"

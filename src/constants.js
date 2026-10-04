@@ -769,43 +769,15 @@ export const FILM_MAPPINGS = {
   ZAL: "Not Alone",
 };
 
-export const MOTION_TEAM_NAME_MAP = {
-  "Antonio Burgello": "Antonio",
-  "Aaron Gunasingham": "Aaron",
-  "Jacqui Harrington": "Jacqui",
-  "Maria Cerrato": "Maria",
-  "Nicholas 😎": "Nicholas",
-  "Trott ⚡️": "Luke",
-  "Luke Trott": "Luke",
-  // Both spellings on purpose. Wrike currently has him as "Turk 👻" (no
-  // surname), which normalises to "Turk"; our profiles row now says "Turk
-  // Kayadelen". If anyone tidies the Wrike side to match, the board would
-  // otherwise stop matching him and his tasks would vanish from it silently.
-  Turk: "Turk",
-  "Turk Kayadelen": "Turk",
-};
-
 // Wrike lets people decorate their display name with emoji ("Maria Cerrato 🐱",
-// "Nicholas 😎"), and that emoji rides along in the firstName/lastName the API
-// returns. Matching the team roster on the exact string then silently drops a
-// member the moment they add or change an emoji — so a task assigned only to
-// them never reaches the Motion Board or the shared cache. Strip emoji,
-// variation selectors, ZWJ and keycaps, collapse whitespace, then match on
-// that, so decoration can't break roster membership.
+// "Nicholas 😎"), and the emoji rides along in the names the API returns. Strip
+// emoji, variation selectors, ZWJ and keycaps and collapse whitespace before
+// comparing names, so decoration can't break a match.
 export const normalizeName = (s) =>
   (s || "")
     .replace(/[\p{Extended_Pictographic}\u200D\uFE0F\u20E3]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
-
-const MOTION_TEAM_NORMALIZED = Object.fromEntries(
-  Object.entries(MOTION_TEAM_NAME_MAP).map(([name, short]) => [normalizeName(name), short])
-);
-
-// The team short-name for a Wrike full name (emoji-insensitive), or undefined
-// if the person isn't on the Motion team.
-export const motionTeamShortName = (fullName) =>
-  MOTION_TEAM_NORMALIZED[normalizeName(fullName)];
 
 export const REGION_ALIASES = {
   // Original entries

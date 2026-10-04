@@ -3,7 +3,7 @@
 //
 // Part of Administration. Split out of components/Management.jsx, which is
 // still the entry point and re-exports what other screens import.
-import { Film, Users, Tag, AlignLeft, Building2, FileBarChart, ClipboardList, Globe, Layers, Network, TrendingUp, Banknote } from "lucide-react";
+import { Film, Users, Tag, AlignLeft, Building2, FileBarChart, ClipboardList, Globe, Layers, TrendingUp, Banknote } from "lucide-react";
 
 // Jobs (Setup / Book / Feed) deliberately live on the standalone Job Book
 // page now (JobBook.jsx) — Administration keeps Reports, Staff Accounts, and
@@ -51,16 +51,6 @@ export const NAV_GROUPS = [
       { id: "work-categories", label: "Job Work Categories", icon: Tag, desc: "The work category set on a job itself" },
       { id: "translations", label: "Translation Countries", icon: Globe, desc: "Countries available for translation work" },
       { id: "departments", label: "Departments", icon: Layers, desc: "The department list used across the app" },
-    ],
-  },
-  {
-    id: "orgchart-group",
-    label: "Org Chart",
-    desc: "Company structure & reporting lines",
-    icon: Network,
-    gradient: "from-indigo-600 to-slate-800",
-    items: [
-      { id: "orgchart", label: "Org Chart", icon: Network, desc: "Who reports to whom, across the whole company" },
     ],
   },
 ];
