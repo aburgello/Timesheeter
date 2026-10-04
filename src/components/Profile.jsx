@@ -39,7 +39,7 @@ import { useTasks } from "../hooks/useTasks";
 import { useWrikeUser } from "../hooks/useWrikeUser";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import { startWrikeOAuth, disconnectWrike, fetchWrikeOAuthStatus, fetchContactTimelogs } from "../lib/wrikeApi";
-import { subscribeToWrikeTaskEvents } from "../lib/wrikeWebhookSubscription";
+import { subscribeToWrikeTaskEvents, idsWorthFetching } from "../lib/wrikeWebhookSubscription";
 import { useTimesheetPrefs } from "../hooks/useTimesheetPrefs";
 import SearchableSelect from "./shared/SearchableSelect";
 import { CATEGORIES } from "../constants.js";
@@ -648,22 +648,20 @@ function JobsSection({ wrikeUser, filter, wrikeData, onLogTime, triggerToast, jo
     fetchTasks();
   }, [fetchTasks]);
 
-  // Near-instant updates: a webhook event only carries a changed task's id,
-  // so batches of ids (debounced, see wrikeWebhookSubscription.js) get
-  // refetched and merged in place here — cheap, since it's one small request
-  // per edit rather than the bulk refetch a manual Refresh does. Skips
-  // fetchTasks' isChild subtask-dedup (that needs the full assigned-task
-  // set to resolve); a subtask patched in this way may briefly appear
-  // alongside its parent until the next full fetch reconciles it.
+  // Ids currently listed, for the webhook handler below (state would be stale there).
+  const shownIdsRef = useRef(new Set());
+  useEffect(() => { shownIdsRef.current = new Set(tasks.map((t) => t.id)); }, [tasks]);
+
+  // Live updates from Wrike webhooks: refetch changed tasks and merge them in
+  // place. Only tasks already listed, or newly created or assigned, are
+  // fetched; nothing else can change this list. Skips fetchTasks' subtask
+  // de-duplication, so a patched subtask may sit beside its parent until the
+  // next full fetch.
   useEffect(() => {
     if (!wrikeUser?.id) return;
 
-    // Reuse the same helper Motion Board's webhook patch uses (rather than a
-    // bespoke fields=[description] fetch here) — Wrike's get-by-id endpoint
-    // 400ed on that narrower field list even alone, but fetchTasksByIds'
-    // fuller set is proven working, and this keeps both webhook-patch paths
-    // getting identical, complete task data instead of two different subsets.
-    const handleWebhookTaskIds = async (ids) => {
+    const handleWebhookTaskIds = async (allIds, events) => {
+      const ids = idsWorthFetching(allIds, events, shownIdsRef.current);
       if (!ids.length) return;
       const changed = await fetchTasksByIds(ids);
       if (!changed.length) return;
