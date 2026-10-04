@@ -54,9 +54,6 @@ try {
  */
 export const countryFieldIds = () => cached?.ids || [];
 
-/** The titles behind those ids — for logging and the admin diagnostics only. */
-export const countryFieldTitles = () => cached?.titles || [];
-
 const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /**

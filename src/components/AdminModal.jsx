@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { fullName } from "../lib/formatName";
-import { X, Shield, Users, Clock, Key, RefreshCw, CheckCircle, AlertCircle, Zap, Eye } from "lucide-react";
+import { X, Shield, Users, Clock, RefreshCw, CheckCircle, AlertCircle, Zap, Eye } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useDepartmentPreviewState, setDepartmentPreview } from "../hooks/useDepartment";
 import { isServiceAccount, hasLeft } from "../lib/people";
@@ -80,7 +80,6 @@ export default function AdminModal({ onClose }) {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 
-  const hasToken = (p) => !!p.wrike_user_id; // proxy — if they have a row they've loaded the app
 
   return (
     <div
