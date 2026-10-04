@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../lib/supabaseClient";
-import { useColumnResize } from "../lib/useColumnResize";
+import FilmCodesPanel from "./shared/FilmCodesPanel";
 import { belongsToFilm, PRINT_HUB_RE } from "../lib/wrikeEnrich";
 import { fetchTasksByIds } from "../hooks/useWrikeCache";
 import RichNoteEditor from "./shared/RichNoteEditor";
@@ -2721,19 +2721,13 @@ export default function CampaignCanvas(props) {
   return <CampaignCanvasForDepartment {...props} department={department} />;
 }
 
-function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaigns = [], triggerToast: _triggerToast, isLoading = false, syncNow, isSyncing = false, isAdmin = false, scanFilmMappings, isScanning = false, filmCodeMappings = {} }) {
+function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaigns = [], triggerToast: _triggerToast, isLoading = false, syncNow, isSyncing = false, isAdmin = false, scanFilmMappings, isScanning = false, filmCodeMappings = {}, editFilmCode }) {
   const triggerToast = _triggerToast ?? ((msg) => console.warn("Toast:", msg));
   const [campaigns, setCampaigns] = useState(INITIAL_CAMPAIGNS);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedMatrix, setSelectedMatrix] = useState(null);
   const [showMappingsPanel, setShowMappingsPanel] = useState(false);
 
-  const FILM_TABLE_COLS = [
-    { key: "code",   label: "Code",      px: 140 },
-    { key: "name",   label: "Film Name", px: 360 },
-    { key: "source", label: "Source",    px: 140 },
-  ];
-  const { widths: filmWidths, resizeHandle: filmHandle } = useColumnResize("canvas-filmmap-cols", FILM_TABLE_COLS);
 
   // --- ACCORDION ANIMATION & SCROLL STATE ---
   const [expandedCampId, setExpandedCampId] = useState(null);
@@ -3667,84 +3661,9 @@ function CampaignCanvasForDepartment({ department, wrikeData = [], folderCampaig
         .wrike-matrix-render a { color: #c2410d; font-weight: 700; text-decoration: underline; }
       `}</style>
 
-      {/* --- FILM MAPPINGS PANEL (admin only) --- */}
-      {showMappingsPanel && (() => {
-        const hardcoded = FILM_MAPPINGS || {};
-        const discovered = filmCodeMappings || {};
-        const allCodes = [...new Set([...Object.keys(hardcoded), ...Object.keys(discovered)])].sort();
-        return (
-          <div
-            className="fixed inset-0 z-[300] flex items-start justify-center pt-[10vh] p-4 bg-[#122027]/60 backdrop-blur-sm animate-in fade-in duration-200"
-            onClick={() => setShowMappingsPanel(false)}
-          >
-            <div
-              className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl flex flex-col border border-[#dce4ec] overflow-hidden max-h-[80vh]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="p-5 border-b border-[#dce4ec] flex items-center justify-between bg-slate-50/50 shrink-0">
-                <div className="flex items-center gap-3">
-                  <div className="bg-gradient-to-br from-[#c2410d] to-[#1cc1a5] p-2.5 rounded-xl text-white shadow">
-                    <Film className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-black text-[#122027] tracking-tight">Film Code Mappings</h3>
-                    <p className="text-[11px] text-[#768994] font-medium mt-0.5">
-                      {Object.keys(hardcoded).length} hardcoded · {Object.keys(discovered).length} discovered · {allCodes.length} total
-                    </p>
-                  </div>
-                </div>
-                <button onClick={() => setShowMappingsPanel(false)} className="text-[#768994] hover:text-[#122027] p-1.5 rounded-xl hover:bg-slate-100 transition-colors">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              {/* Table */}
-              <div className="overflow-y-auto custom-scrollbar">
-                <table className="w-full text-sm [&_td]:overflow-hidden" style={{ tableLayout: "fixed", minWidth: `${FILM_TABLE_COLS.reduce((s, c) => s + filmWidths[c.key], 0)}px` }}>
-                  <colgroup>
-                    {FILM_TABLE_COLS.map(c => <col key={c.key} style={{ width: filmWidths[c.key] }} />)}
-                  </colgroup>
-                  <thead className="sticky top-0 bg-white border-b border-[#dce4ec]">
-                    <tr>
-                      <th className="relative text-left px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase overflow-hidden">Code{filmHandle("code")}</th>
-                      <th className="relative text-left px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase overflow-hidden">Film Name{filmHandle("name")}</th>
-                      <th className="relative text-right px-5 py-3 text-[10px] font-black tracking-widest text-[#768994] uppercase overflow-hidden">Source{filmHandle("source")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allCodes.map((code, i) => {
-                      const isHardcoded = !!hardcoded[code];
-                      const name = hardcoded[code] || discovered[code];
-                      return (
-                        <tr key={code} className="border-b border-[#dce4ec]">
-                          <td className="px-5 py-3">
-                            <span className="font-mono text-xs font-black text-[#122027] bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
-                              {code}
-                            </span>
-                          </td>
-                          <td className="px-5 py-3 font-semibold text-[#122027]">{name}</td>
-                          <td className="px-5 py-3 text-right">
-                            {isHardcoded ? (
-                              <span className="text-[10px] font-black uppercase tracking-widest text-blue-600 bg-blue-50 border border-blue-100 px-2 py-1 rounded-full">Hardcoded</span>
-                            ) : (
-                              <span className="text-[10px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-1 rounded-full">Discovered</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {allCodes.length === 0 && (
-                  <div className="p-12 text-center text-[#768994] text-sm font-medium">
-                    No mappings yet — run <strong>Map Films</strong> to discover them.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {showMappingsPanel && (
+        <FilmCodesPanel discovered={filmCodeMappings} onEdit={editFilmCode} onClose={() => setShowMappingsPanel(false)} />
+      )}
 
       <PageHeader pageId="canvas" icon={Layout} title="Campaign Canvas" subtitle="Visual Command Centre for active campaigns">
         {isAdmin && (

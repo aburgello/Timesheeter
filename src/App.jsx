@@ -257,6 +257,7 @@ export default function App() {
     sync,
     syncNow,
     scanFilmMappings,
+    editFilmCode,
   } = useWrikeCache();
 
   // The team board now has its own webhook-fed data source, but the shared
@@ -683,6 +684,7 @@ export default function App() {
                 scanFilmMappings={scanFilmMappings}
                 isScanning={isScanning}
                 filmCodeMappings={filmCodeMappings}
+                editFilmCode={editFilmCode}
               />
             )}
             {activePage === "wriketest" && (

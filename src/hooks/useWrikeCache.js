@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { mergeFilmMappings } from "../lib/filmCodes";
 import {
   loadLocalTasks,
   saveLocalTasks,
@@ -767,7 +768,7 @@ export function useWrikeCache() {
 
       // Collect code→filmName mappings discovered in this sync and merge with existing
       const newMappings = buildFilmCodeMappings(filtered);
-      const mergedFilmMappings = { ...existingFilmMappings, ...newMappings };
+      const mergedFilmMappings = mergeFilmMappings(existingFilmMappings, newMappings, meta?.film_code_overrides);
       if (Object.keys(newMappings).length > 0) {
         setFilmCodeMappings(mergedFilmMappings);
         console.log(`[WrikeCache] film code mappings: ${Object.keys(mergedFilmMappings).length} total, ${Object.keys(newMappings).length} new this sync`);
@@ -1020,7 +1021,7 @@ export function useWrikeCache() {
       // Load existing mappings + folder dict from the shared meta row
       const { data: meta } = await supabase
         .from("wrike_sync_meta")
-        .select("folder_dictionary, film_code_mappings")
+        .select("*")
         .eq("wrike_user_id", SHARED_META_ID)
         .maybeSingle();
 
@@ -1082,7 +1083,7 @@ export function useWrikeCache() {
         newMappings[rawPrefix] = filmName;
       }
 
-      const merged = { ...existingMappings, ...newMappings };
+      const merged = mergeFilmMappings(existingMappings, newMappings, meta?.film_code_overrides);
       setFilmCodeMappings(merged);
       console.log(`[FilmScan] ${Object.keys(newMappings).length} new mappings, ${Object.keys(merged).length} total`);
 
@@ -1101,5 +1102,25 @@ export function useWrikeCache() {
   // `sync` (soft) respects the 15-min interval — cheap to call speculatively,
   // e.g. whenever a page that depends on fresh data becomes active.
   // `syncNow` forces a full refresh regardless of how recently synced.
-  return { tasks, folderCampaigns, filmCodeMappings, isSyncing, isScanning, lastSynced, syncError, sync, syncNow, scanFilmMappings };
+  // A hand edit to the film-code dictionary: a name sets the code, null removes
+  // it. Saved as an override so later scans keep it (lib/filmCodes.js).
+  const editFilmCode = useCallback(async (code, name) => {
+    const { data: meta, error } = await supabase
+      .from("wrike_sync_meta")
+      .select("film_code_mappings,film_code_overrides")
+      .eq("wrike_user_id", SHARED_META_ID)
+      .maybeSingle();
+    if (error || !meta) throw new Error(error?.message || "no shared meta row");
+    const overrides = { ...(meta.film_code_overrides || {}), [code]: name || null };
+    const merged = mergeFilmMappings(meta.film_code_mappings || {}, {}, overrides);
+    const { error: saveError } = await supabase
+      .from("wrike_sync_meta")
+      .update({ film_code_mappings: merged, film_code_overrides: overrides })
+      .eq("wrike_user_id", SHARED_META_ID);
+    if (saveError) throw new Error(saveError.message);
+    setFilmCodeMappings(merged);
+    enrichCtxRef.current = { ...enrichCtxRef.current, filmCodeMappings: merged };
+  }, []);
+
+  return { tasks, folderCampaigns, filmCodeMappings, isSyncing, isScanning, lastSynced, syncError, sync, syncNow, scanFilmMappings, editFilmCode };
 }
