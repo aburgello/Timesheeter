@@ -21,7 +21,7 @@ export const TERRITORIES = [
   // burying OV among the O's meant scrolling past forty countries to reach one
   // of the most-used entries. The dropdown renders this list in order, so the
   // grouping here is the grouping people see.
-  "_Multiple_",
+  "Multiple (Title/Launch)",
   "_XYi_",
   "_Masters_",
   "OV",
@@ -130,6 +130,14 @@ export const TERRITORIES = [
   "Yoruba (West Africa)",
 ];
 
+// Names a territory used to have. Rows saved before a rename still carry the
+// old one, so it is read as the new one wherever territories are parsed (see
+// splitTerritories) rather than relying on every stored row being rewritten.
+// "_Multiple_" became the company timesheet site's own wording on 5 Oct 2026.
+export const LEGACY_TERRITORY_NAMES = {
+  _Multiple_: "Multiple (Title/Launch)",
+};
+
 // (MANUAL_ONLY_TERRITORIES used to live here. It existed to stop the old
 // free-text scan reading "_Multiple_" out of a folder name it happened to
 // appear in. Nothing scans free text any more — a value is only taken from a
@@ -159,8 +167,8 @@ export const isUnset = (v) => {
 // deliberate "this covers every market" can be told apart from a task nobody
 // labelled at all. Keys are matched case- and punctuation-insensitively.
 export const COUNTRY_SUFFIX_EXCEPTIONS = {
-  MARKETS: "_Multiple_",
-  MULTIPLE: "_Multiple_",
+  MARKETS: "Multiple (Title/Launch)",
+  MULTIPLE: "Multiple (Title/Launch)",
   OV: "OV",
   MASTERS: "_Masters_",
 };
@@ -178,12 +186,6 @@ export const TIMESHEET_TERRITORY_SUBSTITUTIONS = {
   // of ours now point at the site's new label.
   _Masters_: "OV Suite Build (Masters)",
   "OV Suite Build": "OV Suite Build (Masters)",
-
-  // The site renamed "_Multiple_" to "Multiple (Title/Launch)" (reported
-  // 2 Oct 2026). Same failure as above: stripped of punctuation ours reads
-  // MULTIPLE, theirs MULTIPLETITLELAUNCH, so the row landed with nothing
-  // ticked.
-  _Multiple_: "Multiple (Title/Launch)",
 
   // Two names we spell differently from the site. Found by diffing this list
   // against the site's own country panel: the bookmarklet matches on the name
@@ -556,7 +558,7 @@ export const MAGI_MARKET_FOLDERS = {
 };
 
 export const TERRITORY_FLAGS = {
-  _Multiple_: "🌐",
+  "Multiple (Title/Launch)": "🌐",
   _XYi_: "🏢",
   _Masters_: "📼",
   Albania: "🇦🇱",

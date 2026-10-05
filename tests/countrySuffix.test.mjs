@@ -1,4 +1,5 @@
 import { countriesFromTaskName, countriesFromFolderNames } from "../src/utils/countryCodes.js";
+import { splitTerritories, toTimesheetTerritories, withCurrentNames } from "../src/utils/territories.js";
 
 // The reported bug, from the real task: Studio > Paramount > Tad_and_the_Magic_Lamp
 // > Print > INTL > XY025832_..._Markets > _MAGI_Masters > TAD_Masters_Chile.
@@ -19,7 +20,7 @@ check("OV alone still means OV", countriesFromTaskName("TAD_Teaser_OV"), ["OV"])
 check(
   "a campaign root still means Multiple",
   countriesFromTaskName("XY025832_INTL_PRINT_Outdoor_Campaign_Markets"),
-  ["_Multiple_"]
+  ["Multiple (Title/Launch)"]
 );
 
 // Genuine multi-market names must keep every market — this is the behaviour the
@@ -113,7 +114,7 @@ check(
 check(
   "a campaign root with no market still means Multiple",
   countriesFromFolderNames(["XY025832_INTL_PRINT_Outdoor_Campaign_Markets"]),
-  ["_Multiple_"]
+  ["Multiple (Title/Launch)"]
 );
 
 // What slot 2 must refuse.
@@ -281,3 +282,12 @@ check("and as market folders", countriesFromFolderNames(["Nepal"]), ["Nepal"]);
 // lists CAN-FR alone. With the override dropped it falls back to REGION_ALIASES.
 check("CA is plain Canada again", countriesFromTaskName("TAD_Print_CA"), ["Canada"]);
 check("CAN-FR is still Canadian-French", countriesFromTaskName("TAD_Print_CAN-FR"), ["Canadian-French"]);
+
+// "_Multiple_" was renamed to the company timesheet site's "Multiple
+// (Title/Launch)". Rows saved before that still hold the old name and have to
+// read as the new one everywhere, including on the way out to the site.
+check("a row saved as _Multiple_ reads as the new name", splitTerritories("_Multiple_, Chile"), ["Multiple (Title/Launch)", "Chile"]);
+check("and exports as it", toTimesheetTerritories("_Multiple_"), ["Multiple (Title/Launch)"]);
+check("the stored string is brought up to date", withCurrentNames("_Multiple_"), "Multiple (Title/Launch)");
+check("a row with nothing renamed is left exactly as stored", withCurrentNames("Belgium,France"), "Belgium,France");
+check("an empty territory stays empty", withCurrentNames(null), null);

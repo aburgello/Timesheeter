@@ -5,6 +5,7 @@ import {
   MAGI_MARKET_CODES,
   MAGI_MARKET_FOLDERS,
   COUNTRY_SUFFIX_EXCEPTIONS,
+  LEGACY_TERRITORY_NAMES,
 } from "../constants";
 
 // Resolving a country from a Wrike task, as agreed with production on
@@ -124,7 +125,8 @@ export const setRuntimeAliases = (rows) => {
   const next = new Map();
   for (const { alias, territory } of rows || []) {
     const key = codeKey(alias);
-    const name = String(territory || "").trim();
+    const stored = String(territory || "").trim();
+    const name = LEGACY_TERRITORY_NAMES[stored] || stored;
     if (!key || !TERRITORIES.includes(name)) continue;
     next.set(key, name);
   }
@@ -165,7 +167,7 @@ const ALIAS_SOURCES = [
   COUNTRY_SUFFIX_EXCEPTIONS,
 ];
 
-// What the exceptions resolve TO ("_Multiple_", "_Masters_", "OV") rather than
+// What the exceptions resolve TO ("Multiple (Title/Launch)", "_Masters_", "OV") rather than
 // the suffixes people write ("MARKETS", "MASTERS", "OV") — these are compared
 // against resolved output. Derived from the map so adding an exception in
 // constants.js needs no edit here.
@@ -237,7 +239,7 @@ export const countriesFromTaskName = (name) => {
   }
   // A NAMED MARKET BEATS A SUFFIX EXCEPTION IN THE SAME NAME.
   //
-  // The exceptions (_Multiple_, _Masters_, OV) are read exactly like country
+  // The exceptions (Multiple, _Masters_, OV) are read exactly like country
   // codes, which is what lets "..._Markets" mean something deliberate. But the
   // walk collects every consecutive token that resolves, so a name carrying
   // both — "TAD_Masters_Chile", the masters build for the Chile market — came
@@ -354,7 +356,7 @@ const JOB_CODE = /^XY\d{5,6}$/i;
 const JOB_SLOT_BLOCKED = new Set(["PAN"]);
 
 // TERRITORIES carries a few entries that are not markets at all — the
-// underscore-wrapped house values ("_XYi_", "_Masters_", "_Multiple_") and the
+// underscore-wrapped house values ("_XYi_", "_Masters_"), Multiple and the
 // OV pair. They are legitimate answers from a suffix someone wrote on purpose;
 // none of them is a thing slot 2 can be saying.
 const isMarket = (t) => !t.startsWith("_") && !SUFFIX_EXCEPTION_VALUES.has(t);
@@ -399,7 +401,7 @@ const jobFolderCountry = (name) => {
  *
  * The folder name is as deliberate a statement as a suffix — it just isn't on
  * the task — so it is read the same way, and the campaign root resolving to
- * "_Multiple_" via its own "_Markets" ending falls out for free. (The task in
+ * Multiple via its own "_Markets" ending falls out for free. (The task in
  * that sketch now also resolves on its own, from the batch slot; it did not
  * when this rule was written, which is why the tree was the only way in.)
  *
@@ -469,6 +471,10 @@ const AMBIGUOUS_WORD_CODES = new Set([
 // in it and some of them ("approved") are junk.
 const countriesFromValue = (raw, { trustAmbiguousWords }) => {
   if (!raw || typeof raw !== "string") return [];
+  // A territory's full name, before it's cut up: "Multiple (Title/Launch)"
+  // carries a slash of its own.
+  const whole = /[,/;|]/.test(raw) && TERRITORIES.find((t) => codeKey(t) === codeKey(raw));
+  if (whole) return [whole];
   const tokens = raw.split(/[,/;|]+/).map((t) => t.trim()).filter(Boolean);
   if (!tokens.length) return [];
 

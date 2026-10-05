@@ -2,6 +2,7 @@ import {
   TERRITORY_FLAGS,
   TERRITORY_CODES,
   TIMESHEET_TERRITORY_SUBSTITUTIONS,
+  LEGACY_TERRITORY_NAMES,
 } from "../constants";
 
 // A row's `territory` field holds one *or more* countries as a comma-separated
@@ -11,15 +12,27 @@ import {
 // multi-country row maps across 1:1 without duplicating hours or rows.
 // No entry in TERRITORIES contains a comma, so "," is a safe joiner.
 
+// A renamed territory is read as its current name, so a row saved under the
+// old one still matches the picker, the flags and the export.
+const currentName = (t) => LEGACY_TERRITORY_NAMES[t] || t;
+
 export const splitTerritories = (value) => {
   if (Array.isArray(value))
-    return value.map((t) => String(t).trim()).filter(Boolean);
+    return value.map((t) => currentName(String(t).trim())).filter(Boolean);
   if (typeof value !== "string") return [];
   return value
     .split(",")
-    .map((t) => t.trim())
+    .map((t) => currentName(t.trim()))
     .filter(Boolean);
 };
+
+// A stored territory value with any renamed entry brought up to date, and
+// otherwise exactly as it was stored. For the places that show the string
+// itself rather than splitting it.
+export const withCurrentNames = (value) =>
+  typeof value === "string" && Object.keys(LEGACY_TERRITORY_NAMES).some((old) => value.includes(old))
+    ? joinTerritories(value)
+    : value;
 
 // Canonical stored form. De-duplicates but keeps the order they were picked in.
 export const joinTerritories = (value) => [

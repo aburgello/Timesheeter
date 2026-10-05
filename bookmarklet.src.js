@@ -97,7 +97,8 @@
         // to land on the checkbox rather than be reported as missing.
         MASTERS: "OVSUITEBUILDMASTERS",
         OVSUITEBUILD: "OVSUITEBUILDMASTERS",
-        // Likewise "_Multiple_", relabelled "Multiple (Title/Launch)".
+        // Likewise "_Multiple_", relabelled "Multiple (Title/Launch)" on the
+        // site and then in the Tracker.
         MULTIPLE: "MULTIPLETITLELAUNCH",
       };
       function ctryKey(s) {

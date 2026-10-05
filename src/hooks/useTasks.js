@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase, whenIdentityReady, selectAll } from "../lib/supabaseClient";
 import { parseTimeToSeconds, secondsToHM } from "../utils/timeHelpers";
 import { toDbDate, toIsoDate } from "../utils/dates";
+import { withCurrentNames } from "../utils/territories";
 
 // --- Translators ---
 
@@ -69,7 +70,7 @@ const fromDb = (row) => ({
   dayOfWeek: row.day_of_week,
   date: row.date,
   workDate: row.work_date ?? null,
-  territory: row.territory,
+  territory: withCurrentNames(row.territory),
   notes: row.notes,
   wrikeTimelogId: row.wrike_timelog_id,
   // Time: raw DB value kept for legacy dropdown compat; seconds derived for in-memory use

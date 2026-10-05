@@ -30,9 +30,12 @@ const TERRITORY_TOKENS = new Set(
   ].map((t) => String(t).toUpperCase())
 );
 
+// The whole value is tried first: "Multiple (Title/Launch)" has a slash of its
+// own, and split on it neither half is a token.
 const isTerritoryValue = (v) =>
   v.length <= 80 &&
-  v.split(/[,/;]+/).some((tok) => TERRITORY_TOKENS.has(tok.trim().toUpperCase()));
+  (TERRITORY_TOKENS.has(v.trim().toUpperCase()) ||
+    v.split(/[,/;]+/).some((tok) => TERRITORY_TOKENS.has(tok.trim().toUpperCase())));
 
 // ---------------------------------------------------------------------------
 // Parse a Wrike task's HTML description into structured fields
