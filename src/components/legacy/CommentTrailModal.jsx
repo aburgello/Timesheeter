@@ -43,15 +43,12 @@ import { isoToday, toIsoDate } from "../../utils/dates";
 const LANE_COLOURS = ["#38bdf8", "#f59e0b", "#a78bfa", "#34d399", "#fb7185", "#facc15", "#2dd4bf", "#f472b6"];
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-// A day's normal time: Time Spent stops here, across every job on the day, and
-// whatever was worked past it belongs in Add. Time, which has no ceiling. It's
-// what stops a day's suggestions adding up to 8:00 of normal time by accident.
+// A day's normal time, across every job on the day; whatever was worked past
+// it belongs in Add. Time. Nothing stops the steppers here: balancing a day
+// means going over and back under, so the footer's tally turns red instead.
 const NORMAL_DAY_HOURS = 7.5;
 
 const hm = (hours) => secondsToHM(hours * 3600, "0:00");
-// Down to the 0:15 grid, so a cap left by an off-grid row on the sheet (a pull
-// can log 1:10) is still a value the stepper can land on.
-const toGrid = (hours) => Math.floor(hours * 4 + 1e-6) / 4;
 const clock = (minute) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 const plural = (n, word) => `${n} ${word}${n !== 1 ? "s" : ""}`;
 // How much of an estimate isn't on the sheet yet, on the 0.25 grid. Under
@@ -329,20 +326,6 @@ export default function CommentTrailModal({
     const loggedRegular = dayRows.reduce((s, r) => s + hmToHours(r.timeSpent), 0);
     const loggedExtra = dayRows.reduce((s, r) => s + hmToHours(r.additionalTime), 0);
 
-    // Share out what's left of the day's normal time. Ticked rows keep theirs
-    // (they were only ever stepped up to the room there was); an unticked row
-    // shows no more than is still free, so ticking it can't go over.
-    let room = toGrid(Math.max(0, NORMAL_DAY_HOURS - loggedRegular));
-    for (const s of suggestions) {
-      if (!s.on) continue;
-      s.hours = Math.min(s.hours, room);
-      room -= s.hours;
-    }
-    for (const s of suggestions) {
-      s.maxHours = s.on ? s.hours + room : room;
-      if (!s.on) s.hours = Math.min(s.hours, room);
-    }
-
     return {
       suggestions,
       loggedRegular,
@@ -582,7 +565,10 @@ export default function CommentTrailModal({
                 <span>
                   Add. time <b className="text-white font-mono">{hm(pickedExtra)}</b>
                 </span>
-                <span className={dayRegular >= NORMAL_DAY_HOURS ? "text-amber-400" : "text-slate-500"}>
+                <span
+                  className={dayRegular > NORMAL_DAY_HOURS ? "text-rose-400 font-bold" : "text-slate-500"}
+                  title={dayRegular > NORMAL_DAY_HOURS ? `Over ${hm(NORMAL_DAY_HOURS)}. Anything past it goes in add. time.` : undefined}
+                >
                   {day.name}'s normal time: <span className="font-mono">{hm(dayRegular)}</span> of {hm(NORMAL_DAY_HOURS)}
                 </span>
               </span>
@@ -888,8 +874,6 @@ function Suggestion({ s, frozen, edit, jump }) {
   // Show the Add. Time control when overtime is suggested or already set;
   // otherwise it's one click away.
   const showExtra = s.estExtra > 0 || s.extra > 0;
-  // The day's normal time is used up, by the sheet or by the rows ticked here.
-  const full = !s.locked && s.hours >= s.maxHours;
 
   return (
     <li
@@ -903,8 +887,7 @@ function Suggestion({ s, frozen, edit, jump }) {
         id={`ct-${s.key}`}
         checked={s.on}
         disabled={s.locked || frozen}
-        // Ticking keeps the time shown, which already fits the day's normal
-        // time; left to the default it could grow back once ticked.
+        // Ticking keeps the time shown.
         onChange={(e) => edit(s.key, e.target.checked ? { on: true, hours: s.hours } : { on: false })}
         label={`Include ${s.title}`}
       />
@@ -954,8 +937,6 @@ function Suggestion({ s, frozen, edit, jump }) {
             <Stepper
               label={showExtra ? "Time" : null}
               value={s.hours}
-              max={s.maxHours}
-              maxTitle={`${hm(NORMAL_DAY_HOURS)} of normal time is the most a day takes. Anything over goes in add. time.`}
               frozen={frozen}
               plusRef={plusRef}
               onChange={(hours) => edit(s.key, { hours, on: hours + s.extra > 0 })}
@@ -979,11 +960,6 @@ function Suggestion({ s, frozen, edit, jump }) {
           </>
         )}
         <span className="max-w-[15rem] text-[10px] text-slate-500 text-right max-sm:text-left">{hint}</span>
-        {full && (
-          <span className="max-w-[15rem] text-[10px] text-amber-400/80 text-right max-sm:text-left">
-            The day's {hm(NORMAL_DAY_HOURS)} of normal time is used. Anything more goes in add. time
-          </span>
-        )}
         {s.estExtra > 0 && (
           <span className="max-w-[15rem] text-[10px] text-amber-400/80 text-right max-sm:text-left">
             {hm(s.estExtra)} of it after 18:00, as add. time
@@ -995,11 +971,8 @@ function Suggestion({ s, frozen, edit, jump }) {
 }
 
 // A time in 0:15 steps. The empty value reads 0:00, greyed: a dash next to
-// the minus button looked like a second minus. `max` is where plus stops
-// (normal time's share of the day); without one it keeps going, as add. time
-// does.
-function Stepper({ label, value, frozen, onChange, plusRef, max = Infinity, maxTitle }) {
-  const atMax = value >= max;
+// the minus button looked like a second minus.
+function Stepper({ label, value, frozen, onChange, plusRef }) {
   return (
     <div className="flex items-center gap-2">
       {label && <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</span>}
@@ -1017,9 +990,8 @@ function Stepper({ label, value, frozen, onChange, plusRef, max = Infinity, maxT
         </output>
         <button
           ref={plusRef}
-          onClick={() => onChange(Math.min(max, value + 0.25))}
-          disabled={frozen || atMax}
-          title={atMax && !frozen ? maxTitle : undefined}
+          onClick={() => onChange(value + 0.25)}
+          disabled={frozen}
           aria-label={`More ${(label || "time").toLowerCase()}`}
           className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 disabled:opacity-40"
         >

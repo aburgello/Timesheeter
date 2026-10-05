@@ -464,8 +464,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   };
 
   // A day's normal time stops at 7:30, across every job on it; anything worked
-  // past that belongs in Add. Time, which has no ceiling. The same figure
-  // "Where did my day go?" holds its suggestions to.
+  // past that belongs in Add. Time, which has no ceiling. "Where did my day
+  // go?" counts against the same figure but only warns, so its rows can put a
+  // day over.
   const NORMAL_DAY_SECONDS = 7.5 * 3600;
   // The most a row's Time Spent can be raised to: what the day's other rows
   // leave of the 7:30, on the 0:15 grid. Never less than the row already
