@@ -46,7 +46,8 @@ const STEPS = [
 // `relative` wrapper the caller put it in. It lives here rather than at the call
 // site so the dismissal rules travel with it: Escape and an outside click both
 // close it, which is what every other popover in the app does and what people
-// will try before they find the button.
+// will try before they find the button. It sits at z-[60] because Legacy's
+// time and add. time cells are z-50, and showed through the card at z-40.
 export default function PasteNextSteps({
   copied = false,
   onDismiss,
@@ -81,7 +82,7 @@ export default function PasteNextSteps({
       ref={ref}
       className={
         popover
-          ? "absolute bottom-full right-0 mb-2 w-[320px] max-w-[calc(100vw-2rem)] text-left bg-white border border-[#dce4ec] rounded-2xl shadow-2xl p-4 z-40 animate-in fade-in slide-in-from-bottom-1 duration-200"
+          ? "absolute bottom-full right-0 mb-2 w-[320px] max-w-[calc(100vw-2rem)] text-left bg-white border border-[#dce4ec] rounded-2xl shadow-2xl p-4 z-[60] animate-in fade-in slide-in-from-bottom-1 duration-200"
           : "text-left"
       }
     >
