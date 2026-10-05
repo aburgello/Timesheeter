@@ -179,6 +179,12 @@ export const TIMESHEET_TERRITORY_SUBSTITUTIONS = {
   _Masters_: "OV Suite Build (Masters)",
   "OV Suite Build": "OV Suite Build (Masters)",
 
+  // The site renamed "_Multiple_" to "Multiple (Title/Launch)" (reported
+  // 2 Oct 2026). Same failure as above: stripped of punctuation ours reads
+  // MULTIPLE, theirs MULTIPLETITLELAUNCH, so the row landed with nothing
+  // ticked.
+  _Multiple_: "Multiple (Title/Launch)",
+
   // Two names we spell differently from the site. Found by diffing this list
   // against the site's own country panel: the bookmarklet matches on the name
   // with punctuation stripped, so "Czech Republic" never found "Czech" and

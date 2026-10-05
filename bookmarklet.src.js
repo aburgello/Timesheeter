@@ -97,6 +97,8 @@
         // to land on the checkbox rather than be reported as missing.
         MASTERS: "OVSUITEBUILDMASTERS",
         OVSUITEBUILD: "OVSUITEBUILDMASTERS",
+        // Likewise "_Multiple_", relabelled "Multiple (Title/Launch)".
+        MULTIPLE: "MULTIPLETITLELAUNCH",
       };
       function ctryKey(s) {
         var k = norm(s).replace(/[^A-Z0-9]/g, "");
