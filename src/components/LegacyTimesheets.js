@@ -39,7 +39,6 @@ import {
   Copy,
   Plus,
   Layers,
-  Calendar,
   Database,
 } from "lucide-react";
 import {
@@ -77,6 +76,7 @@ import { countryPullSource, categoryPullSource } from "../utils/pullSource";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
 import CommentTrailModal from "./legacy/CommentTrailModal";
 import ReportProblemModal from "./legacy/ReportProblemModal";
+import PullTimesButton from "./legacy/PullTimesButton";
 import { HoverLabel } from "./shared/FloatingCard";
 
 // A grid textarea that grows to fit its text instead of hiding it.
@@ -336,12 +336,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
   const [isPulling, setIsPulling] = useState(false);
   const [newWeekBanner, setNewWeekBanner] = useState(false);
-  const [showDebugPull, setShowDebugPull] = useState(false);
-  const [debugDate, setDebugDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().split("T")[0];
-  });
   // Debug Pull is granted per person on profiles.can_debug_pull, so a second
   // pair of hands can recover a missed day without also being handed the
   // Administration modal, the raw Wrike explorer and the Canvas scan — which is
@@ -3920,10 +3914,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           </div>
         </div>
 
-        {/* Bottom Action Bar. The wider right padding keeps Copy Me! out from
-            under the QuickActions bubble, which is fixed over this corner. */}
+        {/* Bottom Action Bar: what fills the sheet on the left, Copy Me! alone
+            on the right. The wider right padding keeps Copy Me! out from under
+            the QuickActions bubble, which is fixed over this corner. */}
         <div className="p-4 pr-20 border-t border-[#dce4ec] bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
-          <div className="flex gap-3 flex-wrap">
+          <div className="flex gap-3 flex-wrap items-center">
             <HoverLabel label="Wrike Timesheets">
               <button
                 onClick={handleOpenWrikeModal}
@@ -3933,6 +3928,30 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 <LayoutList className="w-4 h-4" />
               </button>
             </HoverLabel>
+            <HoverLabel label="Report a problem">
+              <button
+                onClick={() => {
+                  if (!wrikeUserId) {
+                    showToast("Please connect Wrike in Profile → Settings first.");
+                    return;
+                  }
+                  setShowReportProblem(true);
+                }}
+                aria-label="Report a problem"
+                className="flex items-center justify-center p-3 bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
+              >
+                <MessageSquareWarning className="w-4 h-4" />
+              </button>
+            </HoverLabel>
+            <span className="w-px h-6 bg-[#dce4ec] shrink-0" />
+            {/* isAdmin stays in the OR so the admin keeps the date picker
+                without waiting on (or depending on) the profile read landing. */}
+            <PullTimesButton
+              isPulling={isPulling}
+              disabled={isDayFrozen}
+              canPickDate={isAdmin || canDebugPull}
+              onPull={handlePullTimes}
+            />
             <button
               onClick={() => {
                 if (!wrikeUserId) {
@@ -3948,78 +3967,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             </button>
           </div>
           <div className="flex gap-3 flex-wrap">
-            <button
-              onClick={() => {
-                if (!wrikeUserId) {
-                  showToast("Please connect Wrike in Profile → Settings first.");
-                  return;
-                }
-                setShowReportProblem(true);
-              }}
-              className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
-            >
-              <MessageSquareWarning className="w-4 h-4" />
-              Report a Problem
-            </button>
-            <button
-              onClick={() => handlePullTimes()}
-              disabled={isPulling || isDayFrozen}
-              title="Pulls your Wrike time for today and yesterday"
-              className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold border rounded-xl shadow-sm transition-[background-color,color,border-color,transform] ${
-                isDayFrozen
-                  ? "bg-slate-100 text-[#768994] border-[#dce4ec] cursor-not-allowed opacity-70"
-                  : "bg-white hover:bg-slate-50 text-[#122027] border-[#dce4ec] active:scale-95"
-              }`}
-            >
-              <RefreshCw
-                className={`w-4 h-4 ${
-                  isPulling ? "animate-spin text-[#12a0e1]" : ""
-                }`}
-              />
-              {isPulling ? "Pulling..." : "Pull Wrike Times"}
-            </button>
-
-            {/* isAdmin stays in the OR so the admin keeps the button without
-                waiting on (or depending on) the profile read landing. */}
-            {(isAdmin || canDebugPull) && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowDebugPull(!showDebugPull)}
-                  disabled={isPulling}
-                  title="Pull your Wrike timelogs for a specific date"
-                  className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold rounded-xl border transition-[background-color,color,border-color,transform] active:scale-95 ${
-                    showDebugPull
-                      ? "bg-amber-100 text-amber-800 border-amber-300"
-                      : "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200"
-                  }`}
-                >
-                  <Calendar className="w-3.5 h-3.5" />
-                  Debug Pull
-                </button>
-                {showDebugPull && (
-                  <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-1.5">
-                    <input
-                      type="date"
-                      value={debugDate}
-                      max={new Date().toISOString().split("T")[0]}
-                      onChange={(e) => setDebugDate(e.target.value)}
-                      className="text-xs font-mono bg-transparent border-none outline-none text-amber-800"
-                    />
-                    <button
-                      onClick={() => {
-                        handlePullTimes(debugDate);
-                        setShowDebugPull(false);
-                      }}
-                      disabled={isPulling || !debugDate}
-                      className="text-xs font-bold text-amber-700 hover:text-amber-900 disabled:opacity-40 transition-colors"
-                    >
-                      Pull
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* The steps hang off the button that produced them, so the answer
                 to "what do I do with this?" is where the question was asked.
                 Upward and right-aligned: this is the bottom action bar, and the
