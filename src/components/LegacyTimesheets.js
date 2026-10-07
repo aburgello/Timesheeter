@@ -60,7 +60,7 @@ import PageHeader from "./shared/PageHeader";
 import TableSearchableSelect from "./legacy/TableSearchableSelect";
 import MultiCountrySelect from "./shared/MultiCountrySelect";
 import PasteNextSteps from "./shared/PasteNextSteps";
-import { toIsoDate } from "../utils/dates";
+import { toIsoDate, isoToday } from "../utils/dates";
 import {
   splitTerritories,
   joinTerritories,
@@ -78,6 +78,9 @@ import CommentTrailModal from "./legacy/CommentTrailModal";
 import ReportProblemModal from "./legacy/ReportProblemModal";
 import PullTimesButton from "./legacy/PullTimesButton";
 import { HoverLabel } from "./shared/FloatingCard";
+
+const ACTIVE_DAY_KEY = "xyi_legacy_activeDay";
+const todayName = () => DAYS[(new Date().getDay() + 6) % 7];
 
 // A grid textarea that grows to fit its text instead of hiding it.
 //
@@ -293,8 +296,16 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const timeTotalRef = useRef(null);
   const addTotalRef = useRef(null);
 
+  // Opens on today. A tab picked by hand is kept only for the rest of that day
+  // in this browser tab, so moving around the app doesn't lose your place.
   const [activeDay, setActiveDay] = useState(() => {
-    return localStorage.getItem("xyi_legacy_activeDay") || "Monday";
+    try {
+      const picked = JSON.parse(sessionStorage.getItem(ACTIVE_DAY_KEY) || "null");
+      if (picked?.on === isoToday() && DAYS.includes(picked.day)) return picked.day;
+    } catch {
+      // unreadable storage: fall through to today
+    }
+    return todayName();
   });
 
   // How this member wants pulled rows to arrive — their default category and
@@ -310,7 +321,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   });
 
   useEffect(() => {
-    localStorage.setItem("xyi_legacy_activeDay", activeDay);
+    try {
+      sessionStorage.setItem(ACTIVE_DAY_KEY, JSON.stringify({ day: activeDay, on: isoToday() }));
+    } catch {
+      // storage unavailable: the page still opens on today
+    }
   }, [activeDay]);
 
   // rows are now synced to Supabase via useLegacyRows
@@ -319,7 +334,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     localStorage.setItem("xyi_legacy_frozenDays", JSON.stringify(frozenDays));
   }, [frozenDays]);
 
-  // Auto-detect new week on mount. frozenDays is keyed by weekday name only
+  // On mount, in a new week: frozenDays is keyed by weekday name only
   // ("Monday", not "the Monday of week X"), so it has to be cleared whenever
   // the week rolls over — otherwise a day frozen last week (e.g. to lock a
   // submitted timesheet) stays frozen for every future occurrence of that
@@ -327,15 +342,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   useEffect(() => {
     const current = getCurrentWeekStart();
     const stored = localStorage.getItem("xyi_last_week_start");
-    if (stored && stored !== current) {
-      setNewWeekBanner(true);
-      setFrozenDays({});
-    }
+    if (stored && stored !== current) setFrozenDays({});
     localStorage.setItem("xyi_last_week_start", current);
   }, []);
 
   const [isPulling, setIsPulling] = useState(false);
-  const [newWeekBanner, setNewWeekBanner] = useState(false);
   // Debug Pull is granted per person on profiles.can_debug_pull, so a second
   // pair of hands can recover a missed day without also being handed the
   // Administration modal, the raw Wrike explorer and the Canvas scan — which is
@@ -1795,8 +1806,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     setActiveDay(dayName);
   };
 
-  const dismissNewWeekBanner = () => setNewWeekBanner(false);
-
   const handlePullTimes = async (dateStr = null) => {
     if (!wrikeUserId) {
       showToast("Please connect Wrike in Profile → Settings first.");
@@ -3092,23 +3101,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           Today's List and Management exactly; this page used to sit tighter
           (pt-3 pb-4) and read as misaligned when moving between them. */}
       <div className="px-4 sm:px-6 py-6">
-        {/* New week banner */}
-        {newWeekBanner && (
-          <div className="max-w-[1800px] mx-auto mb-3 flex items-center gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-2xl shadow-sm">
-            <span className="text-lg">🗓️</span>
-            <div className="flex-1">
-              <span className="font-black text-emerald-900 text-sm">New week!</span>
-              <span className="text-emerald-800 text-sm ml-1.5">Last week's entries are hidden here but still saved — they show up in the Jobs Feed.</span>
-            </div>
-            <button
-              onClick={dismissNewWeekBanner}
-              className="px-3 py-1.5 text-emerald-700 hover:text-emerald-900 text-sm font-bold rounded-xl transition-colors"
-            >
-              Got it
-            </button>
-          </div>
-        )}
-
       {/* --- STANDARD UI --- */}
       <div className="max-w-[1800px] mx-auto bg-white shadow-sm rounded-2xl relative flex flex-col border border-[#dce4ec]">
         {/* --- MODERN TABS --- */}
