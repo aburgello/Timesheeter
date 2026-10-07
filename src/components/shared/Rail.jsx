@@ -128,7 +128,6 @@ export default function Rail({ activePage, setActivePage }) {
 
         <button
           onClick={() => setActivePage("home")}
-          title="Home"
           className="group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden border border-dashed border-[#dce4ec] text-[#768994] hover:border-[#12a0e1] hover:text-[#12a0e1] transition-colors shrink-0 mt-4 focus-visible:ring-4 focus-visible:ring-[#12a0e1]/30 focus-visible:outline-none"
         >
           <span className="w-14 h-14 shrink-0 flex items-center justify-center">
@@ -148,7 +147,6 @@ export default function Rail({ activePage, setActivePage }) {
               <button
                 key={id}
                 onClick={() => setActivePage(id)}
-                title={label}
                 className={railRowClass(isActive, PAGE_GRADIENTS[id])}
               >
                 <span className="w-14 h-14 shrink-0 flex items-center justify-center">
@@ -162,7 +160,6 @@ export default function Rail({ activePage, setActivePage }) {
 
         <button
           onClick={() => setActivePage("profile")}
-          title="Your profile & hub"
           className={`group/row relative z-10 flex items-center h-14 rounded-2xl overflow-hidden transition-colors shrink-0 mt-1 focus-visible:outline-none ${
             activePage === "profile"
               ? `bg-gradient-to-br ${PAGE_GRADIENTS.profile} text-white shadow-lg focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-white/70`

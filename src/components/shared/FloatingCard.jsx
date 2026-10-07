@@ -1,4 +1,4 @@
-import React, { cloneElement, useLayoutEffect, useRef, useState } from "react";
+import React, { cloneElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 // The dark hover card: the comment previews on the "Where did my day go?"
@@ -37,13 +37,26 @@ export default function FloatingCard({ rect, className = "", innerRef, children,
   );
 }
 
-// Names an icon-only control in the hover card, on hover and on keyboard
-// focus. Wraps exactly one element; that element should still carry its own
-// aria-label, since this is for sighted users.
-export function HoverLabel({ label, children }) {
+// Names or explains a control in the hover card, on hover and on keyboard
+// focus, in place of the browser's own title tooltip. Wraps exactly one
+// element; an icon-only one should still carry its own aria-label, since this
+// is for sighted users. `delay` (ms) is for small controls repeated down a
+// table, where an instant card flickers as the pointer passes over them.
+export function HoverLabel({ label, delay = 0, children }) {
   const [rect, setRect] = useState(null);
-  const show = (e) => setRect(e.currentTarget.getBoundingClientRect());
-  const hide = () => setRect(null);
+  const timer = useRef(null);
+  const show = (e) => {
+    const next = e.currentTarget.getBoundingClientRect();
+    clearTimeout(timer.current);
+    // Focus is deliberate, so only hovering waits.
+    if (delay && e.type !== "focus") timer.current = setTimeout(() => setRect(next), delay);
+    else setRect(next);
+  };
+  const hide = () => {
+    clearTimeout(timer.current);
+    setRect(null);
+  };
+  useEffect(() => () => clearTimeout(timer.current), []);
   const chain = (theirs, ours) => (e) => {
     theirs?.(e);
     ours(e);
@@ -57,8 +70,8 @@ export function HoverLabel({ label, children }) {
         onBlur: chain(children.props.onBlur, hide),
         onClick: chain(children.props.onClick, hide),
       })}
-      {rect && (
-        <FloatingCard rect={rect} className="px-3 py-1.5 pointer-events-none whitespace-nowrap">
+      {rect && label && (
+        <FloatingCard rect={rect} className="px-3 py-1.5 pointer-events-none max-w-[18rem]">
           <span className="text-xs font-semibold text-slate-100">{label}</span>
         </FloatingCard>
       )}

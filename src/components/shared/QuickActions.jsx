@@ -299,7 +299,6 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
                 <motion.button
                   key={action.id}
                   onClick={() => runAction(action)}
-                  title={action.label}
                   variants={{
                     opened: { opacity: 1, y: 0, scale: 1 },
                     closed: { opacity: 0, y: 8, scale: 0.9 },
@@ -327,7 +326,6 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
         onClick={() => setPinned((v) => !v)}
         aria-expanded={open}
         aria-label="Quick actions"
-        title="Quick actions"
         className="w-11 h-11 rounded-full bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center shadow-2xl border border-white/20 hover:scale-105 transition-transform"
       >
         <motion.span

@@ -3211,21 +3211,22 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         widths, so a new column would have to be threaded
                         through every row's cells and every saved width. */}
                     {idx === 0 && rowsAreEditable && selectableIds.length > 0 && (
-                      <button
-                        onClick={toggleSelectAll}
-                        aria-pressed={allSelected}
-                        aria-label="Select every row on this day"
-                        title={allSelected ? "Clear selection" : "Select every row on this day"}
-                        className="absolute left-0 top-0 bottom-0 w-6 flex items-center justify-center hover:bg-white/10 transition-colors"
-                      >
-                        <span
-                          className={`w-[13px] h-[13px] rounded-[4px] border flex items-center justify-center transition-colors ${
-                            allSelected ? "bg-[#12a0e1] border-[#12a0e1]" : "border-white/40"
-                          }`}
+                      <HoverLabel label={allSelected ? "Clear selection" : "Select every row on this day"} delay={400}>
+                        <button
+                          onClick={toggleSelectAll}
+                          aria-pressed={allSelected}
+                          aria-label="Select every row on this day"
+                          className="absolute left-0 top-0 bottom-0 w-6 flex items-center justify-center hover:bg-white/10 transition-colors"
                         >
-                          {allSelected && <Check className="w-2.5 h-2.5 text-white" strokeWidth={4} />}
-                        </span>
-                      </button>
+                          <span
+                            className={`w-[13px] h-[13px] rounded-[4px] border flex items-center justify-center transition-colors ${
+                              allSelected ? "bg-[#12a0e1] border-[#12a0e1]" : "border-white/40"
+                            }`}
+                          >
+                            {allSelected && <Check className="w-2.5 h-2.5 text-white" strokeWidth={4} />}
+                          </span>
+                        </button>
+                      </HoverLabel>
                     )}
                     {c.label === "Add. Time" ? (
                       <span className="block leading-tight">
@@ -3274,13 +3275,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           so the multi-country add popover isn't clipped by the cell. */}
                       <td className="p-2 border-r border-[#dce4ec] align-middle" style={{ overflow: "visible" }}>
                         <div className="flex items-center gap-1.5 pl-1">
-                          <button
-                            onClick={() => toggleJobGroup(g.jobNumber)}
-                            className="w-5 h-5 grid place-items-center rounded-md text-[#768994] hover:text-[#12a0e1] hover:bg-white transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40"
-                            title={collapsed ? "Expand" : "Collapse"}
-                          >
-                            <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-300 ${collapsed ? "" : "rotate-90"}`} />
-                          </button>
+                          <HoverLabel label={collapsed ? "Expand" : "Collapse"} delay={400}>
+                            <button
+                              aria-label={collapsed ? "Expand" : "Collapse"}
+                              onClick={() => toggleJobGroup(g.jobNumber)}
+                              className="w-5 h-5 grid place-items-center rounded-md text-[#768994] hover:text-[#12a0e1] hover:bg-white transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40"
+                            >
+                              <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-300 ${collapsed ? "" : "rotate-90"}`} />
+                            </button>
+                          </HoverLabel>
                           {g.jobNumber ? (
                             <span className="font-black text-[12px] text-[#122027] truncate">
                               {g.jobNumber}
@@ -3308,17 +3311,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           </span>
                           {rowsAreEditable && (
                             <div className="ml-auto shrink-0 relative">
-                              <button
-                                onClick={(e) => openAddPopover(g.jobNumber, e)}
-                                title="Add entries to this job"
-                                className={`rounded-md w-5 h-5 grid place-items-center transition-colors ${
-                                  addEntryFor === g.jobNumber
-                                    ? "bg-[#12a0e1] text-white"
-                                    : "text-[#12a0e1] hover:bg-[#12a0e1]/10"
-                                }`}
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                              </button>
+                              <HoverLabel label="Add entries to this job" delay={400}>
+                                <button
+                                  aria-label="Add entries to this job"
+                                  onClick={(e) => openAddPopover(g.jobNumber, e)}
+                                  className={`rounded-md w-5 h-5 grid place-items-center transition-colors ${
+                                    addEntryFor === g.jobNumber
+                                      ? "bg-[#12a0e1] text-white"
+                                      : "text-[#12a0e1] hover:bg-[#12a0e1]/10"
+                                  }`}
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                </button>
+                              </HoverLabel>
                               {addEntryFor === g.jobNumber && (
                                 <>
                                   <div
@@ -3461,47 +3466,50 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         renders as OS chrome that ignores the rest of the grid's
                         design. */}
                     {rowsAreEditable && (
-                      <button
-                        onClick={() => toggleRowSelected(row.id)}
-                        aria-pressed={selectedRowIds.has(row.id)}
-                        aria-label="Select row for batch edit"
-                        title="Select for batch edit"
-                        className={`absolute left-0 top-0 bottom-0 w-6 flex items-center justify-center transition-colors z-[1] ${
-                          selectedRowIds.has(row.id) ? "bg-[#12a0e1]/10" : "hover:bg-slate-100"
-                        }`}
-                      >
-                        <span
-                          className={`w-[13px] h-[13px] rounded-[4px] border flex items-center justify-center transition-[background-color,border-color,opacity] duration-150 ${
-                            selectedRowIds.has(row.id)
-                              ? "bg-[#12a0e1] border-[#12a0e1]"
-                              : "border-[#c2d0da] bg-white opacity-0 group-hover:opacity-100"
+                      <HoverLabel label="Select for batch edit" delay={400}>
+                        <button
+                          onClick={() => toggleRowSelected(row.id)}
+                          aria-pressed={selectedRowIds.has(row.id)}
+                          aria-label="Select row for batch edit"
+                          className={`absolute left-0 top-0 bottom-0 w-6 flex items-center justify-center transition-colors z-[1] ${
+                            selectedRowIds.has(row.id) ? "bg-[#12a0e1]/10" : "hover:bg-slate-100"
                           }`}
                         >
-                          {selectedRowIds.has(row.id) && (
-                            <Check className="w-2.5 h-2.5 text-white" strokeWidth={4} />
-                          )}
-                        </span>
-                      </button>
+                          <span
+                            className={`w-[13px] h-[13px] rounded-[4px] border flex items-center justify-center transition-[background-color,border-color,opacity] duration-150 ${
+                              selectedRowIds.has(row.id)
+                                ? "bg-[#12a0e1] border-[#12a0e1]"
+                                : "border-[#c2d0da] bg-white opacity-0 group-hover:opacity-100"
+                            }`}
+                          >
+                            {selectedRowIds.has(row.id) && (
+                              <Check className="w-2.5 h-2.5 text-white" strokeWidth={4} />
+                            )}
+                          </span>
+                        </button>
+                      </HoverLabel>
                     )}
                     <div className={`flex items-start gap-2 ${rowsAreEditable ? "pl-6" : "pl-1"}`}>
-                      <button
-                        onClick={() => handleDeleteRow(row.id)}
-                        disabled={!rowsAreEditable}
-                        title={rowsAreEditable ? "Delete row" : undefined}
-                        className={`mt-1.5 transition-opacity ${
-                          !rowsAreEditable
-                            ? "opacity-0 cursor-not-allowed"
-                            : "opacity-0 group-hover:opacity-70 hover:!opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 focus-visible:outline-none"
-                        }`}
-                      >
-                        <XCircle
-                          className={`w-5 h-5 ${
+                      <HoverLabel label={rowsAreEditable ? "Delete row" : undefined} delay={400}>
+                        <button
+                          aria-label={rowsAreEditable ? "Delete row" : undefined}
+                          onClick={() => handleDeleteRow(row.id)}
+                          disabled={!rowsAreEditable}
+                          className={`mt-1.5 transition-opacity ${
                             !rowsAreEditable
-                              ? "text-slate-400"
-                              : "text-rose-500 fill-rose-100"
+                              ? "opacity-0 cursor-not-allowed"
+                              : "opacity-0 group-hover:opacity-70 hover:!opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 focus-visible:outline-none"
                           }`}
-                        />
-                      </button>
+                        >
+                          <XCircle
+                            className={`w-5 h-5 ${
+                              !rowsAreEditable
+                                ? "text-slate-400"
+                                : "text-rose-500 fill-rose-100"
+                            }`}
+                          />
+                        </button>
+                      </HoverLabel>
                       <div className="flex flex-col w-full">
                         {isSub ? (
                           // The job is set once at the group top, never per subrow —
@@ -3820,19 +3828,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 pinned={topCategories}
                 onPick={(val) => applyToSelected("category", val)}
               />
-              <button
-                onClick={duplicateSelected}
-                disabled={!rowsAreEditable}
-                title={
-                  rowsAreEditable
-                    ? "Copy the ticked row(s) — hours left blank"
-                    : `${activeDay} is locked`
-                }
-                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold text-white/80 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                Duplicate
-              </button>
+              {/* The locked reason stays a title: a disabled button sends no
+                  hover events for the card to open on. */}
+              <HoverLabel label="Copy the ticked row(s), hours left blank">
+                <button
+                  onClick={duplicateSelected}
+                  disabled={!rowsAreEditable}
+                  title={rowsAreEditable ? undefined : `${activeDay} is locked`}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold text-white/80 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  Duplicate
+                </button>
+              </HoverLabel>
               {/* Stays hoverable when it can't merge, so the reason shows. */}
               <HoverLabel
                 label={
@@ -3873,30 +3881,32 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             action bar, so the table's view controls cost no vertical space. */}
         <div className={`relative z-10 -mb-4 flex justify-center pointer-events-none ${selectedCount > 0 ? "hidden" : ""}`}>
           <div className="pointer-events-auto flex flex-wrap justify-center items-center gap-1 max-w-full bg-white border border-[#dce4ec] rounded-3xl sm:rounded-full shadow-md px-1.5 py-1">
-            <button
-              onClick={() => setConsolidatedView((v) => !v)}
-              title="Merge rows with the same job number — territories & categories become subrows, raw time summed before rounding"
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
-                consolidatedView ? "text-[#12a0e1]" : "text-[#768994] hover:text-[#122027]"
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              Consolidated
-              <span className={`ml-0.5 text-[10px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-600"}`}>
-                {consolidatedView ? "ON" : "OFF"}
-              </span>
-            </button>
+            <HoverLabel label="Merge rows with the same job number — territories & categories become subrows, raw time summed before rounding">
+              <button
+                onClick={() => setConsolidatedView((v) => !v)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
+                  consolidatedView ? "text-[#12a0e1]" : "text-[#768994] hover:text-[#122027]"
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                Consolidated
+                <span className={`ml-0.5 text-[10px] font-black px-1.5 py-0.5 rounded ${consolidatedView ? "bg-[#12a0e1] text-white" : "bg-slate-100 text-slate-600"}`}>
+                  {consolidatedView ? "ON" : "OFF"}
+                </span>
+              </button>
+            </HoverLabel>
             <span className="w-px h-4 bg-[#dce4ec] shrink-0" />
-            <button
-              onClick={toggleFreeze}
-              title={isDayFrozen ? "Unlock day to allow edits" : "Lock this day to prevent edits"}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
-                isDayFrozen ? "text-amber-600" : "text-[#768994] hover:text-[#122027]"
-              }`}
-            >
-              <Lock className="w-3.5 h-3.5" />
-              {isDayFrozen ? `${activeDay} locked` : `Lock ${activeDay}`}
-            </button>
+            <HoverLabel label={isDayFrozen ? "Unlock day to allow edits" : "Lock this day to prevent edits"}>
+              <button
+                onClick={toggleFreeze}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
+                  isDayFrozen ? "text-amber-600" : "text-[#768994] hover:text-[#122027]"
+                }`}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                {isDayFrozen ? `${activeDay} locked` : `Lock ${activeDay}`}
+              </button>
+            </HoverLabel>
             <span className="w-px h-4 bg-[#dce4ec] shrink-0" />
             <PullDefaultsPopover
               defaultCategory={defaultCategory}
@@ -3964,23 +3974,24 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 Upward and right-aligned: this is the bottom action bar, and the
                 right-hand end of it. */}
             <div className="relative">
-              <button
-                onClick={handleCopyJSON}
-                data-bubble-avoid
-                title="Copies this week's rows, ready to paste into your timesheet bookmark"
-                className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl shadow-sm transition-[background-color,box-shadow,transform] active:scale-95 ${
-                  jsonCopied
-                    ? "bg-[#1cc1a5] text-white shadow-[#1cc1a5]/30"
-                    : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-[#12a0e1]/30"
-                }`}
-              >
-                {jsonCopied ? (
-                  <CheckCircle className="w-4 h-4" />
-                ) : (
-                  <Copy className="w-4 h-4" />
-                )}
-                {jsonCopied ? "Copied!" : "Copy Me!"}
-              </button>
+              <HoverLabel label="Copies this week's rows, ready to paste into your timesheet bookmark">
+                <button
+                  onClick={handleCopyJSON}
+                  data-bubble-avoid
+                  className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl shadow-sm transition-[background-color,box-shadow,transform] active:scale-95 ${
+                    jsonCopied
+                      ? "bg-[#1cc1a5] text-white shadow-[#1cc1a5]/30"
+                      : "bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-[#12a0e1]/30"
+                  }`}
+                >
+                  {jsonCopied ? (
+                    <CheckCircle className="w-4 h-4" />
+                  ) : (
+                    <Copy className="w-4 h-4" />
+                  )}
+                  {jsonCopied ? "Copied!" : "Copy Me!"}
+                </button>
+              </HoverLabel>
 
               {showPasteSteps && (
                 <PasteNextSteps

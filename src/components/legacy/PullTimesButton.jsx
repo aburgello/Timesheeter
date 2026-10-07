@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw, ChevronDown } from "lucide-react";
+import { HoverLabel } from "../shared/FloatingCard";
 
 // "Pull Wrike Times", and for people granted it, a caret that pulls one chosen
 // date instead of today and yesterday. The panel opens upward: this lives in
@@ -35,28 +36,30 @@ export default function PullTimesButton({ isPulling, disabled, canPickDate, onPu
 
   return (
     <div ref={wrapRef} className="relative flex shadow-sm rounded-xl">
-      <button
-        onClick={() => onPull()}
-        disabled={isPulling || disabled}
-        title="Pulls your Wrike time for today and yesterday"
-        className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold border transition-[background-color,color,border-color,transform] ${
-          canPickDate ? "rounded-l-xl" : "rounded-xl"
-        } ${tone}`}
-      >
-        <RefreshCw className={`w-4 h-4 ${isPulling ? "animate-spin text-[#12a0e1]" : ""}`} />
-        {isPulling ? "Pulling..." : "Pull Wrike Times"}
-      </button>
-      {canPickDate && (
+      <HoverLabel label="Pulls your Wrike time for today and yesterday">
         <button
-          onClick={() => setOpen((v) => !v)}
-          disabled={isPulling}
-          aria-expanded={open}
-          aria-label="Pull a specific date"
-          title="Pull a specific date"
-          className="flex items-center px-2.5 -ml-px border rounded-r-xl bg-white hover:bg-slate-50 text-[#122027] border-[#dce4ec] disabled:opacity-60 transition-colors"
+          onClick={() => onPull()}
+          disabled={isPulling || disabled}
+          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold border transition-[background-color,color,border-color,transform] ${
+            canPickDate ? "rounded-l-xl" : "rounded-xl"
+          } ${tone}`}
         >
-          <ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} />
+          <RefreshCw className={`w-4 h-4 ${isPulling ? "animate-spin text-[#12a0e1]" : ""}`} />
+          {isPulling ? "Pulling..." : "Pull Wrike Times"}
         </button>
+      </HoverLabel>
+      {canPickDate && (
+        <HoverLabel label="Pull a specific date">
+          <button
+            onClick={() => setOpen((v) => !v)}
+            disabled={isPulling}
+            aria-expanded={open}
+            aria-label="Pull a specific date"
+            className="flex items-center px-2.5 -ml-px border rounded-r-xl bg-white hover:bg-slate-50 text-[#122027] border-[#dce4ec] disabled:opacity-60 transition-colors"
+          >
+            <ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} />
+          </button>
+        </HoverLabel>
       )}
 
       {/* z-[60] for the same reason as PasteNextSteps: the table's time cells

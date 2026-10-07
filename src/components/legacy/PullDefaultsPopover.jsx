@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { SlidersHorizontal, Search, Check } from "lucide-react";
+import { HoverLabel } from "../shared/FloatingCard";
 import { CATEGORIES } from "../../constants.js";
 
 // The two "how should my pulled rows arrive" preferences, as a popover hanging
@@ -91,18 +92,19 @@ export default function PullDefaultsPopover({
 
   return (
     <div className="relative" ref={wrapRef}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        title="Choose the category your pulled rows default to, and whether markets are merged into one entry"
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors max-w-[220px] ${
-          open || defaultCategory || groupMultiCountry
-            ? "text-[#12a0e1]"
-            : "text-[#768994] hover:text-[#122027]"
-        }`}
-      >
-        <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
-        <span className="truncate">{label}</span>
-      </button>
+      <HoverLabel label="Choose the category your pulled rows default to, and whether markets are merged into one entry">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors max-w-[220px] ${
+            open || defaultCategory || groupMultiCountry
+              ? "text-[#12a0e1]"
+              : "text-[#768994] hover:text-[#122027]"
+          }`}
+        >
+          <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{label}</span>
+        </button>
+      </HoverLabel>
 
       {open && pos && createPortal(
         // Two elements on purpose. tailwindcss-animate's `enter` keyframe sets
