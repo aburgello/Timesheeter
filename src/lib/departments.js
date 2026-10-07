@@ -6,6 +6,7 @@ import {
   User,
   Shield,
   Briefcase,
+  ClipboardList,
 } from "lucide-react";
 import { PAGE_GRADIENTS } from "./pageGradients";
 import { isManager, MANAGER_PAGE_IDS } from "./access";
@@ -64,6 +65,13 @@ export const PAGES = {
     icon: Briefcase,
     gradient: PAGE_GRADIENTS.jobbook,
   },
+  orderforms: {
+    id: "orderforms",
+    label: "Order Forms",
+    desc: "Market orders at a glance",
+    icon: ClipboardList,
+    gradient: PAGE_GRADIENTS.orderforms,
+  },
 };
 
 // ── Departments ──────────────────────────────────────────────────────────────
@@ -72,8 +80,8 @@ export const PAGES = {
 // between departments. A department missing from here gets TEAM_DEFAULTS, so
 // one added in Administration works straight away with the standard setup.
 //
-//   pages     the pages it sees (Administration and the Job Book are added on
-//             top for the people in MANAGEMENT_IDS; see pageIdsFor)
+//   pages     the pages it sees (Administration, the Job Book and Order Forms
+//             are added on top for the managers; see pageIdsFor)
 //   features  department-specific Canvas tools: "launchTracker" (per-market
 //             print requests), "doohSpecs" (screen specs by country)
 //   quickFilter  the first job-search chip on the Timesheeter
@@ -94,7 +102,7 @@ export const DEPARTMENTS = {
   Print: { features: ["launchTracker"], quickFilter: "LAUNCH" },
   AM: {},
   Digital: {},
-  PM: { pages: ["jobbook", "legacy", "profile"] },
+  PM: { pages: ["jobbook", "orderforms", "legacy", "profile"] },
   Operations: { pages: ["legacy", "profile"] },
 };
 

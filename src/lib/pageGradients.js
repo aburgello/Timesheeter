@@ -10,4 +10,5 @@ export const PAGE_GRADIENTS = {
   profile: "from-sky-600 to-blue-600",
   management: "from-[#122027] to-[#12a0e1]",
   jobbook: "from-teal-600 to-emerald-700",
+  orderforms: "from-indigo-600 to-sky-600",
 };

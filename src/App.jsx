@@ -49,6 +49,7 @@ const PAGE_LOADERS = {
   profile: () => import("./components/Profile"),
   management: () => import("./components/Management"),
   jobbook: () => import("./components/JobBook"),
+  orderforms: () => import("./components/OrderForms"),
 };
 const Tracker = lazy(PAGE_LOADERS.timesheet);
 const TodaysList = lazy(PAGE_LOADERS.todayslist);
@@ -58,6 +59,7 @@ const LegacyTimesheet = lazy(PAGE_LOADERS.legacy);
 const Profile = lazy(PAGE_LOADERS.profile);
 const Management = lazy(PAGE_LOADERS.management);
 const JobBook = lazy(PAGE_LOADERS.jobbook);
+const OrderForms = lazy(PAGE_LOADERS.orderforms);
 const AdminModal = lazy(() => import("./components/AdminModal"));
 // Lazy — NotesModal pulls in the whole Canvas module (NotesCanvasCard) and the
 // TipTap editor, none of which belong in the always-loaded app entry chunk.
@@ -113,7 +115,7 @@ const PAGE_VARIANTS = {
 // back-button entry for #timesheet lands on Home instead of the Tracker.
 const VALID_PAGES = [
   "home", "canvas", "wriketest", "legacy", "profile",
-  "management", "jobbook", "todayslist",
+  "management", "jobbook", "orderforms", "todayslist",
 ];
 
 // The hash is `#page` or `#page/section` — the second segment belongs to the
@@ -714,6 +716,7 @@ export default function App() {
               <Management wrikeUserId={wrikeUserId} department={department} wrikeData={globalWrikeData} />
             )}
             {activePage === "jobbook" && (canOpen("jobbook") ? <JobBook /> : <PageLoading />)}
+            {activePage === "orderforms" && (canOpen("orderforms") ? <OrderForms /> : <PageLoading />)}
             </Suspense>
             </AppErrorBoundary>
           </motion.div>
