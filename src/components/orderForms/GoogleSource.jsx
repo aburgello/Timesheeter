@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { CloudDownload, Loader2, Link2 } from "lucide-react";
+import { CloudDownload, Film, Loader2, Link2 } from "lucide-react";
+import SearchableSelect from "../shared/SearchableSelect";
 import { connectGoogle, googleConnected, readIndexTabs } from "../../lib/orderForms/googleApi";
 import { driveIdFromLink, indexColumns, filmFromTab } from "../../lib/orderForms/googleIndex";
 import { loadFilm } from "../../lib/orderForms/loadFilm";
@@ -115,7 +116,7 @@ export default function GoogleSource({ onLoaded, onBusy }) {
             <p className="text-sm font-bold text-[#122027]">Load a film from Google</p>
             <p className="text-xs text-[#768994] truncate">
               {!connected ? "Reads every market's order sheet with your own Google access. Read-only."
-                : index ? index.title
+                : index ? `${index.title} · the film's sheet is found by name in each market's Drive folder`
                 : "Paste the link to the index spreadsheet that lists every market's Drive folder."}
             </p>
           </div>
@@ -154,27 +155,33 @@ export default function GoogleSource({ onLoaded, onBusy }) {
 
         {connected && index && (
           <div className="flex flex-wrap items-end gap-2">
-            <label className="text-[11px] font-bold text-[#768994]">
-              Film
-              <select
+            <div className="text-[11px] font-bold text-[#768994] w-64">
+              <span className="block mb-1">Film</span>
+              {/* Typing filters the list; anything that isn't a tab of the index
+                  clears the choice rather than loading a film that doesn't exist. */}
+              <SearchableSelect
+                options={index.films.map((f) => f.title)}
                 value={tab}
-                onChange={(e) => { setTab(e.target.value); setContains(filmFromTab(e.target.value).film); }}
+                onChange={(picked) => {
+                  const known = index.films.some((f) => f.title === picked);
+                  setTab(known ? picked : "");
+                  if (known) setContains(filmFromTab(picked).film);
+                }}
+                placeholder="Pick a film"
+                icon={Film}
                 disabled={busy}
-                className={`${inputClass} block mt-1 pr-8`}
-              >
-                {index.films.map((f) => <option key={f.title} value={f.title}>{f.title}</option>)}
-              </select>
-            </label>
+              />
+            </div>
             <label className="text-[11px] font-bold text-[#768994]">
-              Sheet name contains
+              Sheet name in the market's folder contains
               <input
                 value={contains}
                 onChange={(e) => setContains(e.target.value)}
                 disabled={busy}
-                className={`${inputClass} block mt-1 w-48`}
+                className={`${inputClass} block mt-1 w-64 py-2.5 shadow-sm`}
               />
             </label>
-            <button onClick={load} disabled={busy || !contains.trim()} className={buttonClass}>
+            <button onClick={load} disabled={busy || !tab || !contains.trim()} className={`${buttonClass} py-2.5`}>
               {progress ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudDownload className="w-4 h-4" />}
               {progress ? `Reading ${progress.done} of ${progress.total || "…"}` : "Load markets"}
             </button>
