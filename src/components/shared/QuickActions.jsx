@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Zap, StickyNote, Briefcase, Settings, FileScan,
-         FolderPlus, FileBarChart, ClipboardList } from "lucide-react";
+         FolderPlus, FileBarChart, ClipboardList, Shield } from "lucide-react";
 import { PAGE_GRADIENTS } from "../../lib/pageGradients";
 import { pageIdsFor } from "../../lib/departments";
 
@@ -106,6 +106,16 @@ const ACTIONS = [
   },
 ];
 
+// The Admin panel (AdminModal). Offered whenever App passes onOpenAdmin, which
+// it does only for the app's admin, whatever their desk or department preview.
+const ADMIN_ACTION = {
+  id: "admin",
+  label: "Admin",
+  icon: Shield,
+  kind: "admin",
+  gradient: "from-[#122027] to-[#25373c]",
+};
+
 // Desks whose shortcuts are named explicitly rather than derived from page
 // access: PM sets jobs up and runs the book, Operations reads the time that
 // came out the other end. The access filter still applies on top, so the
@@ -177,7 +187,7 @@ function useLiftOverMarked(bubbleRef, enabled) {
   return enabled ? lift : 0;
 }
 
-export default function QuickActions({ activePage, department, wrikeUserId, onNavigate, onOpenNotes, onScanPdf }) {
+export default function QuickActions({ activePage, department, wrikeUserId, onNavigate, onOpenNotes, onScanPdf, onOpenAdmin }) {
   // Two independent reasons to be open, OR'd together, rather than one flag
   // both handlers write to: with a single flag, mouseenter opens the stack
   // and the bubble's own click then toggles it straight back shut, so a
@@ -206,16 +216,22 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
   // for PM/Operations those aren't the production tools the default list
   // offers. Anything else keeps the access-filtered default.
   const preferred = DEPARTMENT_ACTIONS[department];
-  const actions = preferred
+  const deskActions = preferred
     ? preferred.map((id) => ACTIONS.find((a) => a.id === id))
                 .filter((a) => a && (!a.requires || allowed.includes(a.requires)))
     : ACTIONS.filter((a) => !a.requires || allowed.includes(a.requires));
+  const actions = onOpenAdmin ? [ADMIN_ACTION, ...deskActions] : deskActions;
   if (!actions.length) return null;
 
   const runAction = (action) => {
     if (action.kind === "notes") {
       close();
       onOpenNotes?.();
+      return;
+    }
+    if (action.kind === "admin") {
+      close();
+      onOpenAdmin?.();
       return;
     }
     if (action.kind === "scan") {

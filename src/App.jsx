@@ -11,7 +11,6 @@ import { motion, AnimatePresence, MotionConfig } from "framer-motion";
 import {
   Key,
   Bell,
-  Shield,
   CheckCircle2,
   X,
 } from "lucide-react";
@@ -516,16 +515,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Admin button (only visible to KUAWDLVN) ───────────────────────── */}
-      {isAdmin && (
-        <button
-          onClick={() => setShowAdmin(true)}
-          className="fixed bottom-6 left-24 z-[9997] flex items-center gap-2 bg-[#122027] hover:bg-[#1a2f3a] text-white text-xs font-black px-3 py-2.5 rounded-xl shadow-lg transition-colors"
-        >
-          <Shield className="w-3.5 h-3.5" /> Admin
-        </button>
-      )}
-
       {/* ── Admin modal ───────────────────────────────────────────────────── */}
       {showAdmin && isAdmin && (
         <Suspense fallback={null}>
@@ -571,6 +560,7 @@ export default function App() {
         }}
         onOpenNotes={() => setNotesModalOpen(true)}
         onScanPdf={scanPdf}
+        onOpenAdmin={isAdmin ? () => setShowAdmin(true) : undefined}
       />
 
       {/* Quick-actions overlays. Both are lazy, so their code (and pdfjs /
