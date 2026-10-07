@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Zap, StickyNote, Briefcase, Settings, FileScan,
          FolderPlus, FileBarChart, ClipboardList } from "lucide-react";
@@ -117,6 +117,66 @@ const DEPARTMENT_ACTIONS = {
   Operations: ["projectTime", "settings"],
 };
 
+// How far to raise the bubble so it sits above anything marked
+// data-bubble-avoid that it would otherwise cover (Copy Me! on the timesheet,
+// and the steps card that opens above it). Re-measured on scroll, resize and
+// DOM changes, since the page under a fixed bubble moves without telling it.
+const AVOID_GAP = 12;
+function useLiftOverMarked(bubbleRef, enabled) {
+  const [lift, setLift] = useState(0);
+  const liftRef = useRef(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const el = bubbleRef.current;
+      if (!el?.offsetParent) return;
+      const bubble = el.getBoundingClientRect();
+      // Where the bubble rests with no lift applied. From layout offsets, not
+      // the rect, which is mid-transition while the lift animates.
+      const restTop = el.offsetParent.offsetTop + el.offsetTop;
+      const rest = { top: restTop, bottom: restTop + el.offsetHeight };
+      const marked = [...document.querySelectorAll("[data-bubble-avoid]")]
+        .map((el) => el.getBoundingClientRect())
+        .filter((r) => r.width && r.right > bubble.left && r.left < bubble.right)
+        // Lowest first, so clearing one can run into the next one up.
+        .sort((a, b) => b.bottom - a.bottom);
+      let next = 0;
+      for (const r of marked) {
+        const top = rest.top - next - AVOID_GAP;
+        const bottom = rest.bottom - next + AVOID_GAP;
+        if (r.bottom > top && r.top < bottom) next = rest.bottom - r.top + AVOID_GAP;
+      }
+      next = Math.max(0, Math.round(next));
+      if (next !== liftRef.current) {
+        liftRef.current = next;
+        setLift(next);
+      }
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    schedule();
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(document.body, { childList: true, subtree: true });
+    const sizes = new ResizeObserver(schedule);
+    sizes.observe(document.body);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      mutations.disconnect();
+      sizes.disconnect();
+    };
+  }, [bubbleRef, enabled]);
+
+  return enabled ? lift : 0;
+}
+
 export default function QuickActions({ activePage, department, wrikeUserId, onNavigate, onOpenNotes, onScanPdf }) {
   // Two independent reasons to be open, OR'd together, rather than one flag
   // both handlers write to: with a single flag, mouseenter opens the stack
@@ -127,6 +187,8 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
   const [pinned, setPinned] = useState(false);
   const open = hovered || pinned;
   const fileInputRef = useRef(null);
+  const bubbleRef = useRef(null);
+  const lift = useLiftOverMarked(bubbleRef, activePage !== "home");
 
   const close = () => {
     setHovered(false);
@@ -181,7 +243,8 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
     <div
       // Below md the nav is a bottom bar, so the bubble sits above it
       // rather than on top of the profile button at the bar's right end.
-      className="fixed bottom-24 md:bottom-6 right-4 md:right-6 z-[100] flex flex-col items-end"
+      className="fixed bottom-24 md:bottom-6 right-4 md:right-6 z-[100] flex flex-col items-end transition-transform duration-150 ease-out"
+      style={lift ? { transform: `translateY(-${lift}px)` } : undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
@@ -244,6 +307,7 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
       </AnimatePresence>
 
       <button
+        ref={bubbleRef}
         onClick={() => setPinned((v) => !v)}
         aria-expanded={open}
         aria-label="Quick actions"

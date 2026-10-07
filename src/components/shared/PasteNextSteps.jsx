@@ -80,6 +80,7 @@ export default function PasteNextSteps({
   return (
     <div
       ref={ref}
+      data-bubble-avoid={popover ? "" : undefined}
       className={
         popover
           ? "absolute bottom-full right-0 mb-2 w-[320px] max-w-[calc(100vw-2rem)] text-left bg-white border border-[#dce4ec] rounded-2xl shadow-2xl p-4 z-[60] animate-in fade-in slide-in-from-bottom-1 duration-200"

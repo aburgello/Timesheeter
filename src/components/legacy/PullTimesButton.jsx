@@ -62,7 +62,7 @@ export default function PullTimesButton({ isPulling, disabled, canPickDate, onPu
       {/* z-[60] for the same reason as PasteNextSteps: the table's time cells
           are z-50. */}
       {open && (
-        <div className="absolute bottom-full left-0 mb-2 w-64 bg-white border border-[#dce4ec] rounded-2xl shadow-2xl p-4 z-[60] animate-in fade-in slide-in-from-bottom-1 duration-200">
+        <div className="absolute bottom-full right-0 mb-2 w-64 bg-white border border-[#dce4ec] rounded-2xl shadow-2xl p-4 z-[60] animate-in fade-in slide-in-from-bottom-1 duration-200">
           <p className="text-xs font-bold text-[#122027]">Pull a specific date</p>
           <p className="text-[11px] text-[#768994] mt-0.5">Your Wrike timelogs for that one day.</p>
           <div className="mt-3 flex items-center gap-2">

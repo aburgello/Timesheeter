@@ -3914,10 +3914,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           </div>
         </div>
 
-        {/* Bottom Action Bar: what fills the sheet on the left, Copy Me! alone
-            on the right. The wider right padding keeps Copy Me! out from under
-            the QuickActions bubble, which is fixed over this corner. */}
-        <div className="p-4 pr-20 border-t border-[#dce4ec] bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
+        {/* Bottom Action Bar. The tongue above hangs 16px into it, so below
+            2xl, where the buttons can reach the centre, the extra top padding
+            keeps them clear of it. */}
+        <div className="p-4 pt-7 2xl:pt-4 border-t border-[#dce4ec] bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
           <div className="flex gap-3 flex-wrap items-center">
             <HoverLabel label="Wrike Timesheets">
               <button
@@ -3944,14 +3944,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               </button>
             </HoverLabel>
             <span className="w-px h-6 bg-[#dce4ec] shrink-0" />
-            {/* isAdmin stays in the OR so the admin keeps the date picker
-                without waiting on (or depending on) the profile read landing. */}
-            <PullTimesButton
-              isPulling={isPulling}
-              disabled={isDayFrozen}
-              canPickDate={isAdmin || canDebugPull}
-              onPull={handlePullTimes}
-            />
             <button
               onClick={() => {
                 if (!wrikeUserId) {
@@ -3967,6 +3959,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             </button>
           </div>
           <div className="flex gap-3 flex-wrap">
+            {/* isAdmin stays in the OR so the admin keeps the date picker
+                without waiting on (or depending on) the profile read landing. */}
+            <PullTimesButton
+              isPulling={isPulling}
+              disabled={isDayFrozen}
+              canPickDate={isAdmin || canDebugPull}
+              onPull={handlePullTimes}
+            />
             {/* The steps hang off the button that produced them, so the answer
                 to "what do I do with this?" is where the question was asked.
                 Upward and right-aligned: this is the bottom action bar, and the
@@ -3974,6 +3974,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             <div className="relative">
               <button
                 onClick={handleCopyJSON}
+                data-bubble-avoid
                 title="Copies this week's rows, ready to paste into your timesheet bookmark"
                 className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl shadow-sm transition-[background-color,box-shadow,transform] active:scale-95 ${
                   jsonCopied
