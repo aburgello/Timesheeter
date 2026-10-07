@@ -342,6 +342,17 @@ export default function CommentTrailModal({
 
   const edit = (key, patch) => setEdits((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
 
+  const tickable = view ? view.suggestions.filter((s) => !s.locked) : [];
+  const tickedCount = tickable.filter((s) => s.on).length;
+  const allTicked = tickable.length > 0 && tickedCount === tickable.length;
+  // Same patch as a row's own tick, so ticking keeps the time shown.
+  const tickAll = (on) =>
+    setEdits((p) => {
+      const next = { ...p };
+      tickable.forEach((s) => (next[s.key] = { ...p[s.key], ...(on ? { on: true, hours: s.hours } : { on: false }) }));
+      return next;
+    });
+
   const picked = view ? view.suggestions.filter((s) => s.on && s.hours + s.extra > 0) : [];
   const pickedRegular = picked.reduce((s, x) => s + x.hours, 0);
   const pickedExtra = picked.reduce((s, x) => s + x.extra, 0);
@@ -531,6 +542,27 @@ export default function CommentTrailModal({
               )}
 
               {/* Suggestions */}
+              {tickable.length > 1 && (
+                <div className="grid grid-cols-[24px_minmax(0,1fr)] items-center gap-x-4 px-6 py-2.5 border-t border-white/5">
+                  <Tick
+                    id="ct-all"
+                    checked={allTicked}
+                    partial={tickedCount > 0 && !allTicked}
+                    disabled={isFrozen}
+                    onChange={() => tickAll(!allTicked)}
+                    label={allTicked ? "Unselect all tasks" : "Select all tasks"}
+                    className=""
+                  />
+                  <label htmlFor="ct-all" className="text-[11px] font-bold text-slate-400 hover:text-slate-200 cursor-pointer select-none">
+                    {allTicked ? "Unselect all" : "Select all"}
+                    {tickedCount > 0 && (
+                      <span className="ml-2 font-medium text-slate-500">
+                        {tickedCount} of {tickable.length} ticked
+                      </span>
+                    )}
+                  </label>
+                </div>
+              )}
               <ul className="border-t border-white/5">
                 {view.suggestions.map((s) => (
                   <Suggestion key={s.key} s={s} frozen={isFrozen} edit={edit} jump={jump?.key === s.key ? jump : null} />
@@ -1004,12 +1036,17 @@ function Stepper({ label, value, frozen, onChange, plusRef }) {
 
 // The site's own tick box (the one on Legacy's row selection), over a real
 // checkbox so the label, keyboard and screen readers still work.
-function Tick({ id, checked, disabled, onChange, label }) {
+// `partial` is the select-all box with only some rows ticked.
+function Tick({ id, checked, partial = false, disabled, onChange, label, className = "mt-0.5" }) {
+  const filled = checked || partial;
   return (
-    <span className="relative mt-0.5 w-4 h-4 shrink-0">
+    <span className={`relative w-4 h-4 shrink-0 ${className}`}>
       <input
         type="checkbox"
         id={id}
+        ref={(el) => {
+          if (el) el.indeterminate = partial;
+        }}
         checked={checked}
         disabled={disabled}
         onChange={onChange}
@@ -1019,10 +1056,14 @@ function Tick({ id, checked, disabled, onChange, label }) {
       <span
         aria-hidden="true"
         className={`pointer-events-none w-4 h-4 rounded-[4px] border flex items-center justify-center transition-[background-color,border-color] duration-150 peer-focus-visible:ring-2 peer-focus-visible:ring-[#12a0e1]/60 ${
-          checked ? "bg-[#12a0e1] border-[#12a0e1]" : "bg-black/20 border-white/30 peer-hover:border-white/60"
+          filled ? "bg-[#12a0e1] border-[#12a0e1]" : "bg-black/20 border-white/30 peer-hover:border-white/60"
         } ${disabled ? "opacity-40" : ""}`}
       >
-        {checked && <Check className="w-3 h-3 text-white" strokeWidth={4} />}
+        {checked ? (
+          <Check className="w-3 h-3 text-white" strokeWidth={4} />
+        ) : (
+          partial && <Minus className="w-3 h-3 text-white" strokeWidth={4} />
+        )}
       </span>
     </span>
   );
