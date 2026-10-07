@@ -67,7 +67,7 @@ export const PAGES = {
   },
   orderforms: {
     id: "orderforms",
-    label: "Order Forms",
+    label: "Client Orders",
     desc: "Market orders at a glance",
     icon: ClipboardList,
     gradient: PAGE_GRADIENTS.orderforms,
