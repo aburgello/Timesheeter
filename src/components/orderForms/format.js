@@ -20,6 +20,7 @@ export const STATUS_LABEL = {
   confirmed: "Confirmed",
   pending: "Pending",
   unanswered: "Unanswered",
+  unconfirmed: "Unconfirmed",
   notStarted: "Not started",
   unreadable: "Couldn't read",
 };
@@ -28,6 +29,7 @@ export const STATUS_CLASS = {
   confirmed: "bg-emerald-100 text-emerald-700",
   pending: "bg-amber-100 text-amber-800",
   unanswered: "bg-slate-100 text-slate-500",
+  unconfirmed: "bg-violet-100 text-violet-700",
   notStarted: "bg-slate-100 text-slate-500",
   unreadable: "bg-rose-50 text-rose-700",
 };

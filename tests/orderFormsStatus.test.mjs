@@ -1,4 +1,4 @@
-import { orderUrgency, marketSummary, fileTotals, sortMarkets } from "../src/lib/orderForms/status.js";
+import { orderUrgency, marketSummary, fileTotals, sortMarkets, isFilledIn } from "../src/lib/orderForms/status.js";
 
 const TODAY = "2026-10-07";
 const order = (status, deliveryDeadline = "", mediaApproved = "") => ({ status, deliveryDeadline, mediaApproved });
@@ -21,6 +21,15 @@ check("no orders: not started", s([]).status, "notStarted");
 check("every answered order confirmed", s([order("confirmed"), order("unanswered")]).status, "confirmed");
 check("any pending: pending", s([order("confirmed"), order("pending")]).status, "pending");
 check("unreadable", s([], "No header row found").status, "unreadable");
+
+// Orders entered, confirmation column never answered.
+const entered = (fields) => ({ status: "unanswered", deliveryDeadline: "", mediaApproved: "", ...fields });
+check("template defaults alone are not filled in", isFilledIn(entered({ width: "1920", height: "1080", placement: "DINTH", duration: "15" })), false);
+check("a site name is filled in", isFilledIn(entered({ siteName: "Foyer" })), true);
+check("a deadline is filled in", isFilledIn(entered({ deliveryDeadline: "2026-10-13" })), true);
+check("entered but unanswered: unconfirmed", s([entered({ siteName: "Foyer" }), entered({})]).status, "unconfirmed");
+check("template rows only: still not started", s([entered({ width: "1920", height: "1080" })]).status, "notStarted");
+check("one answer and it is no longer unconfirmed", s([entered({ siteName: "Foyer" }), order("pending")]).status, "pending");
 
 const mixed = s([
   order("confirmed", "2026-10-02", "Yes"),
@@ -49,11 +58,12 @@ const file = {
     market("Italy", [order("pending", "2026-11-20")]),
     market("France", [order("pending", "2026-10-09")]),
     market("Spain", [order("pending", "2026-10-01")]),
+    market("Croatia", [{ status: "unanswered", deliveryDeadline: "2026-12-01", mediaApproved: "", siteName: "Foyer" }]),
     market("Broken", [], "No header row found"),
   ],
 };
-check("totals", fileTotals(file, TODAY), { markets: 6, orders: 5, confirmed: 1, pending: 3, due: 2, notStarted: 1 });
+check("totals", fileTotals(file, TODAY), { markets: 7, orders: 6, confirmed: 1, pending: 3, unconfirmed: 1, due: 2, notStarted: 1 });
 
 const sorted = sortMarkets(file.markets.map((m) => marketSummary(m, TODAY))).map((m) => m.name);
-check("default order: urgent, pending, confirmed, not started, unreadable",
-  sorted, ["Spain", "France", "Italy", "Germany", "Japan", "Broken"]);
+check("default order: urgent, pending, unconfirmed, confirmed, not started, unreadable",
+  sorted, ["Spain", "France", "Italy", "Croatia", "Germany", "Japan", "Broken"]);

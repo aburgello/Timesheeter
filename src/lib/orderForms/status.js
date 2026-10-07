@@ -17,6 +17,12 @@ export function orderUrgency(order, todayIso) {
   return order.deliveryDeadline <= addDays(todayIso, DUE_SOON_DAYS) ? "dueSoon" : null;
 }
 
+// Has the market entered anything on this row? The template ships with sizes,
+// placement and duration already in, so those don't count: a row is filled in
+// once it has something only the market could have typed.
+const MARKET_ENTERED = ["siteName", "deliveryDeadline", "liveDate", "artwork", "translations", "notes", "mediaApproved"];
+export const isFilledIn = (order) => MARKET_ENTERED.some((field) => order[field]);
+
 const isApproved = (value) => /^(y|yes|approved)/i.test(String(value || "").trim());
 
 const earliest = (orders) =>
@@ -31,7 +37,9 @@ export function marketSummary(market, todayIso) {
 
   let status;
   if (market.unreadable) status = "unreadable";
-  else if (confirmed + pending === 0) status = "notStarted";
+  // Orders entered but the confirmation column never answered is its own
+  // state: the market has done the work, and a PM needs to chase the answer.
+  else if (confirmed + pending === 0) status = orders.some(isFilledIn) ? "unconfirmed" : "notStarted";
   else status = pending === 0 ? "confirmed" : "pending";
 
   const urgencies = orders.map((o) => orderUrgency(o, todayIso));
@@ -61,18 +69,19 @@ export function fileTotals(file, todayIso) {
     orders: summaries.reduce((n, m) => n + m.total, 0),
     confirmed: count((m) => m.status === "confirmed"),
     pending: count((m) => m.status === "pending"),
+    unconfirmed: count((m) => m.status === "unconfirmed"),
     due: count((m) => m.urgency),
     notStarted: count((m) => m.status === "notStarted"),
   };
 }
 
 // The order a PM needs to read them in: what's late or nearly due, then what's
-// still open, then what's settled, then markets that haven't begun.
+// still open or unanswered, then what's settled, then markets that haven't begun.
 const rank = (m) => {
-  if (m.status === "unreadable") return 5;
+  if (m.status === "unreadable") return 6;
   if (m.urgency === "overdue") return 0;
   if (m.urgency === "dueSoon") return 1;
-  return { pending: 2, confirmed: 3, notStarted: 4 }[m.status];
+  return { pending: 2, unconfirmed: 3, confirmed: 4, notStarted: 5 }[m.status];
 };
 
 export function sortMarkets(summaries) {

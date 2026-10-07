@@ -9,11 +9,12 @@ import { formatDay, pillClass, STATUS_CLASS, STATUS_LABEL, URGENCY_TEXT } from "
 const FILTERS = [
   { id: "confirmed", label: "Confirmed", test: (m) => m.status === "confirmed", on: "bg-[#1cc1a5] text-white border-[#1cc1a5]" },
   { id: "pending", label: "Pending", test: (m) => m.status === "pending", on: "bg-amber-500 text-white border-amber-500" },
+  { id: "unconfirmed", label: "Unconfirmed", test: (m) => m.status === "unconfirmed", on: "bg-violet-600 text-white border-violet-600" },
   { id: "due", label: "Due or overdue", test: (m) => !!m.urgency, on: "bg-rose-600 text-white border-rose-600" },
   { id: "notStarted", label: "Not started", test: (m) => m.status === "notStarted", on: "bg-slate-600 text-white border-slate-600" },
 ];
 
-const STATUS_ORDER = { pending: 0, confirmed: 1, notStarted: 2, unreadable: 3 };
+const STATUS_ORDER = { pending: 0, unconfirmed: 1, confirmed: 2, notStarted: 3, unreadable: 4 };
 const COMPARE = {
   name: (a, b) => a.name.localeCompare(b.name),
   status: (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.name.localeCompare(b.name),
@@ -54,7 +55,7 @@ export default function MarketList({ file, today, onOpen }) {
   const onSort = (by) =>
     setSort((s) => (s?.by !== by ? { by, desc: false } : s.desc ? null : { by, desc: true }));
 
-  const counts = { confirmed: totals.confirmed, pending: totals.pending, due: totals.due, notStarted: totals.notStarted };
+  const counts = { confirmed: totals.confirmed, pending: totals.pending, unconfirmed: totals.unconfirmed, due: totals.due, notStarted: totals.notStarted };
 
   return (
     <div className="bg-white border border-[#dce4ec] rounded-2xl shadow-sm overflow-hidden">
