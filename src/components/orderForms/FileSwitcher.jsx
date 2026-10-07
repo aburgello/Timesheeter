@@ -23,7 +23,7 @@ export default function FileSwitcher({ files, selectedId, onSelect, onRemove, on
               <span className="min-w-0">
                 <span className="block text-sm font-bold truncate max-w-[260px]">{file.name.replace(/\.xlsx$/i, "")}</span>
                 <span className={`block text-[11px] ${active ? "text-white/60" : "text-[#768994]"}`}>
-                  {file.kind === "print" ? "Print" : "Motion"} · {loadedAgo(file.loadedAt)}
+                  {file.kind === "print" ? "Print" : "Motion"} · {file.source ? "from Google" : "dropped file"} · {loadedAgo(file.loadedAt)}
                 </span>
               </span>
             </button>

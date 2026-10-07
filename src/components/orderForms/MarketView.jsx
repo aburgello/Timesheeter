@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import { marketSummary, orderUrgency } from "../../lib/orderForms/status";
 import OrderPanel from "./OrderPanel";
 import { pillClass, STATUS_CLASS, STATUS_LABEL } from "./format";
@@ -39,6 +39,18 @@ export default function MarketView({ market, kind, today, onBack }) {
         <p className="ml-auto text-sm text-[#768994]">
           {summary.total} {summary.total === 1 ? "order" : "orders"} · {summary.confirmed} confirmed
         </p>
+        {market.sheetUrl && (
+          <a
+            href={market.sheetUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={market.sheetName}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#dce4ec] hover:border-[#12a0e1] text-sm font-bold text-[#122027] transition-colors"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            Open sheet
+          </a>
+        )}
       </div>
 
       {orders.length === 0 ? (
@@ -51,7 +63,7 @@ export default function MarketView({ market, kind, today, onBack }) {
               const urgency = orderUrgency(o, today);
               return (
                 <button
-                  key={o.row}
+                  key={i}
                   data-order={i}
                   role="option"
                   aria-selected={active}

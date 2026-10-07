@@ -188,6 +188,24 @@ export function parseMarket(name, rows) {
   return { name, code: codeFromTab(name), kind: kindOf(rows, headerAt, cols), unreadable: null, orders };
 }
 
+// One market from that market's own workbook (the per-film sheet in its Drive
+// folder), named as the index names it. Usually one order tab beside the
+// helper tabs; if a market has split its orders over several, they are read
+// together and each order says which tab it came from.
+export function marketFromSheets(sheets, marketName) {
+  const tabs = Object.keys(sheets).filter(isMarketTab).map((name) => parseMarket(name, sheets[name] || []));
+  if (!tabs.length) return { ...unreadable(marketName, "No order form tab in this sheet"), code: "" };
+  const readable = tabs.filter((t) => !t.unreadable);
+  if (!readable.length) return { ...unreadable(marketName, tabs[0].unreadable), code: "" };
+  return {
+    name: marketName,
+    code: readable[0].code,
+    kind: readable[0].kind,
+    unreadable: null,
+    orders: readable.flatMap((t) => t.orders.map((o) => ({ ...o, tab: t.name }))),
+  };
+}
+
 // null when the workbook holds no readable market tab: it isn't an order form.
 export function parseWorkbook(sheets, fileName, now = new Date()) {
   const markets = Object.keys(sheets)

@@ -1,20 +1,25 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ClipboardList, FileSpreadsheet } from "lucide-react";
+import { ClipboardList, FileSpreadsheet, Loader2, RefreshCw } from "lucide-react";
 import PageHeader from "./shared/PageHeader";
 import DropZone from "./orderForms/DropZone";
 import FileSwitcher from "./orderForms/FileSwitcher";
+import GoogleSource, { googleMessage } from "./orderForms/GoogleSource";
 import MarketList from "./orderForms/MarketList";
 import MarketView from "./orderForms/MarketView";
 import { readXlsx } from "../lib/orderForms/readXlsx";
 import { parseWorkbook } from "../lib/orderForms/parseWorkbook";
 import { listFiles, saveFile, removeFile } from "../lib/orderForms/store";
+import { connectGoogle, googleConfigured, googleConnected } from "../lib/orderForms/googleApi";
+import { loadFilm } from "../lib/orderForms/loadFilm";
 import { confirmAction } from "../lib/confirm";
 import { notify } from "../lib/toast";
 import { isoToday } from "../utils/dates";
 
-// The PMs' readable view of the Paramount order forms. A workbook dropped here
-// is read in the browser and kept in this browser only (see lib/orderForms/
-// store.js for why it never goes to Supabase). Read-only: nothing here writes
+// The PMs' readable view of the Paramount order forms. Orders come in two
+// ways: a film read live from Google (every market's sheet, found through the
+// index workbook), or a workbook dropped onto the page. Either way they are
+// parsed in the browser and kept in this browser only (see lib/orderForms/
+// store.js for why they never go to Supabase). Read-only: nothing here writes
 // to Google or Wrike.
 
 // `#orderforms/<fileId>/<market>` — the open file and market live in the hash,
@@ -29,10 +34,14 @@ const hashFor = (fileId, market) =>
 
 const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
 
+const readAt = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
 export default function OrderForms() {
   const [files, setFiles] = useState(null); // null until the store has answered
   const [view, setView] = useState(readHash);
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(null); // { done, total }
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
   const dragDepth = useRef(0);
@@ -57,6 +66,24 @@ export default function OrderForms() {
   const file = files?.find((f) => f.id === view.fileId) || files?.[0] || null;
   const market = file && view.market ? file.markets.find((m) => m.name === view.market && !m.unreadable) : null;
 
+  // Take a parsed file into the page and the store. `replaces` is the loaded
+  // file it supersedes (same name), already agreed to by the caller.
+  const adopt = useCallback(async (parsed, replaces, keepMarket) => {
+    if (replaces) await removeFile(replaces.id);
+    const kept = await saveFile(parsed);
+    setFiles((prev) => [parsed, ...(prev || []).filter((f) => f.id !== replaces?.id)]);
+    go(parsed.id, keepMarket || null, { replace: !!replaces });
+    const readable = parsed.markets.filter((m) => !m.unreadable).length;
+    if (kept) notify(`${readable} of ${parsed.markets.length} markets read`, "success");
+    else notify("Loaded for now. This browser couldn't store it, so it won't be here after a reload.", "error");
+  }, [go]);
+
+  const confirmReplace = (name) => confirmAction({
+    title: "Replace what's loaded?",
+    message: `${name} is already loaded. Replace it with this newer read?`,
+    confirmLabel: "Replace",
+  });
+
   const addFile = useCallback(async (picked) => {
     setError("");
     setBusy(true);
@@ -67,20 +94,8 @@ export default function OrderForms() {
         return;
       }
       const existing = (files || []).find((f) => f.name === parsed.name);
-      if (existing) {
-        const ok = await confirmAction({
-          title: "Replace this file?",
-          message: `${parsed.name} is already loaded. Replace it with the one you just dropped?`,
-          confirmLabel: "Replace",
-        });
-        if (!ok) return;
-        await removeFile(existing.id);
-      }
-      const kept = await saveFile(parsed);
-      setFiles((prev) => [parsed, ...(prev || []).filter((f) => f.id !== existing?.id)]);
-      go(parsed.id, null);
-      if (kept) notify(`${parsed.markets.length} markets loaded`, "success");
-      else notify("Loaded for now. This browser couldn't store it, so it won't be here after a reload.", "error");
+      if (existing && !(await confirmReplace(parsed.name))) return;
+      await adopt(parsed, existing);
     } catch (err) {
       // Only the reason is kept: a workbook's contents never go into an error.
       setError(err.message === "not-xlsx"
@@ -89,12 +104,39 @@ export default function OrderForms() {
     } finally {
       setBusy(false);
     }
-  }, [files, go]);
+  }, [files, adopt]);
+
+  const addFilm = useCallback(async (loaded) => {
+    const existing = (files || []).find((f) => f.name === loaded.name);
+    if (existing && !(await confirmReplace(loaded.name))) return;
+    await adopt(loaded, existing);
+  }, [files, adopt]);
+
+  // Read a Google-loaded film again from the same index tab. Asking to refresh
+  // is the confirmation, so the old read is replaced without a second prompt.
+  const refresh = async () => {
+    const current = file;
+    setError("");
+    setRefreshing({ done: 0, total: 0 });
+    try {
+      if (!googleConnected()) await connectGoogle();
+      const loaded = await loadFilm({
+        ...current.source,
+        onProgress: (done, total) => setRefreshing({ done, total }),
+      });
+      if (loaded) await adopt(loaded, current, market?.name);
+      else setError("That tab of the index no longer lists any markets.");
+    } catch (err) {
+      setError(googleMessage(err));
+    } finally {
+      setRefreshing(null);
+    }
+  };
 
   const dropFile = async (target) => {
     const ok = await confirmAction({
-      title: "Remove this file?",
-      message: `${target.name} will be removed from this browser. The Google Sheet isn't affected.`,
+      title: "Remove this from the page?",
+      message: `${target.name} will be removed from this browser. Nothing in Google is affected.`,
       confirmLabel: "Remove",
       danger: true,
     });
@@ -123,9 +165,10 @@ export default function OrderForms() {
     dragDepth.current = 0;
     setDragging(false);
     const dropped = e.dataTransfer.files?.[0];
-    if (dropped && !busy) addFile(dropped);
+    if (dropped && !working) addFile(dropped);
   };
 
+  const working = busy || googleBusy || !!refreshing;
   const empty = files && files.length === 0;
 
   return (
@@ -146,21 +189,36 @@ export default function OrderForms() {
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-6 space-y-4">
         {files === null && <div className="h-64 rounded-2xl bg-white/60 border border-[#dce4ec] animate-pulse" />}
 
+        {files && googleConfigured() && <GoogleSource onLoaded={addFilm} onBusy={setGoogleBusy} />}
+
         {empty && <DropZone onFile={addFile} busy={busy} dragging={dragging} error={error} />}
 
         {files && files.length > 0 && (
           <>
-            <FileSwitcher
-              files={files}
-              selectedId={file?.id}
-              onSelect={(id) => go(id, null)}
-              onRemove={dropFile}
-              onFile={addFile}
-              busy={busy}
-            />
+            <div className="flex flex-wrap items-stretch gap-2">
+              <FileSwitcher
+                files={files}
+                selectedId={file?.id}
+                onSelect={(id) => go(id, null)}
+                onRemove={dropFile}
+                onFile={addFile}
+                busy={working}
+              />
+              {file?.source && (
+                <button
+                  onClick={refresh}
+                  disabled={working}
+                  title={`Read from Google at ${readAt(file.loadedAt)}`}
+                  className="ml-auto flex items-center gap-2 px-4 rounded-xl bg-white border border-[#dce4ec] hover:border-[#12a0e1] text-sm font-bold text-[#122027] transition-colors disabled:opacity-60 min-h-[52px]"
+                >
+                  {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  {refreshing ? `Reading ${refreshing.done} of ${refreshing.total || "…"}` : `Refresh · read at ${readAt(file.loadedAt)}`}
+                </button>
+              )}
+            </div>
             {error && <p role="alert" className="text-sm font-medium text-rose-600">{error}</p>}
             {market
-              ? <MarketView market={market} kind={file.kind} today={today} onBack={() => go(file.id, null)} />
+              ? <MarketView market={market} kind={market.kind || file.kind} today={today} onBack={() => go(file.id, null)} />
               : <MarketList file={file} today={today} onOpen={(name) => go(file.id, name)} />}
           </>
         )}
