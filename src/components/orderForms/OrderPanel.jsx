@@ -1,4 +1,5 @@
 import React from "react";
+import { ExternalLink } from "lucide-react";
 import { orderUrgency } from "../../lib/orderForms/status";
 import { formatDay, pillClass, STATUS_CLASS, STATUS_LABEL, URGENCY_LABEL, URGENCY_TEXT } from "./format";
 
@@ -26,7 +27,8 @@ function Group({ title, fields }) {
 
 const size = (o) => (o.width && o.height ? `${o.width} × ${o.height}${o.unit ? ` ${o.unit}` : ""}` : "");
 
-export default function OrderPanel({ order, today }) {
+// `task` is the Wrike task with this order's name, when TimeHub has it loaded.
+export default function OrderPanel({ order, task, today }) {
   const urgency = orderUrgency(order, today);
   const x = order.xyi;
   const wrikeTitle = x.title || order.deliveryName;
@@ -85,9 +87,36 @@ export default function OrderPanel({ order, today }) {
         />
         <Group title="Notes" fields={[["From the market", order.notes, true]]} />
 
+        {task && (
+          <section className="mt-4 rounded-xl bg-sky-100 border border-[#dce4ec] p-4">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <h3 className="text-[10px] font-black uppercase tracking-widest text-sky-600">In Wrike</h3>
+              {task.permalink && (
+                <a href={task.permalink} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs font-bold text-sky-600 hover:underline">
+                  <ExternalLink className="w-3 h-3" />
+                  Open task
+                </a>
+              )}
+            </div>
+            <p className="font-mono text-xs text-[#122027] break-all">{task.title}</p>
+            <dl className="grid grid-cols-2 gap-x-5 gap-y-2 mt-3">
+              {[
+                ["Status", task.customStatusName || task.status],
+                ["Assigned to", task.assignees || "Nobody yet"],
+                ["Due", formatDay(String(task.dates?.due || "").slice(0, 10), today)],
+              ].filter(([, value]) => value).map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-[11px] text-[#768994]">{label}</dt>
+                  <dd className="text-xs font-medium text-[#122027] break-words">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        )}
+
         {wrikeTitle && (
           <section className="mt-4 rounded-xl bg-slate-50 border border-[#dce4ec] p-4">
-            <h3 className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-2">Becomes Wrike task</h3>
+            <h3 className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-2">{task ? "From the sheet" : "Becomes Wrike task"}</h3>
             <p className="font-mono text-xs text-[#122027] break-all">{wrikeTitle}</p>
             <dl className="grid grid-cols-2 gap-x-5 gap-y-2 mt-3">
               {[

@@ -38,25 +38,27 @@ check("nothing to match on", pickFilmSheet(folder, "", "OOH"), null);
 check("empty folder", pickFilmSheet([], "Ebenezer", "OOH"), null);
 
 // ── A market's own workbook ───────────────────────────────────────────────────
-const HEAD = ["MARKET", "Are your orders confirmed?", "MEDIA SITE NAME", "WIDTH", "HEIGHT", "DURATION"];
+const HEAD = ["MARKET", "Are your orders confirmed?", "MEDIA SITE NAME", "WIDTH", "HEIGHT", "DURATION", "DELIVERY DEADLINE"];
 const sheet = (title, rows) => [[title], [], HEAD, ...rows];
 
 const croatia = marketFromSheets({
   _StandardSizes: [["Name", "Width"]],
-  AA_Test_Market: sheet("MARKET - [MOTION] - ORDER FORM", [["OV", "Y", "ignore", 1, 1, 5]]),
-  "Croatia (HRV)": sheet("CROATIA - [MOTION] - ORDER FORM", [["HR", "CONFIRMED", "Foyer", 1920, 1080, 15]]),
+  AA_Test_Market: sheet("MARKET - [MOTION] - ORDER FORM", [["OV", "Y", "ignore", 1, 1, 5, "01/11/2026"]]),
+  "Croatia (HRV)": sheet("CROATIA - [MOTION] - ORDER FORM", [["HR", "CONFIRMED", "Foyer", 1920, 1080, 15, "01/11/2026"], ["HR", "", "Lobby", 10, 20, 5, ""]]),
 }, "Croatia");
 check("named as the index names it", croatia.name, "Croatia");
 check("code from the sheet's tab", croatia.code, "HRV");
 check("orders from the market tab only", croatia.orders.map((o) => o.siteName), ["Foyer"]);
 check("kind", croatia.kind, "motion");
 check("readable", croatia.unreadable, null);
+check("rows with no deadline are counted, not listed", croatia.undated, 1);
 
 const twoTabs = marketFromSheets({
-  "Batch 1": sheet("X - [PRINT] - ORDER FORM", [["HR", "Y", "One", 10, 20, ""]]),
-  "Batch 2": sheet("X - [PRINT] - ORDER FORM", [["HR", "N", "Two", 30, 40, ""]]),
+  "Batch 1": sheet("X - [PRINT] - ORDER FORM", [["HR", "Y", "One", 10, 20, "", "01/11/2026"]]),
+  "Batch 2": sheet("X - [PRINT] - ORDER FORM", [["HR", "N", "Two", 30, 40, "", "02/11/2026"], ["HR", "", "Three", 1, 1, "", ""]]),
 }, "Croatia");
 check("several order tabs are read together", twoTabs.orders.map((o) => [o.siteName, o.tab]), [["One", "Batch 1"], ["Two", "Batch 2"]]);
+check("undated rows add up across tabs", twoTabs.undated, 1);
 
 check("a workbook with no order form", marketFromSheets({ Notes: [["hello"]] }, "Croatia").unreadable, "No header row found");
 check("a workbook with only helper tabs", marketFromSheets({ _Control: [["x"]] }, "Croatia").unreadable, "No order form tab in this sheet");

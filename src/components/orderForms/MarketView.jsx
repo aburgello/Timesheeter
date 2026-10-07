@@ -1,17 +1,20 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { marketSummary, orderUrgency } from "../../lib/orderForms/status";
+import { findTask } from "../../lib/orderForms/wrikeMatch";
 import OrderPanel from "./OrderPanel";
 import MarketFlag from "./MarketFlag";
-import { pillClass, STATUS_CLASS, STATUS_LABEL } from "./format";
+import { pillClass, undatedNote, STATUS_CLASS, STATUS_LABEL } from "./format";
 
 // One market: its orders down the left, the selected order's details on the
 // right. Up and down step through the list, the way a PM checks a market.
-export default function MarketView({ market, kind, today, onBack }) {
+export default function MarketView({ market, kind, today, wrikeIndex, onBack }) {
   const orders = market.orders;
   const [selected, setSelected] = useState(0);
   const listRef = useRef(null);
   const summary = marketSummary(market, today);
+  const tasks = orders.map((o) => findTask(wrikeIndex, o));
+  const inWrike = tasks.filter(Boolean).length;
 
   useEffect(() => setSelected(0), [market.name]);
 
@@ -42,6 +45,8 @@ export default function MarketView({ market, kind, today, onBack }) {
         <span className={`${pillClass} ${STATUS_CLASS[summary.status]}`}>{STATUS_LABEL[summary.status]}</span>
         <p className="ml-auto text-sm text-[#768994]">
           {summary.total} {summary.total === 1 ? "order" : "orders"} · {summary.confirmed} confirmed
+          {inWrike > 0 && ` · ${inWrike} in Wrike`}
+          {summary.undated > 0 && ` · ${undatedNote(summary.undated)}`}
         </p>
         {market.sheetUrl && (
           <a
@@ -58,7 +63,10 @@ export default function MarketView({ market, kind, today, onBack }) {
       </div>
 
       {orders.length === 0 ? (
-        <p className="px-5 py-16 text-center text-sm text-[#768994]">This market hasn't added any orders yet.</p>
+        <p className="px-5 py-16 text-center text-sm text-[#768994]">
+          No orders with a delivery deadline yet.
+          {summary.undated > 0 && ` ${undatedNote(summary.undated)}.`}
+        </p>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(360px,440px)]">
           <div ref={listRef} role="listbox" aria-label={`${market.name} orders`} onKeyDown={onKeyDown} className="lg:border-r border-[#dce4ec]">
@@ -88,6 +96,7 @@ export default function MarketView({ market, kind, today, onBack }) {
                     {kind === "print" ? o.type : o.duration && `${o.duration}s`}
                   </span>
                   {urgency && <span className={`w-2 h-2 rounded-full shrink-0 ${urgency === "overdue" ? "bg-rose-500" : "bg-amber-500"}`} title={urgency === "overdue" ? "Overdue" : "Due this week"} />}
+                  {tasks[i] && <span className={`${pillClass} bg-sky-100 text-sky-600 shrink-0`}>In Wrike</span>}
                   <span className={`${pillClass} ${STATUS_CLASS[o.status]} shrink-0`}>{STATUS_LABEL[o.status]}</span>
                 </button>
               );
@@ -95,7 +104,7 @@ export default function MarketView({ market, kind, today, onBack }) {
           </div>
           <div className="bg-white">
             {/* Stays in view while a long order list scrolls beside it. */}
-            <div className="lg:sticky lg:top-4">{order && <OrderPanel order={order} today={today} />}</div>
+            <div className="lg:sticky lg:top-4">{order && <OrderPanel order={order} task={tasks[selected]} today={today} />}</div>
           </div>
         </div>
       )}

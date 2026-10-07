@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ClipboardList, FileSpreadsheet, Loader2, RefreshCw } from "lucide-react";
 import PageHeader from "./shared/PageHeader";
 import DropZone from "./orderForms/DropZone";
@@ -11,6 +11,7 @@ import { parseWorkbook } from "../lib/orderForms/parseWorkbook";
 import { listFiles, saveFile, removeFile } from "../lib/orderForms/store";
 import { connectGoogle, googleConfigured, googleConnected } from "../lib/orderForms/googleApi";
 import { loadFilm } from "../lib/orderForms/loadFilm";
+import { indexTasks } from "../lib/orderForms/wrikeMatch";
 import { confirmAction } from "../lib/confirm";
 import { notify } from "../lib/toast";
 import { isoToday } from "../utils/dates";
@@ -36,7 +37,9 @@ const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes("Files"
 
 const readAt = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-export default function OrderForms() {
+// wrikeData is the app's already-loaded Wrike tasks, used only to mark orders
+// that exist there. See lib/orderForms/wrikeMatch.js for what it can't see.
+export default function OrderForms({ wrikeData }) {
   const [files, setFiles] = useState(null); // null until the store has answered
   const [view, setView] = useState(readHash);
   const [busy, setBusy] = useState(false);
@@ -47,6 +50,7 @@ export default function OrderForms() {
   const [error, setError] = useState("");
   const dragDepth = useRef(0);
   const today = isoToday();
+  const wrikeIndex = useMemo(() => indexTasks(wrikeData), [wrikeData]);
 
   useEffect(() => {
     listFiles().then(setFiles);
@@ -222,8 +226,8 @@ export default function OrderForms() {
             </div>
             {error && <p role="alert" className="text-sm font-medium text-rose-600">{error}</p>}
             {market
-              ? <MarketView market={market} kind={market.kind || file.kind} today={today} onBack={() => go(file.id, null)} />
-              : <MarketList file={file} today={today} onOpen={(name) => go(file.id, name)} />}
+              ? <MarketView market={market} kind={market.kind || file.kind} today={today} wrikeIndex={wrikeIndex} onBack={() => go(file.id, null)} />
+              : <MarketList file={file} today={today} wrikeIndex={wrikeIndex} onOpen={(name) => go(file.id, name)} />}
           </>
         )}
       </div>

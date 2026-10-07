@@ -78,6 +78,9 @@ const germany = parseMarket("Germany (GER)", motionSheet([
   motionRow({ confirmed: "CONFIRMED", deadline: 46309, site: "Cinema foyer", width: 1920, height: 1080, pm: "Sam" }),
   motionRow({ width: "", height: "", site: "" }),
   motionRow({ width: "", height: "", site: "Station totem", confirmed: "PENDING", deadline: "21/10/2026" }),
+  motionRow({ width: 1080, height: 1920 }),
+  motionRow({ site: "Airport banner", width: 5760, height: 1080 }),
+  motionRow({ confirmed: "CONFIRMED", width: 1080, height: 1920 }),
   [],
 ]));
 
@@ -85,7 +88,9 @@ check("market name", germany.name, "Germany (GER)");
 check("market code from the tab name", germany.code, "GER");
 check("market readable", germany.unreadable, null);
 check("market kind", germany.kind, "motion");
-check("blank template rows are ignored", germany.orders.length, 2);
+check("only rows with a delivery deadline are orders", germany.orders.length, 2);
+check("a pre-filled size with no deadline is a template row, not an order", germany.orders.some((o) => o.width === "1080"), false);
+check("rows the market started but gave no deadline are counted", germany.undated, 2);
 check("order keeps its sheet row", germany.orders.map((o) => o.row), [4, 6]);
 check("order status", germany.orders.map((o) => o.status), ["confirmed", "pending"]);
 check("order fields", [germany.orders[0].siteName, germany.orders[0].width, germany.orders[0].height, germany.orders[0].unit, germany.orders[0].duration],
@@ -93,7 +98,7 @@ check("order fields", [germany.orders[0].siteName, germany.orders[0].width, germ
 check("serial deadline", germany.orders[0].deliveryDeadline, "2026-10-14");
 check("text deadline", germany.orders[1].deliveryDeadline, "2026-10-21");
 check("placeholders cleaned", [germany.orders[0].liveDate, germany.orders[0].mediaApproved, germany.orders[0].format], ["", "", ""]);
-check("a site name alone makes an order", germany.orders[1].siteName, "Station totem");
+check("a deadline makes an order even with no size", germany.orders[1].siteName, "Station totem");
 check("market code column", germany.orders[0].marketCode, "DE");
 check("delivery name", germany.orders[0].deliveryName, "ABCD_INTL__DINTH__1920x1080px_15s_DE");
 check("xyi block", [germany.orders[0].xyi.title, germany.orders[0].xyi.workflow, germany.orders[0].xyi.customStatus, germany.orders[0].xyi.pm, germany.orders[0].xyi.department, germany.orders[0].xyi.xyiFormat, germany.orders[0].xyi.quote],
@@ -104,7 +109,7 @@ check("xyi Format is not the market's FORMAT / ANIMATION", germany.orders[0].for
 
 // A column inserted at the front must not shift anything.
 const shifted = parseMarket("France (FRA)", motionSheet([
-  motionRow({ site: "Mall wall", width: 3840, height: 1080 }),
+  motionRow({ site: "Mall wall", width: 3840, height: 1080, deadline: 46309 }),
 ]).map((r) => ["extra", ...r]));
 check("inserted column: header row no longer starts the sheet", shifted.unreadable, null);
 check("inserted column: fields still found", [shifted.orders[0].siteName, shifted.orders[0].width, shifted.orders[0].xyi.workflow], ["Mall wall", "3840", "Studio"]);
@@ -138,6 +143,8 @@ check("no header row", [noHeader.unreadable, noHeader.orders.length], ["No heade
 
 const noWidth = parseMarket("Japan (JPN)", [["MARKET", "Are your orders confirmed?", "HEIGHT"], ["JP", "Y", 10]]);
 check("missing required column", noWidth.unreadable, "Missing column: Width");
+const noDeadline = parseMarket("Japan (JPN)", [["MARKET", "Are your orders confirmed?", "WIDTH", "HEIGHT"], ["JP", "Y", 10, 20]]);
+check("no deadline column: nothing could count as an order", noDeadline.unreadable, "Missing column: Delivery deadline");
 
 const file = parseWorkbook({
   _Control: [["Film Code:", "ABCD"]],
@@ -182,8 +189,8 @@ check("an empty merged cell fills nothing", emptyMerge, [["", "a"], ["", "b"]]);
 check("no merges", fillMergedDown([["a"]], undefined), [["a"]]);
 
 const merged = motionSheet([
-  motionRow({ site: "Henderson IN", width: 1152, height: 384 }),
-  motionRow({ site: "Henderson OUT", width: "", height: "" }),
+  motionRow({ site: "Henderson IN", width: 1152, height: 384, deadline: 46309 }),
+  motionRow({ site: "Henderson OUT", width: "", height: "", deadline: 46309 }),
 ]);
 fillMergedDown(merged, [{ s: { r: 3, c: 10 }, e: { r: 4, c: 10 } }, { s: { r: 3, c: 11 }, e: { r: 4, c: 11 } }]);
 check("a site under a merged size has that size",

@@ -58,4 +58,8 @@ export const STATUS_CLASS = {
 export const URGENCY_LABEL = { overdue: "Overdue", dueSoon: "Due this week" };
 export const URGENCY_TEXT = { overdue: "text-rose-600", dueSoon: "text-amber-700" };
 
+// For rows the market started but gave no delivery deadline, which aren't
+// listed as orders.
+export const undatedNote = (n) => `${n} ${n === 1 ? "row has" : "rows have"} details but no delivery deadline`;
+
 export const pillClass = "inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold whitespace-nowrap";

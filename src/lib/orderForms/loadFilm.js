@@ -18,7 +18,7 @@ const REASONS = {
   failed: "Google couldn't be reached for this market",
 };
 
-const missing = (name, reason, extra = {}) => ({ name, code: "", kind: null, unreadable: reason, orders: [], ...extra });
+const missing = (name, reason, extra = {}) => ({ name, code: "", kind: null, unreadable: reason, orders: [], undated: 0, ...extra });
 
 async function loadMarket({ name, link }, contains, medium) {
   const driveId = driveIdFromLink(link);

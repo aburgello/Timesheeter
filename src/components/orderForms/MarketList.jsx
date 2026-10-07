@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import { marketSummary, fileTotals, sortMarkets } from "../../lib/orderForms/status";
+import { countInWrike } from "../../lib/orderForms/wrikeMatch";
 import MarketFlag from "./MarketFlag";
-import { formatDay, pillClass, STATUS_CLASS, STATUS_LABEL, URGENCY_TEXT } from "./format";
+import { formatDay, undatedNote, pillClass, STATUS_CLASS, STATUS_LABEL, URGENCY_TEXT } from "./format";
 
 // The overview: every market in the file as one row, so a PM can see who has
 // confirmed and what's due without opening a tab per country.
@@ -23,13 +24,16 @@ const COMPARE = {
   deadline: (a, b) => (a.nextDeadline || "9999").localeCompare(b.nextDeadline || "9999"),
 };
 
-const GRID = "grid grid-cols-[minmax(0,1.4fr)_120px_minmax(0,1fr)_120px_90px_20px] gap-4 items-center px-5";
+const GRID = "grid grid-cols-[minmax(0,1.4fr)_120px_minmax(0,1fr)_120px_90px_90px_20px] gap-4 items-center px-5";
 
-function MarketName({ name }) {
+function MarketName({ name, undated = 0 }) {
   return (
     <span className="flex items-center gap-2.5 min-w-0">
       <MarketFlag name={name} />
-      <span className="font-bold text-[#122027] truncate">{name}</span>
+      <span className="min-w-0">
+        <span className="block font-bold text-[#122027] truncate">{name}</span>
+        {undated > 0 && <span className="block text-[11px] text-[#768994] truncate">{undatedNote(undated)}</span>}
+      </span>
     </span>
   );
 }
@@ -45,13 +49,19 @@ function SortHeader({ id, sort, onSort, children }) {
   );
 }
 
-export default function MarketList({ file, today, onOpen }) {
+export default function MarketList({ file, today, wrikeIndex, onOpen }) {
   const [filter, setFilter] = useState(null);
   // null = the default order (what needs attention first).
   const [sort, setSort] = useState(null);
 
   const totals = useMemo(() => fileTotals(file, today), [file, today]);
   const summaries = useMemo(() => sortMarkets(file.markets.map((m) => marketSummary(m, today))), [file, today]);
+
+  // How many of each market's orders are already tasks in Wrike.
+  const inWrike = useMemo(
+    () => new Map(file.markets.map((m) => [m.name, countInWrike(wrikeIndex, m.orders)])),
+    [file, wrikeIndex]
+  );
 
   const rows = useMemo(() => {
     const test = FILTERS.find((f) => f.id === filter)?.test;
@@ -94,6 +104,7 @@ export default function MarketList({ file, today, onOpen }) {
         <span>Orders confirmed</span>
         <SortHeader id="deadline" sort={sort} onSort={onSort}>Next deadline</SortHeader>
         <span>Media ok</span>
+        <span title="Orders whose task name matches a Wrike task TimeHub has loaded. A task it hasn't loaded doesn't show.">In Wrike</span>
         <span />
       </div>
 
@@ -107,7 +118,7 @@ export default function MarketList({ file, today, onOpen }) {
             <div key={m.name} className={`${GRID} py-3 border-b border-slate-100 last:border-b-0 text-sm`}>
               <MarketName name={m.name} />
               <span><span className={`${pillClass} ${STATUS_CLASS.unreadable}`}>{STATUS_LABEL.unreadable}</span></span>
-              <span className="col-span-4 text-[#768994] truncate">{m.unreadable}</span>
+              <span className="col-span-5 text-[#768994] truncate">{m.unreadable}</span>
             </div>
           );
         }
@@ -118,7 +129,7 @@ export default function MarketList({ file, today, onOpen }) {
             onClick={() => onOpen(m.name)}
             className={`${GRID} w-full py-3 border-b border-slate-100 last:border-b-0 text-sm text-left hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 transition-colors group`}
           >
-            <MarketName name={m.name} />
+            <MarketName name={m.name} undated={m.undated} />
             <span><span className={`${pillClass} ${STATUS_CLASS[m.status]}`}>{STATUS_LABEL[m.status]}</span></span>
             <span className="flex items-center gap-3 min-w-0">
               <span className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
@@ -132,6 +143,9 @@ export default function MarketList({ file, today, onOpen }) {
             </span>
             <span className={`tabular-nums ${m.total ? "text-[#122027]" : "text-[#b6c3cc]"}`}>
               {m.total ? `${m.mediaApproved} of ${m.total}` : "—"}
+            </span>
+            <span className={`tabular-nums ${inWrike.get(m.name) ? "text-[#122027]" : "text-[#b6c3cc]"}`}>
+              {inWrike.get(m.name) ? `${inWrike.get(m.name)} of ${m.total}` : "—"}
             </span>
             <ChevronRight className="w-4 h-4 text-[#b6c3cc] group-hover:text-[#122027] group-hover:translate-x-0.5 transition-[color,transform]" />
           </button>

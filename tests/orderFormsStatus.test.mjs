@@ -1,8 +1,9 @@
-import { orderUrgency, marketSummary, fileTotals, sortMarkets, isFilledIn } from "../src/lib/orderForms/status.js";
+import { orderUrgency, marketSummary, fileTotals, sortMarkets } from "../src/lib/orderForms/status.js";
 
 const TODAY = "2026-10-07";
-const order = (status, deliveryDeadline = "", mediaApproved = "") => ({ status, deliveryDeadline, mediaApproved });
-const market = (name, orders, unreadable = null) => ({ name, code: "", unreadable, orders });
+// Every order has a delivery deadline: that is what makes a row an order.
+const order = (status, deliveryDeadline = "2026-12-01", mediaApproved = "") => ({ status, deliveryDeadline, mediaApproved });
+const market = (name, orders, unreadable = null, undated = 0) => ({ name, code: "", unreadable, orders, undated });
 
 // ── Urgency ───────────────────────────────────────────────────────────────────
 check("due today", orderUrgency(order("pending", "2026-10-07"), TODAY), "dueSoon");
@@ -10,26 +11,22 @@ check("due in 7 days", orderUrgency(order("pending", "2026-10-14"), TODAY), "due
 check("due in 8 days is not urgent", orderUrgency(order("pending", "2026-10-15"), TODAY), null);
 check("yesterday is overdue", orderUrgency(order("unanswered", "2026-10-06"), TODAY), "overdue");
 check("confirmed is never urgent", orderUrgency(order("confirmed", "2026-10-01"), TODAY), null);
-check("no deadline is not urgent", orderUrgency(order("pending"), TODAY), null);
 check("month boundary", orderUrgency(order("pending", "2026-11-03"), "2026-10-28"), "dueSoon");
 
 // ── Market status ─────────────────────────────────────────────────────────────
-const s = (orders, unreadable) => marketSummary(market("X", orders, unreadable), TODAY);
+const s = (orders, unreadable, undated) => marketSummary(market("X", orders, unreadable, undated), TODAY);
 
-check("all unanswered: not started", s([order("unanswered"), order("unanswered")]).status, "notStarted");
 check("no orders: not started", s([]).status, "notStarted");
-check("every answered order confirmed", s([order("confirmed"), order("unanswered")]).status, "confirmed");
+check("orders in, none answered: unconfirmed", s([order("unanswered"), order("unanswered")]).status, "unconfirmed");
+check("every order confirmed: confirmed", s([order("confirmed"), order("confirmed")]).status, "confirmed");
 check("any pending: pending", s([order("confirmed"), order("pending")]).status, "pending");
+// Kazakhstan on Street Fighter: 8 confirmed, 4 never answered.
+check("some confirmed, some unanswered: pending, not confirmed",
+  s([order("confirmed"), order("confirmed"), order("unanswered")]).status, "pending");
+check("pending and unanswered: pending", s([order("pending"), order("unanswered")]).status, "pending");
 check("unreadable", s([], "No header row found").status, "unreadable");
-
-// Orders entered, confirmation column never answered.
-const entered = (fields) => ({ status: "unanswered", deliveryDeadline: "", mediaApproved: "", ...fields });
-check("template defaults alone are not filled in", isFilledIn(entered({ width: "1920", height: "1080", placement: "DINTH", duration: "15" })), false);
-check("a site name is filled in", isFilledIn(entered({ siteName: "Foyer" })), true);
-check("a deadline is filled in", isFilledIn(entered({ deliveryDeadline: "2026-10-13" })), true);
-check("entered but unanswered: unconfirmed", s([entered({ siteName: "Foyer" }), entered({})]).status, "unconfirmed");
-check("template rows only: still not started", s([entered({ width: "1920", height: "1080" })]).status, "notStarted");
-check("one answer and it is no longer unconfirmed", s([entered({ siteName: "Foyer" }), order("pending")]).status, "pending");
+check("rows without a deadline are carried through", s([], null, 3).undated, 3);
+check("a market with only undated rows has not started", s([], null, 3).status, "notStarted");
 
 const mixed = s([
   order("confirmed", "2026-10-02", "Yes"),
@@ -48,21 +45,20 @@ check("all confirmed: earliest deadline, no urgency",
   [s([order("confirmed", "2026-10-20"), order("confirmed", "2026-10-02")]).nextDeadline,
    s([order("confirmed", "2026-10-02")]).urgency],
   ["2026-10-02", null]);
-check("no deadlines at all", s([order("pending")]).nextDeadline, "");
 
 // ── File totals and default order ─────────────────────────────────────────────
 const file = {
   markets: [
-    market("Japan", [order("unanswered")]),
+    market("Japan", []),
     market("Germany", [order("confirmed", "2026-10-30")]),
     market("Italy", [order("pending", "2026-11-20")]),
     market("France", [order("pending", "2026-10-09")]),
     market("Spain", [order("pending", "2026-10-01")]),
-    market("Croatia", [{ status: "unanswered", deliveryDeadline: "2026-12-01", mediaApproved: "", siteName: "Foyer" }]),
+    market("Croatia", [order("unanswered", "2026-12-01")]),
     market("Broken", [], "No header row found"),
   ],
 };
-check("totals", fileTotals(file, TODAY), { markets: 7, orders: 6, confirmed: 1, pending: 3, unconfirmed: 1, due: 2, notStarted: 1 });
+check("totals", fileTotals(file, TODAY), { markets: 7, orders: 5, confirmed: 1, pending: 3, unconfirmed: 1, due: 2, notStarted: 1 });
 
 const sorted = sortMarkets(file.markets.map((m) => marketSummary(m, TODAY))).map((m) => m.name);
 check("default order: urgent, pending, unconfirmed, confirmed, not started, unreadable",

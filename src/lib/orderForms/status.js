@@ -17,12 +17,6 @@ export function orderUrgency(order, todayIso) {
   return order.deliveryDeadline <= addDays(todayIso, DUE_SOON_DAYS) ? "dueSoon" : null;
 }
 
-// Has the market entered anything on this row? The template ships with sizes,
-// placement and duration already in, so those don't count: a row is filled in
-// once it has something only the market could have typed.
-const MARKET_ENTERED = ["siteName", "deliveryDeadline", "liveDate", "artwork", "translations", "notes", "mediaApproved"];
-export const isFilledIn = (order) => MARKET_ENTERED.some((field) => order[field]);
-
 const isApproved = (value) => /^(y|yes|approved)/i.test(String(value || "").trim());
 
 const earliest = (orders) =>
@@ -37,10 +31,13 @@ export function marketSummary(market, todayIso) {
 
   let status;
   if (market.unreadable) status = "unreadable";
-  // Orders entered but the confirmation column never answered is its own
-  // state: the market has done the work, and a PM needs to chase the answer.
-  else if (confirmed + pending === 0) status = orders.some(isFilledIn) ? "unconfirmed" : "notStarted";
-  else status = pending === 0 ? "confirmed" : "pending";
+  else if (orders.length === 0) status = "notStarted";
+  // Orders are in but the confirmation column was never answered: the market
+  // has done the work, and a PM needs to chase the answer.
+  else if (confirmed + pending === 0) status = "unconfirmed";
+  // Confirmed means all of them. Some confirmed and some unanswered is still
+  // open, the same as an order marked pending.
+  else status = confirmed === orders.length ? "confirmed" : "pending";
 
   const urgencies = orders.map((o) => orderUrgency(o, todayIso));
   const urgency = urgencies.includes("overdue") ? "overdue" : urgencies.includes("dueSoon") ? "dueSoon" : null;
@@ -55,6 +52,7 @@ export function marketSummary(market, todayIso) {
     confirmed,
     pending,
     unanswered,
+    undated: market.undated || 0,
     mediaApproved: orders.filter((o) => isApproved(o.mediaApproved)).length,
     nextDeadline: earliest(open) || earliest(orders),
     urgency,

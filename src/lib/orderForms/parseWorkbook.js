@@ -125,7 +125,7 @@ const XYI_COLUMNS = [
   ["quote", "quote"],
 ];
 
-const REQUIRED = [["confirmed", "Confirmed"], ["width", "Width"], ["height", "Height"]];
+const REQUIRED = [["confirmed", "Confirmed"], ["width", "Width"], ["height", "Height"], ["deliveryDeadline", "Delivery deadline"]];
 const DATE_FIELDS = new Set(["deliveryDeadline", "liveDate"]);
 const XYI_DATE_FIELDS = new Set(["endDate", "marketDeadline"]);
 
@@ -164,16 +164,27 @@ function kindOf(rows, headerAt, cols) {
 
 const codeFromTab = (name) => /\(([^)]+)\)\s*$/.exec(name)?.[1] || "";
 
-const unreadable = (name, reason) => ({ name, code: codeFromTab(name), kind: null, unreadable: reason, orders: [] });
+const unreadable = (name, reason) => ({ name, code: codeFromTab(name), kind: null, unreadable: reason, orders: [], undated: 0 });
 
+// What a market types on a row, as opposed to what the template ships with
+// (size, placement, duration). Used to notice a row someone started but gave no
+// deadline.
+const MARKET_TYPED = ["siteName", "liveDate", "artwork", "translations", "notes", "mediaApproved"];
+
+// A row is an order when it has a delivery deadline: that is how the PMs tell a
+// row the market wants from the pre-filled rows the template leaves for them.
+// Returns the order, "undated" for a row with the market's typing on it but no
+// deadline, or null for a row to ignore.
 function readOrder(row, rowNumber, cols, xyiCols) {
   const order = { row: rowNumber };
   for (const [field] of COLUMNS) {
     const raw = field in cols ? row[cols[field]] : "";
     order[field] = DATE_FIELDS.has(field) ? toDeadline(raw) : cleanCell(raw);
   }
-  if (!((order.width && order.height) || order.siteName)) return null;
   order.status = orderStatus(order.confirmed);
+  if (!order.deliveryDeadline) {
+    return order.status !== "unanswered" || MARKET_TYPED.some((f) => order[f]) ? "undated" : null;
+  }
 
   order.xyi = {};
   for (const [field] of XYI_COLUMNS) {
@@ -199,11 +210,13 @@ export function parseMarket(name, rows) {
   const xyiCols = mapXyiColumns(rows[headerAt - 1], marketEnd);
 
   const orders = [];
+  let undated = 0;
   for (let i = headerAt + 1; i < rows.length; i++) {
     const order = readOrder(rows[i] || [], i + 1, cols, xyiCols);
-    if (order) orders.push(order);
+    if (order === "undated") undated++;
+    else if (order) orders.push(order);
   }
-  return { name, code: codeFromTab(name), kind: kindOf(rows, headerAt, cols), unreadable: null, orders };
+  return { name, code: codeFromTab(name), kind: kindOf(rows, headerAt, cols), unreadable: null, orders, undated };
 }
 
 // One market from that market's own workbook (the per-film sheet in its Drive
@@ -221,6 +234,7 @@ export function marketFromSheets(sheets, marketName) {
     kind: readable[0].kind,
     unreadable: null,
     orders: readable.flatMap((t) => t.orders.map((o) => ({ ...o, tab: t.name }))),
+    undated: readable.reduce((n, t) => n + t.undated, 0),
   };
 }
 
