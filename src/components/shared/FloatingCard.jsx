@@ -72,7 +72,7 @@ export function HoverLabel({ label, delay = 0, children }) {
       })}
       {rect && label && (
         <FloatingCard rect={rect} className="px-3 py-1.5 pointer-events-none max-w-[18rem]">
-          <span className="text-xs font-semibold text-slate-100">{label}</span>
+          <span className="block text-xs leading-snug font-semibold text-slate-100 [text-wrap:balance]">{label}</span>
         </FloatingCard>
       )}
     </>

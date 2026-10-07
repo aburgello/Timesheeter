@@ -92,7 +92,7 @@ export default function PullDefaultsPopover({
 
   return (
     <div className="relative" ref={wrapRef}>
-      <HoverLabel label="Choose the category your pulled rows default to, and whether markets are merged into one entry">
+      <HoverLabel label="Default category and market grouping for pulled rows">
         <button
           onClick={() => setOpen((v) => !v)}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors max-w-[220px] ${

@@ -3881,7 +3881,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             action bar, so the table's view controls cost no vertical space. */}
         <div className={`relative z-10 -mb-4 flex justify-center pointer-events-none ${selectedCount > 0 ? "hidden" : ""}`}>
           <div className="pointer-events-auto flex flex-wrap justify-center items-center gap-1 max-w-full bg-white border border-[#dce4ec] rounded-3xl sm:rounded-full shadow-md px-1.5 py-1">
-            <HoverLabel label="Merge rows with the same job number — territories & categories become subrows, raw time summed before rounding">
+            <HoverLabel label="One row per job, with its markets and categories nested underneath">
               <button
                 onClick={() => setConsolidatedView((v) => !v)}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
