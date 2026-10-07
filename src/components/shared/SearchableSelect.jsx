@@ -17,6 +17,11 @@ const SearchableSelect = ({
   // means "whatever was seen first", i.e. the oldest films.
   groupRank = null,
   alignRight = false,
+  // For a short pick-one list: it opens showing every option, in one column
+  // the width of the field. Only what is
+  // typed after that narrows it. Without this the current value is itself the
+  // filter, so a list with a choice already made opens showing that one entry.
+  showAllOnOpen = false,
   // Optional shared-dropdown props (same pattern as LegacyTimesheets)
   // When provided, only one dropdown can be open at a time across siblings.
   dropdownId,
@@ -42,9 +47,10 @@ const SearchableSelect = ({
 
   useEffect(() => setSearchTerm(value), [value]);
 
-  const filteredOptions = options.filter((opt) =>
-    opt.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const untouched = showAllOnOpen && searchTerm === value;
+  const filteredOptions = untouched
+    ? options
+    : options.filter((opt) => opt.toLowerCase().includes(searchTerm.toLowerCase()));
 
   const groupedOptions = {};
   if (isGrouped) {
@@ -150,7 +156,12 @@ const SearchableSelect = ({
           type="text"
           value={searchTerm}
           onChange={(e) => { setSearchTerm(e.target.value); openDropdown(); }}
-          onFocus={() => { if (!disabled) openDropdown(); }}
+          onFocus={(e) => {
+            if (disabled) return;
+            openDropdown();
+            // Selected, so the first keystroke replaces the current choice.
+            if (showAllOnOpen) e.target.select();
+          }}
           placeholder={placeholder}
           disabled={disabled}
           className="w-full py-2.5 px-2 bg-transparent text-sm text-[#122027] outline-none placeholder:text-[#768994]"
@@ -165,7 +176,7 @@ const SearchableSelect = ({
 
       {isOpen && !disabled && (
         <div
-          className={`absolute top-full mt-2 bg-white/95 backdrop-blur-xl border border-[#dce4ec] rounded-xl shadow-xl z-[999999] max-h-80 overflow-y-auto overscroll-contain animate-in fade-in slide-in-from-top-2 duration-200 w-full sm:min-w-[600px] md:min-w-[750px] lg:min-w-[900px] ${
+          className={`absolute top-full mt-2 bg-white/95 backdrop-blur-xl border border-[#dce4ec] rounded-xl shadow-xl z-[999999] max-h-80 overflow-y-auto overscroll-contain animate-in fade-in slide-in-from-top-2 duration-200 w-full ${showAllOnOpen ? "" : "sm:min-w-[600px] md:min-w-[750px] lg:min-w-[900px]"} ${
             alignRight ? "right-0" : "left-0"
           }`}
         >
@@ -207,7 +218,7 @@ const SearchableSelect = ({
                 </div>
               ))
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1 p-2">
+              <div className={`grid grid-cols-1 gap-1 p-2 ${showAllOnOpen ? "" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
                 {filteredOptions.map((opt, i) => (
                   <button
                     type="button"

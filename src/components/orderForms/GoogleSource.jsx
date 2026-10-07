@@ -168,6 +168,7 @@ export default function GoogleSource({ onLoaded, onBusy }) {
                   if (known) setContains(filmFromTab(picked).film);
                 }}
                 placeholder="Pick a film"
+                showAllOnOpen
                 icon={Film}
                 disabled={busy}
               />
