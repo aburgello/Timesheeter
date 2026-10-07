@@ -473,46 +473,45 @@ export default function App() {
       {/* Sits above the quick-actions bubble rather than on top of it — this
           corner is the bubble's home, and the reminder is the transient guest. */}
       {showReminder && (
-        <div className="fixed bottom-24 right-6 z-[9998] w-80 bg-white border border-[#dce4ec] rounded-2xl shadow-xl overflow-hidden">
-          <div className="h-1 bg-gradient-to-r from-amber-400 to-orange-400" />
-          <div className="p-4">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-amber-50 rounded-xl shrink-0">
-                <Bell className="w-4 h-4 text-amber-500" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-black text-[#122027]">
-                  Time to log your hours!
-                </p>
-                <p className="text-xs text-[#768994] mt-0.5">
-                  It's 5:30 — don't forget to pull your Wrike timelogs before
-                  EOD.
-                </p>
-              </div>
-              <button
-                onClick={dismissReminder}
-                className="text-[#768994] hover:text-[#122027] shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
+        <div
+          role="status"
+          className="fixed bottom-24 right-6 z-[9998] w-80 rounded-2xl border border-white/10 bg-gradient-to-b from-[#1f2738] to-[#171e2c] shadow-2xl shadow-black/50 text-slate-300 animate-in fade-in slide-in-from-bottom-2 duration-200"
+        >
+          <div className="absolute inset-x-0 top-0 h-px rounded-t-2xl bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+          <div className="flex items-start gap-3 px-4 pt-4 pb-3.5">
+            <div className="w-9 h-9 shrink-0 rounded-xl bg-amber-400/15 text-amber-300 flex items-center justify-center">
+              <Bell className="w-[18px] h-[18px]" />
             </div>
-            <div className="flex gap-2 mt-3">
-              <button
-                onClick={() => {
-                  setActivePage("legacy");
-                  dismissReminder();
-                }}
-                className="flex-1 bg-[#12a0e1] hover:bg-[#0d8bc4] text-white text-xs font-black py-2 rounded-xl transition-colors"
-              >
-                Go to Timesheets
-              </button>
-              <button
-                onClick={dismissReminder}
-                className="px-3 text-xs font-bold text-[#768994] hover:bg-slate-50 rounded-xl border border-[#dce4ec] transition-colors"
-              >
-                Dismiss
-              </button>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-white">Time to log your hours</p>
+              <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                It's 5:30. Pull your Wrike timelogs before the end of the day.
+              </p>
             </div>
+            <button
+              onClick={dismissReminder}
+              aria-label="Dismiss"
+              className="-mt-1 -mr-1 p-1.5 shrink-0 rounded-lg text-slate-500 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex justify-end gap-2 px-4 py-3 border-t border-white/5 bg-black/20 rounded-b-2xl">
+            <button
+              onClick={dismissReminder}
+              className="px-3.5 py-2 text-xs font-bold rounded-lg text-slate-400 hover:text-white border border-white/10 hover:bg-white/5 transition-colors"
+            >
+              Dismiss
+            </button>
+            <button
+              onClick={() => {
+                setActivePage("legacy");
+                dismissReminder();
+              }}
+              className="px-3.5 py-2 text-xs font-bold rounded-lg bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-md shadow-[#12a0e1]/20 transition-colors"
+            >
+              Go to Timesheets
+            </button>
           </div>
         </div>
       )}
