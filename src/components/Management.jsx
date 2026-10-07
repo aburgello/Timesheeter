@@ -6,6 +6,7 @@ import StudioAnalytics from "./StudioAnalytics";
 import { isManager } from "../lib/access";
 import { AdminHub } from "./management/AdminHub";
 import { FilmCampaignModal } from "./management/FilmCampaignModal";
+import { FeedbackSection } from "./management/FeedbackSection";
 import { FilmStudioPicker } from "./management/FilmStudioPicker";
 import { JobsFeedSection } from "./management/JobsFeedSection";
 import { findNavItem, sectionFromHash } from "./management/nav";
@@ -329,6 +330,7 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
                       body="A live list of which staff haven't submitted their timesheet for a given week, so it's obvious at a glance who still needs to."
                     />
                   )}
+                  {activeTab === "feedback"   && <FeedbackSection />}
                   {activeTab === "people"     && <PeopleSection />}
                   {activeTab === "films"      && (
                     <SimpleListSection table="films" labelField="title" label="Films" placeholder="Film title…"

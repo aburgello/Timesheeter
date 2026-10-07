@@ -32,6 +32,7 @@ import {
   Lock,
   LayoutList,
   MessagesSquare,
+  MessageSquareWarning,
   Merge,
   X,
   AlertCircle,
@@ -75,6 +76,7 @@ import { categoryForTaskWithSource } from "../utils/categoryFamily";
 import { countryPullSource, categoryPullSource } from "../utils/pullSource";
 import PullDefaultsPopover from "./legacy/PullDefaultsPopover";
 import CommentTrailModal from "./legacy/CommentTrailModal";
+import ReportProblemModal from "./legacy/ReportProblemModal";
 import { HoverLabel } from "./shared/FloatingCard";
 
 // A grid textarea that grows to fit its text instead of hiding it.
@@ -547,6 +549,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const [modalTab, setModalTab] = useState("timesheet");
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showCommentTrail, setShowCommentTrail] = useState(false);
+  const [showReportProblem, setShowReportProblem] = useState(false);
   const [wrikeTimesheetData, setWrikeTimesheetData] = useState({});
   const [wrikeWeeklyLogs, setWrikeWeeklyLogs] = useState([]);
   const [expandedGroups, setExpandedGroups] = useState({});
@@ -2607,6 +2610,16 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         />
       )}
 
+      {showReportProblem && (
+        <ReportProblemModal
+          wrikeUserId={wrikeUserId}
+          userName={wrikeFullName}
+          page="Timesheets"
+          onClose={() => setShowReportProblem(false)}
+          onSent={() => showToast("Thanks, your report has been sent.", "success")}
+        />
+      )}
+
       {showReminderModal && (
         <div
           className="fixed inset-0 z-[100001] flex items-center justify-center p-4"
@@ -3935,6 +3948,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             </button>
           </div>
           <div className="flex gap-3 flex-wrap">
+            <button
+              onClick={() => {
+                if (!wrikeUserId) {
+                  showToast("Please connect Wrike in Profile → Settings first.");
+                  return;
+                }
+                setShowReportProblem(true);
+              }}
+              className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
+            >
+              <MessageSquareWarning className="w-4 h-4" />
+              Report a Problem
+            </button>
             <button
               onClick={() => handlePullTimes()}
               disabled={isPulling || isDayFrozen}

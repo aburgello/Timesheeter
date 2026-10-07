@@ -3,7 +3,7 @@
 //
 // Part of Administration. Split out of components/Management.jsx, which is
 // still the entry point and re-exports what other screens import.
-import { Film, Users, Tag, AlignLeft, Building2, FileBarChart, ClipboardList, Globe, Layers, TrendingUp, Banknote } from "lucide-react";
+import { Film, Users, Tag, AlignLeft, Building2, FileBarChart, ClipboardList, Globe, Layers, TrendingUp, Banknote, MessageSquareWarning } from "lucide-react";
 
 // Jobs (Setup / Book / Feed) deliberately live on the standalone Job Book
 // page now (JobBook.jsx) — Administration keeps Reports, Staff Accounts, and
@@ -17,12 +17,13 @@ export const NAV_GROUPS = [
   {
     id: "reports",
     label: "Reports",
-    desc: "Logged time by job, and who still needs to submit",
+    desc: "Logged time by job, reported problems, and who still needs to submit",
     icon: FileBarChart,
     gradient: "from-[#122027] to-[#12a0e1]",
     items: [
       { id: "project-time", label: "Project/Time", icon: FileBarChart, desc: "Every logged hour, grouped by job" },
       { id: "studio-analytics", label: "Studio Analytics", icon: TrendingUp, desc: "Throughput, workload, overdue & hours — charted" },
+      { id: "feedback", label: "Feedback", icon: MessageSquareWarning, desc: "Problems people reported from the timesheet" },
       { id: "timesheet-completion", label: "Timesheet Completion", icon: ClipboardList, desc: "Who hasn't submitted for the week", soon: true },
     ],
   },

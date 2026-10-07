@@ -370,6 +370,18 @@ create table public.job_sync_kept (
   created_at timestamp with time zone not null default now()
 );
 
+-- "Report a problem" messages from the timesheet page, read in
+-- Administration › Feedback. See migrations/20261007120000_feedback.sql.
+create table public.feedback (
+  id bigint generated always as identity primary key,
+  created_at timestamp with time zone not null default now(),
+  wrike_user_id text not null,
+  user_name text,
+  page text,
+  message text not null check (char_length(btrim(message)) between 1 and 4000),
+  resolved_at timestamp with time zone
+);
+
 -- "Working now" board indicators: one row per (person, task) they've touched.
 -- active flags the green dot; note is that person's per-task comment. Rows are
 -- garbage-collected by cleanup_board_now() (see Functions). replica identity
@@ -506,6 +518,7 @@ alter table public.wrike_tasks_cache enable row level security;
 alter table public.wrike_webhook_config enable row level security;
 alter table public.wrike_webhook_events enable row level security;
 alter table public.job_sync_kept enable row level security;
+alter table public.feedback enable row level security;
 
 -- Policies. NOTE: wrike_oauth_tokens and wrike_webhook_config have RLS enabled
 -- but NO policies on purpose -- only the service-role key (which bypasses RLS)
@@ -545,6 +558,12 @@ create policy "anon all" on public.wrike_sync_meta as permissive for all to auth
 create policy "anon all" on public.wrike_tasks_cache as permissive for all to authenticated using (true) with check (true);
 create policy "authenticated_read" on public.wrike_webhook_events as permissive for select to authenticated using (true);
 create policy "auth_all" on public.job_sync_kept as permissive for all to authenticated using (true) with check (true);
+-- Anyone signed in sends under their own id; only administrators read, mark
+-- done or delete.
+create policy "feedback_send" on public.feedback as permissive for insert to authenticated with check (wrike_user_id = caller_wrike_id());
+create policy "feedback_admin_read" on public.feedback as permissive for select to authenticated using (caller_is_admin());
+create policy "feedback_admin_update" on public.feedback as permissive for update to authenticated using (caller_is_admin()) with check (caller_is_admin());
+create policy "feedback_admin_delete" on public.feedback as permissive for delete to authenticated using (caller_is_admin());
 
 -- ---------------------------------------------------------------------------
 -- Storage buckets (objects are copied separately -- see MIGRATION.md)
