@@ -3907,8 +3907,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           </div>
         </div>
 
-        {/* Bottom Action Bar */}
-        <div className="p-4 border-t border-[#dce4ec] bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
+        {/* Bottom Action Bar. The wider right padding keeps Copy Me! out from
+            under the QuickActions bubble, which is fixed over this corner. */}
+        <div className="p-4 pr-20 border-t border-[#dce4ec] bg-slate-50 rounded-b-2xl flex flex-wrap gap-3 justify-between items-center">
           <div className="flex gap-3 flex-wrap">
             <HoverLabel label="Wrike Timesheets">
               <button
