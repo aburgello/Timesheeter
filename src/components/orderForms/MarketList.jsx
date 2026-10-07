@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import { marketSummary, fileTotals, sortMarkets } from "../../lib/orderForms/status";
+import MarketFlag from "./MarketFlag";
 import { formatDay, pillClass, STATUS_CLASS, STATUS_LABEL, URGENCY_TEXT } from "./format";
 
 // The overview: every market in the file as one row, so a PM can see who has
@@ -23,6 +24,15 @@ const COMPARE = {
 };
 
 const GRID = "grid grid-cols-[minmax(0,1.4fr)_120px_minmax(0,1fr)_120px_90px_20px] gap-4 items-center px-5";
+
+function MarketName({ name }) {
+  return (
+    <span className="flex items-center gap-2.5 min-w-0">
+      <MarketFlag name={name} />
+      <span className="font-bold text-[#122027] truncate">{name}</span>
+    </span>
+  );
+}
 
 function SortHeader({ id, sort, onSort, children }) {
   const active = sort?.by === id;
@@ -95,7 +105,7 @@ export default function MarketList({ file, today, onOpen }) {
         if (m.status === "unreadable") {
           return (
             <div key={m.name} className={`${GRID} py-3 border-b border-slate-100 last:border-b-0 text-sm`}>
-              <span className="font-bold text-[#122027] truncate">{m.name}</span>
+              <MarketName name={m.name} />
               <span><span className={`${pillClass} ${STATUS_CLASS.unreadable}`}>{STATUS_LABEL.unreadable}</span></span>
               <span className="col-span-4 text-[#768994] truncate">{m.unreadable}</span>
             </div>
@@ -108,7 +118,7 @@ export default function MarketList({ file, today, onOpen }) {
             onClick={() => onOpen(m.name)}
             className={`${GRID} w-full py-3 border-b border-slate-100 last:border-b-0 text-sm text-left hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 transition-colors group`}
           >
-            <span className="font-bold text-[#122027] truncate">{m.name}</span>
+            <MarketName name={m.name} />
             <span><span className={`${pillClass} ${STATUS_CLASS[m.status]}`}>{STATUS_LABEL[m.status]}</span></span>
             <span className="flex items-center gap-3 min-w-0">
               <span className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">

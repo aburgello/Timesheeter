@@ -1,5 +1,26 @@
 // Display helpers shared by the Order Forms screens.
 
+import { TERRITORY_FLAGS } from "../../constants";
+import { resolveCountryCode } from "../../utils/countryCodes";
+
+// Spellings the order sheets use that the app's territory list and aliases don't.
+const SHEET_NAMES = { Turkey: "Türkiye", "United Kingdom": "UK", "United States": "USA", "South Korea": "Korea" };
+
+// A market's flag from its name as the index or a tab gives it: "Croatia",
+// "Germany (GER)", "Czechia". The name is tried as written, then as a known
+// sheet spelling, then through the same aliases task names resolve with, then
+// by the code in its brackets. "" when nothing matches, so an unknown market
+// shows no flag rather than a wrong one.
+export function marketFlag(name) {
+  const text = String(name || "").trim();
+  const bare = text.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const code = /\(([^)]+)\)\s*$/.exec(text)?.[1] || "";
+  for (const candidate of [bare, SHEET_NAMES[bare], resolveCountryCode(bare), code && resolveCountryCode(code)]) {
+    if (candidate && TERRITORY_FLAGS[candidate]) return TERRITORY_FLAGS[candidate];
+  }
+  return "";
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // "2026-10-14" → "14 Oct", with the year only when it isn't this one.

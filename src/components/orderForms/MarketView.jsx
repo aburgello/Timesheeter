@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { marketSummary, orderUrgency } from "../../lib/orderForms/status";
 import OrderPanel from "./OrderPanel";
+import MarketFlag from "./MarketFlag";
 import { pillClass, STATUS_CLASS, STATUS_LABEL } from "./format";
 
 // One market: its orders down the left, the selected order's details on the
@@ -34,7 +35,10 @@ export default function MarketView({ market, kind, today, onBack }) {
           <ArrowLeft className="w-4 h-4" />
           All markets
         </button>
-        <h2 className="font-display text-xl font-bold tracking-tight text-[#122027]">{market.name}</h2>
+        <h2 className="flex items-center gap-2.5 font-display text-xl font-bold tracking-tight text-[#122027]">
+          <MarketFlag name={market.name} className="w-7 h-5" />
+          {market.name}
+        </h2>
         <span className={`${pillClass} ${STATUS_CLASS[summary.status]}`}>{STATUS_LABEL[summary.status]}</span>
         <p className="ml-auto text-sm text-[#768994]">
           {summary.total} {summary.total === 1 ? "order" : "orders"} · {summary.confirmed} confirmed

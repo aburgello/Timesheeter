@@ -60,3 +60,17 @@ check("several order tabs are read together", twoTabs.orders.map((o) => [o.siteN
 
 check("a workbook with no order form", marketFromSheets({ Notes: [["hello"]] }, "Croatia").unreadable, "No header row found");
 check("a workbook with only helper tabs", marketFromSheets({ _Control: [["x"]] }, "Croatia").unreadable, "No order form tab in this sheet");
+
+// ── Flags ─────────────────────────────────────────────────────────────────────
+import { marketFlag } from "../src/components/orderForms/format.js";
+import { TERRITORY_FLAGS } from "../src/constants.js";
+
+check("flag: a market as the index names it", marketFlag("Croatia"), TERRITORY_FLAGS.Croatia);
+check("flag: two words", marketFlag("New Zealand"), TERRITORY_FLAGS["New Zealand"]);
+check("flag: a tab name with its code", marketFlag("Germany (GER)"), TERRITORY_FLAGS.Germany);
+check("flag: surrounding spaces", marketFlag("  Spain  "), TERRITORY_FLAGS.Spain);
+check("flag: unknown market shows none", marketFlag("Atlantis"), "");
+check("flag: empty", marketFlag(""), "");
+check("flag: sheet spellings the app names differently",
+  ["Czechia (CZE)", "Turkey", "United Kingdom", "Korea (KOR)", "Georgia (CIS)"].map(marketFlag),
+  [TERRITORY_FLAGS["Czech Republic"], TERRITORY_FLAGS["Türkiye"], TERRITORY_FLAGS.UK, TERRITORY_FLAGS.Korea, TERRITORY_FLAGS.Georgia]);

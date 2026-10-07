@@ -42,6 +42,7 @@ export default function OrderForms() {
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(null); // { done, total }
+  const [signedInTick, setSignedInTick] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
   const dragDepth = useRef(0);
@@ -119,7 +120,10 @@ export default function OrderForms() {
     setError("");
     setRefreshing({ done: 0, total: 0 });
     try {
-      if (!googleConnected()) await connectGoogle();
+      if (!googleConnected()) {
+        await connectGoogle();
+        setSignedInTick((n) => n + 1);
+      }
       const loaded = await loadFilm({
         ...current.source,
         onProgress: (done, total) => setRefreshing({ done, total }),
@@ -189,7 +193,7 @@ export default function OrderForms() {
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-6 space-y-4">
         {files === null && <div className="h-64 rounded-2xl bg-white/60 border border-[#dce4ec] animate-pulse" />}
 
-        {files && googleConfigured() && <GoogleSource onLoaded={addFilm} onBusy={setGoogleBusy} />}
+        {files && googleConfigured() && <GoogleSource onLoaded={addFilm} onBusy={setGoogleBusy} signedInTick={signedInTick} />}
 
         {empty && <DropZone onFile={addFile} busy={busy} dragging={dragging} error={error} />}
 

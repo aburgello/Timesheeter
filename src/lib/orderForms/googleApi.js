@@ -1,9 +1,14 @@
 // Google sign-in and the Drive and Sheets reads behind Client Orders.
 //
 // Read-only by scope: drive.readonly lets the signed-in person's own access be
-// used to read files, and nothing else. The access token is held in memory for
-// this tab only, never stored, and goes to googleapis.com and nowhere else, so
-// the Worker and Supabase never see it or anything it reads.
+// used to read files, and nothing else. The access token goes to googleapis.com
+// and nowhere else, so the Worker and Supabase never see it or anything it
+// reads.
+//
+// The token is kept in sessionStorage so a reload doesn't sign the PM out. It
+// lasts an hour at most and goes when the tab closes. After that, the next
+// click that needs Google asks again without the account or consent screens,
+// because Google remembers the grant.
 
 // Public by design, like the Supabase anon key: it names the app to Google and
 // only works from the origins registered for it in Google Cloud.
@@ -26,7 +31,41 @@ let token = null;
 let expiresAt = 0;
 let gsiLoading = null;
 
+const TOKEN_KEY = "xyi_google_token";
+// Set once Google has granted access in this browser. It only decides whether
+// to ask Google quietly next time; it is not a credential.
+const GRANTED_KEY = "xyi_google_granted";
+
+function remember() {
+  try {
+    sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ token, expiresAt }));
+    localStorage.setItem(GRANTED_KEY, "1");
+  } catch {
+    // Storage off: the sign-in still works for this page view.
+  }
+}
+
+function forget() {
+  token = null;
+  expiresAt = 0;
+  try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* nothing stored */ }
+}
+
+try {
+  const saved = JSON.parse(sessionStorage.getItem(TOKEN_KEY) || "null");
+  if (saved?.token && saved.expiresAt > Date.now()) ({ token, expiresAt } = saved);
+  else sessionStorage.removeItem(TOKEN_KEY);
+} catch {
+  // Unreadable or no storage: start signed out.
+}
+
 export const googleConnected = () => !!token && Date.now() < expiresAt;
+
+// Drops this tab's sign-in. Google still remembers the grant; removing that is
+// done from the person's Google account.
+export function disconnectGoogle() {
+  forget();
+}
 
 function loadGsi() {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
@@ -55,23 +94,34 @@ export class GoogleError extends Error {
 
 // Opens Google's own sign-in window. Must be called from a click, or the
 // browser blocks the popup.
+//
+// Once access has been granted in this browser the request is made with an
+// empty prompt, which Google answers without showing the account chooser or
+// the consent screen when it can. If that quiet request fails, the next one
+// asks in full.
 export async function connectGoogle() {
   if (!CLIENT_ID) throw new GoogleError("not-configured");
   await loadGsi();
+  const quiet = localStorage.getItem(GRANTED_KEY) === "1";
+  const failed = (reason) => {
+    if (quiet) localStorage.removeItem(GRANTED_KEY);
+    return new GoogleError(reason);
+  };
   return new Promise((resolve, reject) => {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
       scope: SCOPE,
       callback: (res) => {
-        if (res.error || !res.access_token) return reject(new GoogleError("denied"));
+        if (res.error || !res.access_token) return reject(failed("denied"));
         token = res.access_token;
         // A minute early, so a load never starts on a token about to lapse.
         expiresAt = Date.now() + (Number(res.expires_in) - 60) * 1000;
+        remember();
         resolve();
       },
-      error_callback: (err) => reject(new GoogleError(err?.type === "popup_closed" ? "cancelled" : "popup")),
+      error_callback: (err) => reject(failed(err?.type === "popup_closed" ? "cancelled" : "popup")),
     });
-    client.requestAccessToken();
+    client.requestAccessToken(quiet ? { prompt: "" } : {});
   });
 }
 
@@ -81,7 +131,7 @@ async function gfetch(url, tries = 4) {
   if (!googleConnected()) throw new GoogleError("signed-out");
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (res.ok) return res;
-  if (res.status === 401) { token = null; throw new GoogleError("signed-out", 401); }
+  if (res.status === 401) { forget(); throw new GoogleError("signed-out", 401); }
   // Google answers 429, or 403 with a rate reason, when reads come too fast.
   const limited = res.status === 429 || (res.status === 403 && /rateLimit|quota/i.test(await res.clone().text()));
   if ((limited || res.status >= 500) && tries > 1) {

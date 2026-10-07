@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { CloudDownload, Film, Loader2, Link2 } from "lucide-react";
 import SearchableSelect from "../shared/SearchableSelect";
-import { connectGoogle, googleConnected, readIndexTabs } from "../../lib/orderForms/googleApi";
+import { connectGoogle, disconnectGoogle, googleConnected, readIndexTabs } from "../../lib/orderForms/googleApi";
 import { driveIdFromLink, indexColumns, filmFromTab } from "../../lib/orderForms/googleIndex";
 import { loadFilm } from "../../lib/orderForms/loadFilm";
 
@@ -30,7 +30,7 @@ const inputClass =
 const buttonClass =
   "flex items-center gap-2 px-4 py-2 bg-[#122027] hover:bg-[#25373c] text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0";
 
-export default function GoogleSource({ onLoaded, onBusy }) {
+export default function GoogleSource({ onLoaded, onBusy, signedInTick }) {
   const [connected, setConnected] = useState(googleConnected);
   const [indexId, setIndexId] = useState(() => localStorage.getItem(INDEX_KEY) || "");
   const [linkDraft, setLinkDraft] = useState("");
@@ -84,6 +84,23 @@ export default function GoogleSource({ onLoaded, onBusy }) {
     }
   };
 
+  // Back after a reload, still signed in: list the films again without a click.
+  useEffect(() => {
+    if (googleConnected() && indexId) openIndex(indexId);
+    // Once, on arrival. openIndex is recreated every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The page's Refresh can sign in again by itself. When it has, show the
+  // films here too instead of a Connect button that no longer applies.
+  useEffect(() => {
+    if (!signedInTick || !googleConnected()) return;
+    setConnected(true);
+    if (!index && indexId) openIndex(indexId);
+    // Runs when the page reports a sign-in, not when the index changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedInTick]);
+
   // The page holds off file drops while a film is loading.
   useEffect(() => { onBusy?.(!!progress); }, [progress, onBusy]);
 
@@ -92,6 +109,9 @@ export default function GoogleSource({ onLoaded, onBusy }) {
     setError("");
     setProgress({ done: 0, total: 0 });
     try {
+      // The hour may have run out since the films were listed. Asked for here,
+      // inside the click, so the browser lets Google's window open.
+      if (!googleConnected()) await connectGoogle();
       const file = await loadFilm({
         indexId, tab, columns: film.columns, contains,
         onProgress: (done, total) => setProgress({ done, total }),
@@ -192,6 +212,13 @@ export default function GoogleSource({ onLoaded, onBusy }) {
               className="px-2 py-2 text-xs font-bold text-[#768994] hover:text-[#122027] disabled:opacity-50"
             >
               Change index
+            </button>
+            <button
+              onClick={() => { disconnectGoogle(); setConnected(false); setIndex(null); setError(""); }}
+              disabled={busy}
+              className="px-2 py-2 text-xs font-bold text-[#768994] hover:text-[#122027] disabled:opacity-50"
+            >
+              Disconnect
             </button>
           </div>
         )}
