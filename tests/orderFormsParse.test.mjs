@@ -1,5 +1,6 @@
 import {
   cleanCell,
+  fillMergedDown,
   toDeadline,
   orderStatus,
   isMarketTab,
@@ -151,3 +152,40 @@ check("workbook: has an id", typeof file.id === "string" && file.id.length > 0, 
 
 check("workbook with no market tab", parseWorkbook({ _Control: [["x"]] }, "x.xlsx"), null);
 check("workbook where no market is readable", parseWorkbook({ "Italy (ITA)": [["notes"]] }, "x.xlsx"), null);
+
+// ── Merged cells ──────────────────────────────────────────────────────────────
+// One size merged down a run of sites is every one of those sites' size.
+const mergedRows = [
+  ["Site A", 1152, 384],
+  ["Site B", "", ""],
+  ["Site C", "", ""],
+  ["Site D", 1188, 288],
+  ["Site E"],
+];
+fillMergedDown(mergedRows, [
+  { s: { r: 0, c: 1 }, e: { r: 2, c: 1 } },
+  { s: { r: 0, c: 2 }, e: { r: 2, c: 2 } },
+  { s: { r: 3, c: 1 }, e: { r: 4, c: 1 } },
+  { s: { r: 3, c: 2 }, e: { r: 6, c: 2 } },
+]);
+check("merged down: every row gets the value", mergedRows.slice(0, 3).map((r) => [r[1], r[2]]), [[1152, 384], [1152, 384], [1152, 384]]);
+check("merged down: a short row is extended", mergedRows[4], ["Site E", 1188, 288]);
+check("merged down: rows past the end of the data are created", mergedRows[6], ["", "", 288]);
+
+const acrossOnly = [["Title", "", ""], ["x", "y", "z"]];
+fillMergedDown(acrossOnly, [{ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } }]);
+check("merged across: left alone", acrossOnly[0], ["Title", "", ""]);
+
+const emptyMerge = [["", "a"], ["", "b"]];
+fillMergedDown(emptyMerge, [{ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } }]);
+check("an empty merged cell fills nothing", emptyMerge, [["", "a"], ["", "b"]]);
+check("no merges", fillMergedDown([["a"]], undefined), [["a"]]);
+
+const merged = motionSheet([
+  motionRow({ site: "Henderson IN", width: 1152, height: 384 }),
+  motionRow({ site: "Henderson OUT", width: "", height: "" }),
+]);
+fillMergedDown(merged, [{ s: { r: 3, c: 10 }, e: { r: 4, c: 10 } }, { s: { r: 3, c: 11 }, e: { r: 4, c: 11 } }]);
+check("a site under a merged size has that size",
+  parseMarket("New Zealand (NZL)", merged).orders.map((o) => `${o.siteName} ${o.width}x${o.height}`),
+  ["Henderson IN 1152x384", "Henderson OUT 1152x384"]);

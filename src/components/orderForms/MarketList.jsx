@@ -77,7 +77,7 @@ export default function MarketList({ file, today, onOpen }) {
         </p>
       </div>
 
-      <div className={`${GRID} py-2.5 border-b border-[#dce4ec] bg-slate-50/70 text-[10px] font-black uppercase tracking-widest text-[#768994]`}>
+      <div className={`${GRID} py-2.5 border-b border-[#dce4ec] bg-slate-50/60 text-[10px] font-black uppercase tracking-widest text-[#768994]`}>
         <SortHeader id="name" sort={sort} onSort={onSort}>Market</SortHeader>
         <SortHeader id="status" sort={sort} onSort={onSort}>Status</SortHeader>
         <span>Orders confirmed</span>
@@ -93,7 +93,7 @@ export default function MarketList({ file, today, onOpen }) {
       {rows.map((m) => {
         if (m.status === "unreadable") {
           return (
-            <div key={m.name} className={`${GRID} py-3 border-b border-[#eef2f6] last:border-b-0 text-sm`}>
+            <div key={m.name} className={`${GRID} py-3 border-b border-slate-100 last:border-b-0 text-sm`}>
               <span className="font-bold text-[#122027] truncate">{m.name}</span>
               <span><span className={`${pillClass} ${STATUS_CLASS.unreadable}`}>{STATUS_LABEL.unreadable}</span></span>
               <span className="col-span-4 text-[#768994] truncate">{m.unreadable}</span>
@@ -105,7 +105,7 @@ export default function MarketList({ file, today, onOpen }) {
           <button
             key={m.name}
             onClick={() => onOpen(m.name)}
-            className={`${GRID} w-full py-3 border-b border-[#eef2f6] last:border-b-0 text-sm text-left hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 transition-colors group`}
+            className={`${GRID} w-full py-3 border-b border-slate-100 last:border-b-0 text-sm text-left hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 transition-colors group`}
           >
             <span className="font-bold text-[#122027] truncate">{m.name}</span>
             <span><span className={`${pillClass} ${STATUS_CLASS[m.status]}`}>{STATUS_LABEL[m.status]}</span></span>

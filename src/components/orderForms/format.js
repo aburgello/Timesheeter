@@ -25,7 +25,7 @@ export const STATUS_LABEL = {
 };
 
 export const STATUS_CLASS = {
-  confirmed: "bg-[#1cc1a5]/15 text-[#0b7a68]",
+  confirmed: "bg-emerald-100 text-emerald-700",
   pending: "bg-amber-100 text-amber-800",
   unanswered: "bg-slate-100 text-slate-500",
   notStarted: "bg-slate-100 text-slate-500",

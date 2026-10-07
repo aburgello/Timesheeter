@@ -10,7 +10,7 @@ function Group({ title, fields }) {
   const filled = fields.filter(([, value]) => value);
   if (!filled.length) return null;
   return (
-    <section className="py-4 border-b border-[#eef2f6] last:border-b-0">
+    <section className="py-4 border-b border-slate-100 last:border-b-0">
       <h3 className="text-[10px] font-black uppercase tracking-widest text-[#768994] mb-2.5">{title}</h3>
       <dl className="grid grid-cols-2 gap-x-5 gap-y-3">
         {filled.map(([label, value, wide]) => (

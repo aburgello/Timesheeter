@@ -27,6 +27,24 @@ export function cleanCell(value) {
   return text;
 }
 
+// Markets merge a cell down several rows to say "same for all of these" (one
+// size shared by a run of sites). A spreadsheet keeps a merged cell's value in
+// its top row only, so every other row would read as having no size. This
+// copies the value down the merge. `merges` are { s: { r, c }, e: { r, c } },
+// zero-based. Only downwards: a cell merged across columns is a heading.
+export function fillMergedDown(rows, merges) {
+  for (const { s, e } of merges || []) {
+    const value = rows[s.r]?.[s.c];
+    if (value == null || value === "") continue;
+    for (let r = s.r + 1; r <= e.r; r++) {
+      if (!rows[r]) rows[r] = [];
+      while (rows[r].length < s.c) rows[r].push("");
+      rows[r][s.c] = value;
+    }
+  }
+  return rows;
+}
+
 const pad = (n) => String(n).padStart(2, "0");
 const utcIso = (d) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 

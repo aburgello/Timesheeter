@@ -69,12 +69,12 @@ export default function MarketView({ market, kind, today, onBack }) {
                   aria-selected={active}
                   tabIndex={active ? 0 : -1}
                   onClick={() => setSelected(i)}
-                  className={`w-full flex items-center gap-3 px-5 py-3 border-b border-[#eef2f6] text-left text-sm focus:outline-none transition-colors ${
+                  className={`w-full flex items-center gap-3 px-5 py-3 border-b border-slate-100 text-left text-sm focus:outline-none transition-colors ${
                     active ? "bg-[#12a0e1]/10" : "hover:bg-slate-50 focus-visible:bg-slate-50"
                   }`}
                 >
                   <span className={`${pillClass} bg-slate-100 text-slate-600 w-16 justify-center shrink-0`}>{o.placement || "—"}</span>
-                  <span className={`flex-1 min-w-0 truncate ${active ? "font-bold text-[#0b6a96]" : "text-[#122027]"}`}>
+                  <span className={`flex-1 min-w-0 truncate ${active ? "font-bold text-sky-600" : "text-[#122027]"}`}>
                     {o.siteName || <span className="text-[#9aabb5]">No site name</span>}
                   </span>
                   <span className="text-[#768994] tabular-nums shrink-0 hidden sm:block">
