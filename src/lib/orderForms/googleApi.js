@@ -5,7 +5,11 @@
 // this tab only, never stored, and goes to googleapis.com and nowhere else, so
 // the Worker and Supabase never see it or anything it reads.
 
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+// Public by design, like the Supabase anon key: it names the app to Google and
+// only works from the origins registered for it in Google Cloud.
+const CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  "1047837005704-h04jm219u2mm5rojhpv1vo797rei5v3a.apps.googleusercontent.com";
 const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const GSI_SRC = "https://accounts.google.com/gsi/client";
 const DRIVE = "https://www.googleapis.com/drive/v3";
