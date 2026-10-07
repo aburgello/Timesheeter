@@ -68,7 +68,7 @@ export default function ReportProblemModal({ wrikeUserId, userName, page, onClos
                 Report a problem
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Something wrong, confusing or missing? It goes to the TimeHub admins with your name.
+                Something wrong, confusing or missing?
               </p>
             </div>
           </div>
@@ -92,7 +92,7 @@ export default function ReportProblemModal({ wrikeUserId, userName, page, onClos
             maxLength={MAX_LENGTH}
             rows={6}
             aria-label="What went wrong"
-            placeholder="What happened, and what did you expect instead? The job or task it was on helps."
+            placeholder="What happened, and what did you expect instead?"
             className="w-full resize-y rounded-xl bg-black/20 border border-white/10 focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 outline-none px-3 py-2.5 text-sm text-white placeholder:text-slate-500 custom-scrollbar"
           />
           {error && <p className="mt-2 text-xs text-rose-400">{error}</p>}
