@@ -1,4 +1,4 @@
-import { taskKey, indexTasks, findTask, countInWrike } from "../src/lib/orderForms/wrikeMatch.js";
+import { taskKey, indexTasks, indexParents, findTask, countInWrike, taskSummary } from "../src/lib/orderForms/wrikeMatch.js";
 
 // The sheet leaves a doubled underscore where the site name is empty; the task
 // a PM makes from it has one.
@@ -37,3 +37,21 @@ check("count per market", countInWrike(index, [
   order("SF_INTL_Trio_DOOH__512x1536px_8s_KZ"),
 ]), 2);
 check("count with nothing loaded", countInWrike(indexTasks([]), [order("SF_INTL_Trio_DOOH__1632x832px_30s_KZ")]), 0);
+
+// People and dates usually sit on the parent task, not the per-size subtask.
+const hub = { id: "P", title: "SF Motion Outdoor Bespoke KZ", subTaskIds: ["S"], assignees: "James C., AM T.", dates: { due: "2026-10-08T17:00:00" } };
+const sub = { id: "S", title: "SF_INTL_Trio_DOOH_512x1536px_8s_KZ", assignees: "", dates: { due: "2026-10-07T17:00:00" } };
+const parents = indexParents([hub, sub]);
+check("a subtask's parent is found", parents.get("S")?.id, "P");
+check("a top-level task has no parent", parents.get("P"), undefined);
+check("bare subtask: the parent's people, and both due dates", taskSummary(sub, hub), {
+  assignees: "James C., AM T.", assigneesFromParent: true, due: "2026-10-07", dueFromParent: false, parentDue: "2026-10-08",
+});
+check("the subtask's own people win", taskSummary({ ...sub, assignees: "Michael S." }, hub).assignees, "Michael S.");
+check("same due date on both is said once", taskSummary({ ...sub, dates: hub.dates }, hub).parentDue, "");
+check("undated subtask takes the parent's date", taskSummary({ ...sub, dates: {} }, hub), {
+  assignees: "James C., AM T.", assigneesFromParent: true, due: "2026-10-08", dueFromParent: true, parentDue: "",
+});
+check("no parent loaded", taskSummary(sub, undefined), {
+  assignees: "", assigneesFromParent: false, due: "2026-10-07", dueFromParent: false, parentDue: "",
+});

@@ -48,5 +48,34 @@ export function findTask(index, order) {
   return null;
 }
 
+// subtask id → its parent task. The cache keeps a parent whenever one of its
+// subtasks is kept, and Wrike lists the link on the parent only (subTaskIds).
+export function indexParents(tasks) {
+  const byChild = new Map();
+  for (const task of tasks || []) {
+    for (const childId of task?.subTaskIds || []) byChild.set(childId, task);
+  }
+  return byChild;
+}
+
+const dueDay = (task) => String(task?.dates?.due || "").slice(0, 10);
+
+// Who has the order and when it's due. PMs usually assign and reschedule the
+// parent task and leave the per-size subtask bare, so a subtask with nobody on
+// it takes the parent's people, and a parent due date that differs from the
+// subtask's is reported alongside it instead of being hidden.
+export function taskSummary(task, parent) {
+  const own = task.assignees || "";
+  const due = dueDay(task);
+  const parentDue = dueDay(parent);
+  return {
+    assignees: own || parent?.assignees || "",
+    assigneesFromParent: !own && !!parent?.assignees,
+    due: due || parentDue,
+    dueFromParent: !due && !!parentDue,
+    parentDue: due && parentDue && parentDue !== due ? parentDue : "",
+  };
+}
+
 export const countInWrike = (index, orders) =>
   index?.size ? orders.filter((o) => findTask(index, o)).length : 0;

@@ -11,7 +11,7 @@ import { parseWorkbook } from "../lib/orderForms/parseWorkbook";
 import { listFiles, saveFile, removeFile } from "../lib/orderForms/store";
 import { connectGoogle, googleConfigured, googleConnected } from "../lib/orderForms/googleApi";
 import { loadFilm } from "../lib/orderForms/loadFilm";
-import { indexTasks } from "../lib/orderForms/wrikeMatch";
+import { indexTasks, indexParents } from "../lib/orderForms/wrikeMatch";
 import { confirmAction } from "../lib/confirm";
 import { notify } from "../lib/toast";
 import { isoToday } from "../utils/dates";
@@ -51,6 +51,7 @@ export default function OrderForms({ wrikeData }) {
   const dragDepth = useRef(0);
   const today = isoToday();
   const wrikeIndex = useMemo(() => indexTasks(wrikeData), [wrikeData]);
+  const wrikeParents = useMemo(() => indexParents(wrikeData), [wrikeData]);
 
   useEffect(() => {
     listFiles().then(setFiles);
@@ -226,7 +227,7 @@ export default function OrderForms({ wrikeData }) {
             </div>
             {error && <p role="alert" className="text-sm font-medium text-rose-600">{error}</p>}
             {market
-              ? <MarketView market={market} kind={market.kind || file.kind} today={today} wrikeIndex={wrikeIndex} onBack={() => go(file.id, null)} />
+              ? <MarketView market={market} kind={market.kind || file.kind} today={today} wrikeIndex={wrikeIndex} wrikeParents={wrikeParents} onBack={() => go(file.id, null)} />
               : <MarketList file={file} today={today} wrikeIndex={wrikeIndex} onOpen={(name) => go(file.id, name)} />}
           </>
         )}

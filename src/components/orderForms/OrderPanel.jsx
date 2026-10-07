@@ -1,6 +1,7 @@
 import React from "react";
 import { ExternalLink } from "lucide-react";
 import { orderUrgency } from "../../lib/orderForms/status";
+import { taskSummary } from "../../lib/orderForms/wrikeMatch";
 import { formatDay, pillClass, STATUS_CLASS, STATUS_LABEL, URGENCY_LABEL, URGENCY_TEXT } from "./format";
 
 // One order, laid out for reading: the market's answers grouped by what they
@@ -27,8 +28,10 @@ function Group({ title, fields }) {
 
 const size = (o) => (o.width && o.height ? `${o.width} × ${o.height}${o.unit ? ` ${o.unit}` : ""}` : "");
 
-// `task` is the Wrike task with this order's name, when TimeHub has it loaded.
-export default function OrderPanel({ order, task, today }) {
+// `task` is the Wrike task with this order's name, when TimeHub has it loaded,
+// and `parent` the task it is a subtask of.
+export default function OrderPanel({ order, task, parent, today }) {
+  const wrike = task ? taskSummary(task, parent) : null;
   const urgency = orderUrgency(order, today);
   const x = order.xyi;
   const wrikeTitle = x.title || order.deliveryName;
@@ -102,15 +105,24 @@ export default function OrderPanel({ order, task, today }) {
             <dl className="grid grid-cols-2 gap-x-5 gap-y-2 mt-3">
               {[
                 ["Status", task.customStatusName || task.status],
-                ["Assigned to", task.assignees || "Nobody yet"],
-                ["Due", formatDay(String(task.dates?.due || "").slice(0, 10), today)],
-              ].filter(([, value]) => value).map(([label, value]) => (
+                ["Assigned to", wrike.assignees || "Nobody yet", wrike.assigneesFromParent && "On the parent task"],
+                ["Due", formatDay(wrike.due, today), wrike.dueFromParent ? "On the parent task" : wrike.parentDue && `Parent task is due ${formatDay(wrike.parentDue, today)}`],
+              ].filter(([, value]) => value).map(([label, value, note]) => (
                 <div key={label}>
                   <dt className="text-[11px] text-[#768994]">{label}</dt>
                   <dd className="text-xs font-medium text-[#122027] break-words">{value}</dd>
+                  {note && <dd className="text-[11px] text-[#768994] mt-0.5">{note}</dd>}
                 </div>
               ))}
             </dl>
+            {parent && (
+              <p className="text-[11px] text-[#768994] mt-3 break-words">
+                Subtask of{" "}
+                {parent.permalink
+                  ? <a href={parent.permalink} target="_blank" rel="noreferrer" className="font-bold text-sky-600 hover:underline">{parent.title}</a>
+                  : <span className="font-bold text-[#122027]">{parent.title}</span>}
+              </p>
+            )}
           </section>
         )}
 

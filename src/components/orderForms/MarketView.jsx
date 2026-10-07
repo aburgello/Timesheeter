@@ -8,7 +8,7 @@ import { pillClass, undatedNote, STATUS_CLASS, STATUS_LABEL } from "./format";
 
 // One market: its orders down the left, the selected order's details on the
 // right. Up and down step through the list, the way a PM checks a market.
-export default function MarketView({ market, kind, today, wrikeIndex, onBack }) {
+export default function MarketView({ market, kind, today, wrikeIndex, wrikeParents, onBack }) {
   const orders = market.orders;
   const [selected, setSelected] = useState(0);
   const listRef = useRef(null);
@@ -104,7 +104,7 @@ export default function MarketView({ market, kind, today, wrikeIndex, onBack }) 
           </div>
           <div className="bg-white">
             {/* Stays in view while a long order list scrolls beside it. */}
-            <div className="lg:sticky lg:top-4">{order && <OrderPanel order={order} task={tasks[selected]} today={today} />}</div>
+            <div className="lg:sticky lg:top-4">{order && <OrderPanel order={order} task={tasks[selected]} parent={wrikeParents?.get(tasks[selected]?.id)} today={today} />}</div>
           </div>
         </div>
       )}
