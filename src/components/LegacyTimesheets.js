@@ -3946,19 +3946,21 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               </button>
             </HoverLabel>
             <span className="w-px h-6 bg-[#dce4ec] shrink-0" />
-            <button
-              onClick={() => {
-                if (!wrikeUserId) {
-                  showToast("Please connect Wrike in Profile → Settings first.");
-                  return;
-                }
-                setShowCommentTrail(true);
-              }}
-              className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
-            >
-              <MessagesSquare className="w-4 h-4" />
-              Where Did My Day Go?
-            </button>
+            <HoverLabel label="Suggests rows from your Wrike comments">
+              <button
+                onClick={() => {
+                  if (!wrikeUserId) {
+                    showToast("Please connect Wrike in Profile → Settings first.");
+                    return;
+                  }
+                  setShowCommentTrail(true);
+                }}
+                className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-white hover:bg-slate-50 text-[#122027] border border-[#dce4ec] rounded-xl shadow-sm transition-[background-color,transform] active:scale-95"
+              >
+                <MessagesSquare className="w-4 h-4" />
+                Where Did My Day Go?
+              </button>
+            </HoverLabel>
           </div>
           <div className="flex gap-3 flex-wrap">
             {/* isAdmin stays in the OR so the admin keeps the date picker

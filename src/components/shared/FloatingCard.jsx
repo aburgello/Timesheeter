@@ -37,6 +37,31 @@ export default function FloatingCard({ rect, className = "", innerRef, children,
   );
 }
 
+// A wrapped block is as wide as its container however short its balanced
+// lines are, which leaves a band of empty card on the right. This narrows it
+// to its widest line. It's a child of FloatingCard so that its layout effect
+// runs first and the card is positioned from the narrowed width.
+function LabelText({ children }) {
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.width = "";
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const lines = [...range.getClientRects()];
+    if (lines.length < 2) return;
+    const left = Math.min(...lines.map((r) => r.left));
+    const right = Math.max(...lines.map((r) => r.right));
+    el.style.width = `${Math.ceil(right - left) + 1}px`;
+  }, [children]);
+  return (
+    <span ref={ref} className="block text-xs leading-snug font-semibold text-slate-100 [text-wrap:balance]">
+      {children}
+    </span>
+  );
+}
+
 // Names or explains a control in the hover card, on hover and on keyboard
 // focus, in place of the browser's own title tooltip. Wraps exactly one
 // element; an icon-only one should still carry its own aria-label, since this
@@ -72,7 +97,7 @@ export function HoverLabel({ label, delay = 0, children }) {
       })}
       {rect && label && (
         <FloatingCard rect={rect} className="px-3 py-1.5 pointer-events-none max-w-[18rem]">
-          <span className="block text-xs leading-snug font-semibold text-slate-100 [text-wrap:balance]">{label}</span>
+          <LabelText>{label}</LabelText>
         </FloatingCard>
       )}
     </>
