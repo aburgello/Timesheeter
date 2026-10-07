@@ -121,7 +121,7 @@ const DEPARTMENT_ACTIONS = {
 // data-bubble-avoid that it would otherwise cover (Copy Me! on the timesheet,
 // and the steps card that opens above it). Re-measured on scroll, resize and
 // DOM changes, since the page under a fixed bubble moves without telling it.
-const AVOID_GAP = 12;
+const AVOID_GAP = 8;
 function useLiftOverMarked(bubbleRef, enabled) {
   const [lift, setLift] = useState(0);
   const liftRef = useRef(0);
@@ -295,7 +295,7 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
                     {action.label}
                   </span>
                   <span
-                    className={`w-11 h-11 rounded-full bg-gradient-to-br ${action.gradient} text-white flex items-center justify-center shadow-lg transition-transform group-hover:scale-110`}
+                    className={`w-10 h-10 rounded-full bg-gradient-to-br ${action.gradient} text-white flex items-center justify-center shadow-lg transition-transform group-hover:scale-110`}
                   >
                     <Icon className="w-4 h-4" strokeWidth={2.25} />
                   </span>
@@ -312,14 +312,14 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
         aria-expanded={open}
         aria-label="Quick actions"
         title="Quick actions"
-        className="w-14 h-14 rounded-full bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center shadow-2xl border border-white/20 hover:scale-105 transition-transform"
+        className="w-11 h-11 rounded-full bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white flex items-center justify-center shadow-2xl border border-white/20 hover:scale-105 transition-transform"
       >
         <motion.span
           animate={{ rotate: open ? 90 : 0 }}
           transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
           className="flex"
         >
-          <Zap className="w-6 h-6" strokeWidth={2.25} />
+          <Zap className="w-5 h-5" strokeWidth={2.25} />
         </motion.span>
       </button>
     </div>
