@@ -1,7 +1,8 @@
 import {
   estimateFromActivity,
   activityToEvents,
-  splitEstimate,
+  splitDay,
+  activitySource,
   roundToQuarterHours,
   hoursLoggedFor,
   jobCode,
@@ -159,12 +160,29 @@ const range = dayRangeUtc(new Date(2026, 8, 23, 15, 12));
 check("day range has no milliseconds", /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(range.start), true);
 check("day range is 24 hours", (new Date(range.end) - new Date(range.start)) / 3600000, 24);
 
-// The two columns a task's estimate goes in.
-check("split: before 18:00 is time", splitEstimate(90, 0), { regular: 1.5, extra: 0 });
-check("split: after 18:00 is add. time", splitEstimate(90, 60), { regular: 0.5, extra: 1 });
-// The case from the screenshot: 18:40 → 18:43, all after 18:00.
-check("split: a few minutes after 18:00 get their one step as add. time", splitEstimate(3, 3), { regular: 0, extra: 0.25 });
-check("split: a few minutes before 18:00 get it as time", splitEstimate(4, 0), { regular: 0.25, extra: 0 });
-check("split: the one step goes where most of the minutes were", splitEstimate(5, 3), { regular: 0, extra: 0.25 });
-check("split: a tie goes to time", splitEstimate(4, 2), { regular: 0.25, extra: 0 });
-check("split: nothing at all still gets one step", splitEstimate(0, 0), { regular: 0.25, extra: 0 });
+// The two columns each task's estimate goes in, shared out across the day.
+check("split: before 18:00 is time", splitDay({ a: 90 }, { a: 0 }), { a: { regular: 1.5, extra: 0 } });
+check("split: after 18:00 is add. time", splitDay({ a: 90 }, { a: 60 }), { a: { regular: 0.5, extra: 1 } });
+check("split: a few minutes round to nothing", splitDay({ a: 4 }, {}), { a: { regular: 0, extra: 0 } });
+check("split: nothing at all is 0:00", splitDay({ a: 0 }, {}), { a: { regular: 0, extra: 0 } });
+// Sixteen brief touches used to be sixteen quarter hours. They share what the
+// minutes add up to: 48 minutes is three steps.
+const touches = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`t${i}`, 3]));
+const touched = Object.values(splitDay(touches, {}));
+check("split: brief touches share their real total", touched.reduce((s, x) => s + x.regular, 0), 0.75);
+check("split: and the rest are 0:00", touched.filter((x) => x.regular === 0).length, 13);
+check("split: steps go to the tasks with the most behind them", splitDay({ a: 20, b: 10, c: 10, d: 5 }, {}), {
+  a: { regular: 0.25, extra: 0 }, b: { regular: 0.25, extra: 0 }, c: { regular: 0.25, extra: 0 }, d: { regular: 0, extra: 0 },
+});
+// 09:30 to 18:00 is 8:30; normal time is held to 7:30.
+const full = splitDay({ a: 300, b: 150, c: 60 }, {});
+check("split: a full day is scaled to 7:30", Object.values(full).reduce((s, x) => s + x.regular, 0), 7.5);
+check("split: in proportion", full, { a: { regular: 4.5, extra: 0 }, b: { regular: 2.25, extra: 0 }, c: { regular: 0.75, extra: 0 } });
+check("split: overtime is on top of the cap", splitDay({ a: 510 + 120 }, { a: 120 }), { a: { regular: 7.5, extra: 2 } });
+check("split: overtime is shared the same way", splitDay({ a: 10, b: 20 }, { a: 10, b: 20 }), {
+  a: { regular: 0, extra: 0.25 }, b: { regular: 0, extra: 0.25 },
+});
+
+// Where an activity row counts when filtering what an estimate is built from.
+check("source: a status change", activitySource({ event_type: "TaskStatusChanged" }), "status");
+check("source: an assignment", [activitySource({ event_type: "TaskResponsiblesAdded" }), activitySource({ event_type: "TaskResponsiblesRemoved" })], ["assigned", "assigned"]);

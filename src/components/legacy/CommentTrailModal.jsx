@@ -17,7 +17,9 @@ import { fetchActivityForDay, historyStart } from "../../lib/taskActivity";
 import {
   estimateFromActivity,
   activityToEvents,
-  splitEstimate,
+  splitDay,
+  activitySource,
+  ACTIVITY_SOURCES,
   hoursLoggedFor,
   localMinuteOf,
   DAY_START_MIN,
@@ -47,6 +49,9 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
 // it belongs in Add. Time. Nothing stops the steppers here: balancing a day
 // means going over and back under, so the footer's tally turns red instead.
 const NORMAL_DAY_HOURS = 7.5;
+
+// The kinds of activity a day's suggestions can be built from.
+const SOURCE_LABELS = { messages: "Sent messages", status: "Status change", assigned: "Assigned" };
 
 const hm = (hours) => secondsToHM(hours * 3600, "0:00");
 const clock = (minute) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
@@ -102,6 +107,16 @@ export default function CommentTrailModal({
   // Per "iso:taskId": what the member changed — { on, hours, extra }.
   const [edits, setEdits] = useState({});
   const [added, setAdded] = useState(null);
+  // Which kinds of activity count. Leaving one out removes it from the
+  // timeline and from the estimate, as if it hadn't happened.
+  const [sources, setSources] = useState(() => new Set(ACTIVITY_SOURCES));
+  const toggleSource = (id) =>
+    setSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   // The row a timeline mark was clicked for: { key, itemId, n }. n makes a
   // second click on the same mark jump again.
   const [jump, setJump] = useState(null);
@@ -190,7 +205,11 @@ export default function CommentTrailModal({
     const { statusName: nameOf, statusGroup: groupOf } = live.current;
     const myIds = state.myTaskIds;
     const me = wrikeUserId;
-    const taskComments = state.comments.filter((c) => c.taskId);
+    // Yours only. Other people's comments stay either way: they're context for
+    // where your work on a task began, not activity of yours.
+    const taskComments = !state.hasHistory || sources.has("messages") ? state.comments.filter((c) => c.taskId) : [];
+    const otherComments = state.others;
+    const shownActivity = state.activity.filter((a) => sources.has(activitySource(a)));
     const assignedToday = new Set(
       state.activity
         .filter((a) => a.event_type === "TaskResponsiblesAdded" && a.user_ids?.includes(me))
@@ -228,17 +247,19 @@ export default function CommentTrailModal({
     let byTask = {};
     let overtimeByTask = {};
     let intervals = [];
+    let split = {};
     let taskOrder;
     if (state.hasHistory) {
       const events = activityToEvents({
         comments: taskComments,
-        others: state.others,
-        activity: state.activity,
+        others: otherComments,
+        activity: shownActivity,
         me,
         isMyTask,
         statusGroup: groupOf,
       });
       ({ byTask, overtimeByTask, intervals } = estimateFromActivity(events, { dayEnd }));
+      split = splitDay(byTask, overtimeByTask);
       // Listed for your own action or a hand-off to you. A task whose only
       // events are someone closing it or commenting on it wasn't worked on.
       taskOrder = [
@@ -270,7 +291,7 @@ export default function CommentTrailModal({
       let gap = null;
       let standing;
       if (state.hasHistory) {
-        ({ regular: estRegular, extra: estExtra } = splitEstimate(byTask[taskId], overtimeByTask[taskId]));
+        ({ regular: estRegular, extra: estExtra } = split[taskId] || { regular: 0, extra: 0 });
         est = estRegular + estExtra;
         // The total decides whether anything is missing; the columns only
         // decide where a real shortfall goes. Otherwise overtime already
@@ -278,7 +299,9 @@ export default function CommentTrailModal({
         gap = shortfall(est, logged.hours);
         gapExtra = Math.min(shortfall(estExtra, logged.extra), gap);
         gapRegular = gap - gapExtra;
-        standing = gap === 0 ? "covered" : logged.hours > 0 ? "short" : "missing";
+        // "none": too little activity to suggest a time, and nothing logged.
+        // Left open so a time can still be set by hand.
+        standing = est === 0 && logged.hours === 0 ? "none" : gap === 0 ? "covered" : logged.hours > 0 ? "short" : "missing";
       } else {
         standing = logged.hours > 0 ? "covered" : "missing";
       }
@@ -286,10 +309,10 @@ export default function CommentTrailModal({
         ...taskComments
           .filter((c) => c.taskId === taskId)
           .map((c) => ({ id: c.id, minute: localMinuteOf(c.createdDate), type: "comment", text: c.text })),
-        ...state.others
+        ...otherComments
           .filter((c) => c.taskId === taskId)
           .map((c) => ({ id: c.id, minute: localMinuteOf(c.createdDate), type: "theirs", text: c.text })),
-        ...state.activity.filter((a) => a.task_id === taskId).map(describe).filter(Boolean),
+        ...shownActivity.filter((a) => a.task_id === taskId).map(describe).filter(Boolean),
       ].sort((a, b) => a.minute - b.minute);
       const key = `${day.iso}:${taskId}`;
       const e = edits[key] || {};
@@ -336,9 +359,9 @@ export default function CommentTrailModal({
       commentCount: taskComments.length,
       folderOnly: state.comments.length - taskComments.length,
       estTotal: suggestions.reduce((s, x) => s + (x.est || 0), 0),
-      missing: suggestions.filter((s) => s.standing !== "covered"),
+      missing: suggestions.filter((s) => s.standing === "short" || s.standing === "missing"),
     };
-  }, [state, rows, day, edits, rowFieldsFromTask, wrikeUserId]);
+  }, [state, rows, day, edits, rowFieldsFromTask, wrikeUserId, sources]);
 
   const edit = (key, patch) => setEdits((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
 
@@ -473,9 +496,36 @@ export default function CommentTrailModal({
             </div>
           )}
 
+          {view?.hasHistory && (
+            <div className="px-6 py-2.5 border-b border-white/5 flex flex-wrap items-center gap-2" role="group" aria-label="Activity to count">
+              <span className="text-[11px] font-bold text-slate-500 mr-1">Based on</span>
+              {ACTIVITY_SOURCES.map((id) => {
+                const on = sources.has(id);
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleSource(id)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-colors ${
+                      on
+                        ? "bg-[#12a0e1]/15 border-[#12a0e1]/40 text-[#38bdf8]"
+                        : "bg-transparent border-white/10 text-slate-500 hover:text-slate-300"
+                    }`}
+                  >
+                    {on && <Check className="w-3 h-3" strokeWidth={3} />}
+                    {SOURCE_LABELS[id]}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {view && view.suggestions.length === 0 && (
             <div className="py-20 px-6 text-center text-sm text-slate-400">
-              {view.hasHistory
+              {view.hasHistory && sources.size < ACTIVITY_SOURCES.length
+                ? `Nothing on ${day.name} from the kinds of activity selected.`
+                : view.hasHistory
                 ? `No Wrike activity from you on ${day.name}: no tasks handed to you and no comments.`
                 : `You didn't comment on any Wrike tasks on ${day.name}.`}
               {view.folderOnly > 0 && (
@@ -883,6 +933,8 @@ function Suggestion({ s, frozen, edit, jump }) {
       <Pill cls="text-emerald-400 bg-emerald-400/10">On the timesheets · {hm(s.logged.hours)}</Pill>
     ) : s.standing === "short" ? (
       <Pill cls="text-amber-400 bg-amber-400/10">Short by {hm(s.gap)}</Pill>
+    ) : s.standing === "none" ? (
+      <Pill cls="text-slate-400 bg-white/5">No time suggested</Pill>
     ) : (
       <Pill cls="text-[#38bdf8] bg-[#38bdf8]/10">Not on the timesheets</Pill>
     );
@@ -900,6 +952,8 @@ function Suggestion({ s, frozen, edit, jump }) {
         : "Set the time you spent"
       : s.standing === "covered"
       ? `Your activity suggests ${hm(s.est)}`
+      : s.standing === "none"
+      ? "Set a time if you worked on it"
       : s.standing === "short"
       ? `${hm(s.est)} suggested, ${hm(s.logged.hours)} logged${where}`
       : `${hm(s.est)} suggested`;

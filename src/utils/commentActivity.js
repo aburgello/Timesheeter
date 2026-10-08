@@ -120,6 +120,13 @@ export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd 
   return { byTask, overtimeByTask, intervals };
 }
 
+// The kinds of your activity an estimate can be built from: the comments you
+// sent, status changes, and assignments. A wrike_task_activity row is one of
+// the last two. Other people's comments aren't a kind of their own: they only
+// mark where your next stretch begins, and always count.
+export const ACTIVITY_SOURCES = ["messages", "status", "assigned"];
+export const activitySource = (a) => (a.event_type === "TaskStatusChanged" ? "status" : "assigned");
+
 /**
  * One person's day of Wrike activity, as estimateFromActivity's events.
  *   comments   your comments: [{ taskId, createdDate }]
@@ -164,26 +171,41 @@ export function activityToEvents({ comments, others = [], activity, me, isMyTask
   return events;
 }
 
+// A day's normal time. Suggestions for one day never add up to more.
+export const NORMAL_DAY_MIN = 7.5 * 60;
+
 /**
- * A task's estimate as the two timesheet columns, each on the 0.25 grid:
- * { regular, extra } in hours, extra being the part after 18:00.
+ * Every task's estimate as the two timesheet columns, in hours on the 0.25
+ * grid: { [taskId]: { regular, extra } }, extra being the part after 18:00.
  *
- * Something happened on the task, so the pair is never 0:00 + 0:00: the one
- * step goes in whichever column had more of the minutes. It used to go in
- * Time always, so three minutes' delivery at 18:43 was suggested as 0:15 of
- * regular time instead of 0:15 add. time.
+ * The day is rounded as a whole, not task by task. Each column's total is
+ * rounded to the grid and the steps go to the tasks with the most minutes
+ * behind them, so the suggestions add up to what the activity adds up to. A
+ * task with too little to earn a step gets 0:00. Giving every task at least
+ * one step turned sixteen brief touches into four hours.
+ *
+ * Normal time is also held to a normal day: 09:30 to 18:00 is longer than
+ * that, so a fuller day is scaled down in proportion before rounding.
  */
-export function splitEstimate(minutes, overtimeMinutes) {
-  const q = (m) => Math.round((m || 0) / 15) / 4;
-  const extraMin = overtimeMinutes || 0;
-  const regularMin = Math.max(0, (minutes || 0) - extraMin);
-  let regular = q(regularMin);
-  let extra = q(extraMin);
-  if (regular + extra === 0) {
-    if (extraMin > regularMin) extra = 0.25;
-    else regular = 0.25;
-  }
-  return { regular, extra };
+export function splitDay(byTask, overtimeByTask = {}, { capMinutes = NORMAL_DAY_MIN } = {}) {
+  const ids = Object.keys(byTask);
+  const share = (minutes, cap) => {
+    const total = minutes.reduce((a, b) => a + b, 0);
+    const scale = cap != null && total > cap ? cap / total : 1;
+    const exact = minutes.map((m) => (m * scale) / 15);
+    const steps = exact.map((x) => Math.floor(x + 1e-9));
+    const left = Math.round(total * scale / 15) - steps.reduce((a, b) => a + b, 0);
+    exact
+      .map((x, i) => ({ i, rest: x - steps[i], x }))
+      .sort((a, b) => b.rest - a.rest || b.x - a.x || a.i - b.i)
+      .slice(0, Math.max(0, left))
+      .forEach(({ i }) => steps[i]++);
+    return steps.map((n) => n / 4);
+  };
+  const extraMin = ids.map((id) => overtimeByTask[id] || 0);
+  const regular = share(ids.map((id, i) => Math.max(0, (byTask[id] || 0) - extraMin[i])), capMinutes);
+  const extra = share(extraMin);
+  return Object.fromEntries(ids.map((id, i) => [id, { regular: regular[i], extra: extra[i] }]));
 }
 
 // Minutes → hours on the timesheet's 0.25 grid, never below one step: anything
