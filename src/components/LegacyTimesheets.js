@@ -2212,8 +2212,18 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     }, 2500);
     return () => clearTimeout(t);
   }, []);
-  useEffect(() => {
+  // A layout effect, not an ordinary one. An ordinary effect runs after the
+  // browser has painted, so the new row was drawn once at full strength, then
+  // given its entrance and drawn again from invisible: a flash before the fade.
+  // This runs before that first paint, so the row's first frame is the
+  // entrance's first frame.
+  const rowCount = useRef(0);
+  const enteringTimer = useRef(null);
+  useEffect(() => () => clearTimeout(enteringTimer.current), []);
+  useLayoutEffect(() => {
     const ids = rows.map((r) => r.id);
+    const grew = ids.length > rowCount.current;
+    rowCount.current = ids.length;
     if (knownRowIds.current === null) {
       if (ids.length) knownRowIds.current = new Set(ids);
       return;
@@ -2221,9 +2231,13 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     const fresh = ids.filter((id) => !knownRowIds.current.has(id));
     if (!fresh.length) return;
     fresh.forEach((id) => knownRowIds.current.add(id));
+    // An id nobody has seen in a list that didn't get longer is a row that was
+    // swapped for another (saved and given its real id, say), not one added.
+    // Playing the entrance for it would fade out a row already on screen.
+    if (!grew) return;
     setEnteringIds(new Set(fresh));
-    const t = setTimeout(() => setEnteringIds(new Set()), 1000);
-    return () => clearTimeout(t);
+    clearTimeout(enteringTimer.current);
+    enteringTimer.current = setTimeout(() => setEnteringIds(new Set()), 1000);
   }, [rows]);
 
   // A row whose edit has just been saved: one soft sheen crosses it, left to
