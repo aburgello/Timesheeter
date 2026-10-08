@@ -745,18 +745,9 @@ function EndOfCampaignNotesCard({ campaigns, department, onOpenCampaign, covers,
                     key={c.id}
                     onClick={() => { setSelectedCampaignId(c.id); onOpenCampaign?.(); }}
                     className={`group relative w-full text-left pl-4 pr-3 py-2.5 flex items-center gap-3 transition-colors ${
-                      isActive ? "bg-[#c2410d]/[0.07]" : "hover:bg-[#f2f6f9]"
+                      isActive ? "bg-[#c2410d]/[0.12]" : "hover:bg-[#f2f6f9]"
                     }`}
                   >
-                    {/* A bar rather than a tinted row alone: with poster art in
-                        every row a background wash is easy to miss, an edge
-                        against the list border is not. */}
-                    <span
-                      className={`absolute left-0 top-0 bottom-0 w-[3px] transition-colors ${
-                        isActive ? "bg-[#c2410d]" : "bg-transparent"
-                      }`}
-                    />
-
                     {/* The campaign's own poster, the same art the gallery
                         uses. A list of thirty films is far quicker to scan by
                         artwork than by reading every title. */}
