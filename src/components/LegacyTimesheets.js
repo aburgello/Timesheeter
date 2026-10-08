@@ -3199,14 +3199,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   isActive ? "relative z-10 top-[1px]" : ""
                 }`}
               >
-                {/* The selected day's marker. Colour alone didn't carry it:
-                    the tab's fill is the same as the band below it. */}
-                {isActive && (
-                  <span
-                    aria-hidden="true"
-                    className={`absolute inset-x-3 top-0 h-[3px] rounded-b-full ${isWeekend ? "bg-rose-500" : "bg-[#12a0e1]"}`}
-                  />
-                )}
                 <div className="flex flex-col items-center gap-0.5">
                   <div className="flex items-center justify-center gap-1.5">
                     {frozenDays[day] && <Lock className="w-3 h-3 opacity-60 shrink-0" />}
