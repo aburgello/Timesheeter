@@ -2186,18 +2186,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     updateRow(id, field, value);
   };
 
-  // The row fades and slides out first, then is deleted, so it is clear which
-  // one went. It is still there for those 180ms, hence pointer-events: none on
-  // .row-leave.
-  const [leavingIds, setLeavingIds] = useState(() => new Set());
+  // The row is deleted at once, as it always was. What fades and slides away
+  // is a picture of it, taken from the screen first and drawn over the gap for
+  // a moment (rowMotion.js), so it is clear which row went. The delete does not
+  // wait on the animation: closing the tab mid-fade can't leave the row behind.
   const handleDeleteRow = (id) => {
     if (frozenDays[activeDay]) return;
-    if (prefersReducedMotion()) { deleteRow(id); return; }
-    setLeavingIds((prev) => new Set(prev).add(id));
-    setTimeout(() => {
-      deleteRow(id);
-      setLeavingIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
-    }, 180);
+    const picture = picturesOf(consolScrollRef.current, [id]);
+    deleteRow(id);
+    requestAnimationFrame(() => picture.leave());
   };
 
   // Rows arriving. A row is new if its id wasn't there a moment ago. The first
@@ -3658,7 +3655,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   data-row-id={row.id}
                   className={`timesheet-row transition-colors group relative ${
                     enteringIds.has(row.id) ? "row-enter" : ""
-                  } ${leavingIds.has(row.id) ? "row-leave" : ""} ${
+                  } ${
                     !rowsAreEditable ? "frozen-row" : ""
                   } ${isSub ? "bg-white" : ""} ${
                     // The gutter tick is 13px; on a wide table that is not

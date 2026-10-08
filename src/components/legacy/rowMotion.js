@@ -93,11 +93,15 @@ export function nudge(el) {
 // the copy lays out the same) and notes where it was. The copies are not put
 // on the page yet, are inert, and are never read back from.
 //
-// The returned object has one method, convergeOn(rowId): draw the pictures
-// where the rows were and slide them into the row with that id as they fade,
-// then remove them. If that row can't be found they fade where they are.
+// The returned object has two methods, both for after the rows are gone:
+//   convergeOn(rowId)  draw the pictures where the rows were and slide them
+//                      into the row with that id as they fade (a merge). If
+//                      that row can't be found they fade where they are.
+//   leave()            draw them where the rows were, sliding a little to the
+//                      left as they fade (a delete).
+// Either way the pictures remove themselves.
 export function picturesOf(container, rowIds) {
-  const nothing = { convergeOn() {} };
+  const nothing = { convergeOn() {}, leave() {} };
   if (!container || still()) return nothing;
   let pictures;
   try {
@@ -127,26 +131,34 @@ export function picturesOf(container, rowIds) {
   }
   if (!pictures.length) return nothing;
 
+  // Put a picture on the page, run one animation on it, and take it off again
+  // whatever becomes of that animation.
+  const play = (copy, frames, duration) => {
+    document.body.appendChild(copy);
+    const done = () => copy.remove();
+    const anim = copy.animate(frames, { duration, easing: EASE });
+    anim.onfinish = done;
+    anim.oncancel = done;
+    setTimeout(done, duration + 300);
+  };
+
   return {
+    leave() {
+      try {
+        for (const { copy } of pictures) {
+          play(copy, [{ transform: "none", opacity: 0.9 }, { transform: "translateX(-10px)", opacity: 0 }], 200);
+        }
+      } catch {
+        for (const { copy } of pictures) copy.remove();
+      }
+    },
     convergeOn(rowId) {
       try {
         const target = container.querySelector(`tr[data-row-id="${CSS.escape(String(rowId))}"]`);
         const targetTop = target ? layoutRect(target).top : null;
         for (const { copy, top } of pictures) {
-          document.body.appendChild(copy);
           const travel = targetTop == null ? 0 : targetTop - top;
-          const done = () => copy.remove();
-          const anim = copy.animate(
-            [
-              { transform: "none", opacity: 0.9 },
-              { transform: `translateY(${travel}px)`, opacity: 0 },
-            ],
-            { duration: 320, easing: EASE }
-          );
-          anim.onfinish = done;
-          anim.oncancel = done;
-          // Whatever happens to the animation, the picture does not outstay it.
-          setTimeout(done, 600);
+          play(copy, [{ transform: "none", opacity: 0.9 }, { transform: `translateY(${travel}px)`, opacity: 0 }], 320);
         }
       } catch {
         for (const { copy } of pictures) copy.remove();
