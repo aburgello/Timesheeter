@@ -1263,7 +1263,7 @@ function Mark({ colour, active, glow, className = "", style, ...rest }) {
 // One lane per task: a bar for each stretch of work, your comments as rings on
 // top. Status changes aren't drawn one by one (a busy task turned into a pile
 // of diamonds that hid the comments underneath); a stretch a hand-off opened
-// gets a solid cap at its start instead, and the changes behind a stretch are
+// gets a filled dot at its start instead, and the changes behind a stretch are
 // in its hover card. Every one is still listed under the task's Activity.
 // Clicking a comment or a bar takes you to that task's row, to set its time.
 function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, onPickMark, presets, canMark }) {
@@ -1348,7 +1348,14 @@ function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, onPic
                       }`}
                       style={{ "--c": s.colour, "--glow": s.colour, left: pct(b.from), width: `calc(${pct(b.to)} - ${pct(b.from)})`, transformOrigin: "left center" }}
                     >
-                      {cue && <span className="absolute inset-y-0 left-0 w-1 rounded-l" style={{ background: s.colour }} />}
+                      {/* Handed to you here: a filled dot on the bar's start, the
+                          counterpart of the ring a comment gets. */}
+                      {cue && (
+                        <span
+                          className="absolute left-0 top-1/2 w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                          style={{ background: s.colour }}
+                        />
+                      )}
                     </motion.button>
                   );
                 })}
@@ -1387,10 +1394,10 @@ function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, onPic
           </span>
           {view.hasHistory && (
             <span className="flex items-center gap-1.5">
-              <span className="relative w-5 h-2 rounded bg-slate-400/30 overflow-hidden">
-                <span className="absolute inset-y-0 left-0 w-1 bg-slate-400" />
+              <span className="relative ml-1 w-5 h-2 rounded bg-slate-400/30">
+                <span className="absolute left-0 top-1/2 w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-400" />
               </span>{" "}
-              Time it probably covers, solid where it was handed to you
+              Time it probably covers, with a dot where it was handed to you
             </span>
           )}
           {view.suggestions.some((s) => s.standing === "missing") && (
