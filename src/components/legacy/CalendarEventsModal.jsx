@@ -93,7 +93,7 @@ export default function CalendarEventsModal({ day, onClose, canAdd, addedIds, on
                 Your calendar, {day.name}
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Read from your Google Calendar, which is never changed.
+                Read from your Google Calendar.
               </p>
             </div>
           </div>
@@ -124,7 +124,7 @@ export default function CalendarEventsModal({ day, onClose, canAdd, addedIds, on
           {!connected && state.status !== "loading" && (
             <div className="px-6 py-10 flex flex-col items-center gap-3 text-center">
               <p className="text-sm text-slate-300 max-w-sm">
-                Connect your Google account to see the meetings on your calendar for {day.name}. TimeHub can only read it.
+                Connect your Google account to see the meetings on your calendar for {day.name}.
               </p>
               <button
                 onClick={connect}
