@@ -26,12 +26,13 @@ import {
   Eye,
   EyeOff,
   Moon,
+  MoonStar,
   Sun,
   SlidersHorizontal,
   Tag,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
-import { isDarkMode, toggleDarkMode } from "../lib/theme";
+import { getTheme, isDarkMode, setTheme } from "../lib/theme";
 import { fullName, cleanNamePart } from "../lib/formatName";
 import PageHeader from "./shared/PageHeader";
 import HubRow from "./shared/HubRow";
@@ -1556,8 +1557,8 @@ function AnalyticsSection({ tasks }) {
   const gridStroke = chartDark ? "#334155" : "#f1f5f9";
   const axisTick = chartDark ? "#94a3b8" : "#768994";
   const tooltipStyle = {
-    backgroundColor: chartDark ? "#1e293b" : "#ffffff",
-    borderColor: chartDark ? "#334155" : "#dce4ec",
+    backgroundColor: chartDark ? "var(--dk-card)" : "#ffffff",
+    borderColor: chartDark ? "var(--dk-line)" : "#dce4ec",
     borderRadius: "12px",
     color: chartDark ? "#e2e8f0" : "#323b43",
     fontSize: "11px",
@@ -1722,10 +1723,16 @@ function AnalyticsSection({ tasks }) {
 
 // ── Settings / token section ──────────────────────────────────────────────────
 
+const THEME_OPTIONS = [
+  { id: "light", label: "Light", icon: Sun },
+  { id: "dark", label: "Dark", icon: Moon },
+  { id: "oled", label: "OLED", icon: MoonStar },
+];
+
 function SettingsSection({ onSave }) {
   const [status, setStatus] = useState({ checked: false, connected: false });
   const [disconnecting, setDisconnecting] = useState(false);
-  const [dark, setDark] = useState(isDarkMode);
+  const [theme, setThemeState] = useState(getTheme);
   const { defaultCategory, groupMultiCountry, funMode, setPrefs } = useTimesheetPrefs();
 
   const checkStatus = useCallback(() => {
@@ -1825,34 +1832,29 @@ function SettingsSection({ onSave }) {
           <Moon className="w-4 h-4 text-[#12a0e1]" />
           <span className="text-sm font-black text-[#122027]">Appearance</span>
         </div>
-        <div className="p-5 flex items-center gap-4">
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-bold text-[#122027]">Dark mode</p>
+        <div className="p-5 flex flex-wrap items-center gap-4">
+          <div className="flex-1 min-w-[200px]">
+            <p className="text-sm font-bold text-[#122027]">Theme</p>
             <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
-              Dims the whole app. Remembered on this device.
+              OLED is dark mode on a true-black background. Remembered on this device.
             </p>
           </div>
-          <button
-            onClick={() => setDark(toggleDarkMode())}
-            role="switch"
-            aria-checked={dark}
-            aria-label="Dark mode"
-            className={`relative w-12 h-7 rounded-full shrink-0 transition-colors ${
-              dark ? "bg-[#12a0e1]" : "bg-slate-200"
-            }`}
-          >
-            <span
-              className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow-sm flex items-center justify-center transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                dark ? "translate-x-5" : "translate-x-0"
-              }`}
-            >
-              {dark ? (
-                <Moon className="w-2.5 h-2.5 text-[#12a0e1]" />
-              ) : (
-                <Sun className="w-2.5 h-2.5 text-[#768994]" />
-              )}
-            </span>
-          </button>
+          <div role="radiogroup" aria-label="Theme" className="flex p-1 rounded-xl bg-slate-200 shrink-0">
+            {THEME_OPTIONS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                role="radio"
+                aria-checked={theme === id}
+                onClick={() => setThemeState(setTheme(id))}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                  theme === id ? "bg-white text-[#122027] shadow-sm" : "text-[#768994] hover:text-[#122027]"
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

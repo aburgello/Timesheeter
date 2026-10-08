@@ -24,14 +24,61 @@
   --chart-muted: #768994;
   --chart-grid: #eef1f5;
 }
+/* The dark theme's surfaces and hairlines. Every dark rule below takes its
+   background and border from these, so a second dark palette is a second
+   set of values and not a second copy of the rules. The -rgb ones are for
+   translucent fills: rgb(var(--dk-card-rgb) / 0.8). */
+html.dark-theme {
+  --dk-page: #0f172a;
+  --dk-page-rgb: 15 23 42;
+  --dk-card: #1e293b;
+  --dk-card-rgb: 30 41 59;
+  --dk-sunken: #162032;
+  --dk-band: #1b2536;
+  --dk-frozen: #111827;
+  --dk-raised: #334155;
+  --dk-raised-rgb: 51 65 85;
+  --dk-raised-2: #475569;
+  --dk-tint-hover: #3f4a5f;
+  --dk-line: #334155;
+  --dk-line-soft: #1e293b;
+  --dk-line-strong: #475569;
+  --dk-line-tint: #3f4a5f;
+  --dk-grid: #2a3550;
+}
+
+/* OLED: a true-black page, so those pixels are off, with cards one step up
+   and visible hairlines, because on pure black nothing else separates a card
+   from the page. Sits on top of dark-theme (both classes are set), so
+   everything else the dark theme does still applies. Neutral greys, not the
+   dark theme's navy: a blue tint reads as a glow against black. */
+html.dark-theme.oled-theme {
+  --dk-page: #000000;
+  --dk-page-rgb: 0 0 0;
+  --dk-card: #0e0e10;
+  --dk-card-rgb: 14 14 16;
+  --dk-sunken: #070708;
+  --dk-band: #0a0a0b;
+  --dk-frozen: #050506;
+  --dk-raised: #1c1c20;
+  --dk-raised-rgb: 28 28 32;
+  --dk-raised-2: #2a2a30;
+  --dk-tint-hover: #26262c;
+  --dk-line: #232328;
+  --dk-line-soft: #17171a;
+  --dk-line-strong: #34343b;
+  --dk-line-tint: #2c2c33;
+  --dk-grid: #1f1f24;
+}
+
 html.dark-theme {
   --rne-fg: #e2e8f0;
   --rne-muted: #94a3b8;
   --rne-faint: #64748b;
-  --rne-rule: #334155;
-  --rne-surface: #1e293b;
-  --rne-surface-hover: #334155;
-  --rne-code-bg: #0f172a;
+  --rne-rule: var(--dk-line);
+  --rne-surface: var(--dk-card);
+  --rne-surface-hover: var(--dk-raised);
+  --rne-code-bg: var(--dk-page);
   --rne-code-fg: #e2e8f0;
 
   --chart-ink: #e2e8f0;
@@ -43,7 +90,7 @@ html.dark-theme {
 
 html.dark-theme,
 html.dark-theme body {
-  background-color: #0f172a !important;
+  background-color: var(--dk-page) !important;
   /* Set a foreground too, not just a background. Without it, anything with no
      explicit text-colour class — most notably every <input>, since preflight
      gives them `color: inherit` — fell back to the UA default black and typed
@@ -55,18 +102,18 @@ html.dark-theme body {
 }
 
 /* ── BACKGROUNDS ────────────────────────────────────────────── */
-.dark-theme .bg-slate-100 { background-color: #0f172a !important; }
-.dark-theme .bg-white     { background-color: #1e293b !important; }
+.dark-theme .bg-slate-100 { background-color: var(--dk-page) !important; }
+.dark-theme .bg-white     { background-color: var(--dk-card) !important; }
 
 .dark-theme .bg-slate-50,
 .dark-theme .bg-slate-50\/50,
 .dark-theme .bg-slate-50\/60,
-.dark-theme .bg-slate-50\/80 { background-color: #162032 !important; }
+.dark-theme .bg-slate-50\/80 { background-color: var(--dk-sunken) !important; }
 
 .dark-theme .bg-white\/80,
 .dark-theme .bg-white\/95,
 .dark-theme .bg-\[\#f8fafc\],
-.dark-theme .bg-\[\#f8fafc\]\/40 { background-color: rgba(30, 41, 59, 0.95) !important; }
+.dark-theme .bg-\[\#f8fafc\]\/40 { background-color: rgb(var(--dk-card-rgb) / 0.95) !important; }
 
 /* Pastel team-card backgrounds */
 .dark-theme .bg-blue-50,
@@ -79,7 +126,7 @@ html.dark-theme body {
 .dark-theme .bg-indigo-50,
 .dark-theme .bg-indigo-50\/50,
 .dark-theme .bg-rose-50,
-.dark-theme .bg-fuchsia-50 { background-color: #1e293b !important; }
+.dark-theme .bg-fuchsia-50 { background-color: var(--dk-card) !important; }
 
 /* Motion Board overdue-card tint — kept distinct from plain bg-white cards
    (a faint red-shifted slate) instead of collapsing to the same flat navy,
@@ -87,26 +134,26 @@ html.dark-theme body {
 .dark-theme .bg-rose-50\/40 { background-color: #2a1e24 !important; }
 
 /* Weekday bar / nav overrides */
-.dark-theme .bg-white\/60  { background-color: rgba(30, 41, 59, 0.8) !important; }
-.dark-theme .bg-slate-100\/50 { background-color: rgba(15, 23, 42, 0.8) !important; color: #94a3b8 !important; }
+.dark-theme .bg-white\/60  { background-color: rgb(var(--dk-card-rgb) / 0.8) !important; }
+.dark-theme .bg-slate-100\/50 { background-color: rgb(var(--dk-page-rgb) / 0.8) !important; color: #94a3b8 !important; }
 
 /* Hover states */
 .dark-theme .hover\:bg-white:hover,
 .dark-theme .hover\:bg-slate-50:hover,
 .dark-theme .hover\:bg-slate-50\/50:hover,
-.dark-theme .hover\:bg-white\/50:hover { background-color: #334155 !important; }
-.dark-theme .hover\:bg-indigo-100:hover { background-color: #334155 !important; }
+.dark-theme .hover\:bg-white\/50:hover { background-color: var(--dk-raised) !important; }
+.dark-theme .hover\:bg-indigo-100:hover { background-color: var(--dk-raised) !important; }
 
 /* ── ACTION BAR / FREEZE STRIP ──────────────────────────────── */
 /* The freeze toggle strip between tabs and table */
-.dark-theme .border-slate-100 + .bg-white.border-b { background-color: #162032 !important; }
+.dark-theme .border-slate-100 + .bg-white.border-b { background-color: var(--dk-sunken) !important; }
 
 /* Freeze toggle pill track — bg-slate-200 track when unlocked */
-.dark-theme .bg-slate-200 { background-color: #334155 !important; }
-.dark-theme .hover\:bg-slate-300:hover { background-color: #475569 !important; }
+.dark-theme .bg-slate-200 { background-color: var(--dk-raised) !important; }
+.dark-theme .hover\:bg-slate-300:hover { background-color: var(--dk-raised-2) !important; }
 
 /* Bottom action bar — targets the bg-slate-50 rounded-b-2xl bar specifically */
-.dark-theme .bg-slate-50.rounded-b-2xl { background-color: #162032 !important; }
+.dark-theme .bg-slate-50.rounded-b-2xl { background-color: var(--dk-sunken) !important; }
 
 /* ── TEXT ───────────────────────────────────────────────────── */
 .dark-theme .text-\[\#122027\]  { color: #f8fafc  !important; }
@@ -164,10 +211,10 @@ html.dark-theme body {
 .dark-theme .border-slate-200\/70,
 .dark-theme .border-slate-200\/80,
 .dark-theme .border-black\/5,
-.dark-theme .border-indigo-100 { border-color: #334155 !important; }
+.dark-theme .border-indigo-100 { border-color: var(--dk-line) !important; }
 
 /* Dashed borders (ghost add-row row) */
-.dark-theme .border-dashed { border-color: #334155 !important; }
+.dark-theme .border-dashed { border-color: var(--dk-line) !important; }
 
 /* ── SHADOWS ────────────────────────────────────────────────── */
 /* This used to be `box-shadow: none; border: 1px solid #334155`, and both
@@ -212,13 +259,13 @@ html.dark-theme body {
    ─────────────────────────────────────────────────────────────── */
 
 /* Opacity variants of already-covered backgrounds */
-.dark-theme .bg-slate-100\/70  { background-color: #1b2536 !important; }
+.dark-theme .bg-slate-100\/70  { background-color: var(--dk-band) !important; }
 /* The Management breadcrumb. Matches the PAGE background (#0f172a), not the
    card surface — in light mode bg-slate-100 is the page colour, so the bar
    blends into it and reads as chrome. Given the card grey it read as a
    detached band floating above the page instead. Kept translucent so the
    backdrop-blur still has something to do as content scrolls under it. */
-.dark-theme .bg-slate-100\/85  { background-color: rgba(15, 23, 42, 0.85) !important; }
+.dark-theme .bg-slate-100\/85  { background-color: rgb(var(--dk-page-rgb) / 0.85) !important; }
 
 /* 4. VARIANT-PREFIXED UTILITIES. Tailwind emits a variant as part of the class
    NAME, so `supports-[backdrop-filter]:bg-slate-100/70` is the selector
@@ -231,8 +278,8 @@ html.dark-theme body {
    Specificity still works out: the variant sits inside an @supports block,
    which does not affect specificity, so `.dark-theme .x` (two classes,
    !important) wins over Tailwind's single class. */
-.dark-theme .supports-\[backdrop-filter\]\:bg-slate-100\/70 { background-color: rgba(15, 23, 42, 0.7) !important; }
-.dark-theme .bg-slate-50\/40   { background-color: #162032 !important; }
+.dark-theme .supports-\[backdrop-filter\]\:bg-slate-100\/70 { background-color: rgb(var(--dk-page-rgb) / 0.7) !important; }
+.dark-theme .bg-slate-50\/40   { background-color: var(--dk-sunken) !important; }
 .dark-theme .bg-rose-50\/60    { background-color: #2a1e24 !important; }
 .dark-theme .bg-emerald-50\/50 { background-color: #16302a !important; }
 .dark-theme .bg-indigo-50\/30  { background-color: #1e2440 !important; }
@@ -309,20 +356,20 @@ html.dark-theme body {
 .dark-theme .border-pink-200,
 .dark-theme .border-rose-300,
 .dark-theme .border-amber-100,
-.dark-theme .border-blue-100 { border-color: #3f4a5f !important; }
+.dark-theme .border-blue-100 { border-color: var(--dk-line-tint) !important; }
 
 /* Neutral borders that were missed: slate-50 is lighter than slate-100 and
    slate-300 darker, and neither was listed, so a row using either kept a
    near-white frame while the row above it didn't. */
 .dark-theme .border-slate-50,
-.dark-theme .border-slate-300 { border-color: #334155 !important; }
+.dark-theme .border-slate-300 { border-color: var(--dk-line) !important; }
 
 /* -100 fills, the step up from the -50 tints already covered above. Used for
    avatar/initial tiles in the same lists. */
 .dark-theme .bg-cyan-100,
 .dark-theme .bg-orange-100,
-.dark-theme .bg-pink-100 { background-color: #1e293b !important; }
-.dark-theme .bg-slate-300 { background-color: #334155 !important; }
+.dark-theme .bg-pink-100 { background-color: var(--dk-card) !important; }
+.dark-theme .bg-slate-300 { background-color: var(--dk-raised) !important; }
 
 /* Side-scoped borders: the bare `border-[#dce4ec]` was covered, these weren't,
    so rows kept a near-white frame on three sides. */
@@ -338,8 +385,8 @@ html.dark-theme body {
 .dark-theme .border-\[\#f1f5f9\],
 .dark-theme .border-\[\#ece4d8\],
 .dark-theme .border-\[\#f0e9df\],
-.dark-theme .border-slate-200\/60 { border-color: #334155 !important; }
-.dark-theme .divide-\[\#f0f4f8\] > * + * { border-color: #334155 !important; }
+.dark-theme .border-slate-200\/60 { border-color: var(--dk-line) !important; }
+.dark-theme .divide-\[\#f0f4f8\] > * + * { border-color: var(--dk-line) !important; }
 
 /* Hover states. A missing hover rule is worse than a missing resting one:
    the element goes light exactly as you point at it, while its text has
@@ -351,11 +398,11 @@ html.dark-theme body {
 .dark-theme .hover\:bg-\[\#edf5fb\]:hover,
 .dark-theme .hover\:bg-\[\#f8fafc\]:hover,
 .dark-theme .hover\:bg-slate-50\/60:hover,
-.dark-theme .hover\:bg-slate-50\/80:hover { background-color: #334155 !important; }
+.dark-theme .hover\:bg-slate-50\/80:hover { background-color: var(--dk-raised) !important; }
 .dark-theme .hover\:bg-emerald-100:hover,
 .dark-theme .hover\:bg-rose-100:hover,
-.dark-theme .hover\:bg-amber-100:hover   { background-color: #3f4a5f !important; }
-.dark-theme .hover\:border-slate-300:hover { border-color: #475569 !important; }
+.dark-theme .hover\:bg-amber-100:hover   { background-color: var(--dk-tint-hover) !important; }
+.dark-theme .hover\:border-slate-300:hover { border-color: var(--dk-line-strong) !important; }
 .dark-theme .hover\:text-\[\#5a5147\]:hover { color: #e2e8f0 !important; }
 
 /* Arbitrary hexes in use across the app that no rule reached. Grouped by what
@@ -367,14 +414,14 @@ html.dark-theme body {
 .dark-theme .bg-\[\#f0fbf7\],
 .dark-theme .bg-\[\#edf5fb\],
 .dark-theme .bg-\[\#faf7f2\],
-.dark-theme .bg-\[\#ece4d8\]  { background-color: #1e293b !important; }
+.dark-theme .bg-\[\#ece4d8\]  { background-color: var(--dk-card) !important; }
 .dark-theme .bg-\[\#dcf3ec\],
 .dark-theme .bg-\[\#dce4ec\],
-.dark-theme .bg-\[\#d5cdbf\]  { background-color: #334155 !important; }
+.dark-theme .bg-\[\#d5cdbf\]  { background-color: var(--dk-raised) !important; }
 /* — surfaces that were ALREADY dark, and became indistinguishable holes — */
 .dark-theme .bg-\[\#122027\],
 .dark-theme .bg-\[\#1b202a\],
-.dark-theme .bg-\[\#19202b\]  { background-color: #334155 !important; }
+.dark-theme .bg-\[\#19202b\]  { background-color: var(--dk-raised) !important; }
 /* — foregrounds that stayed dark on newly-dark surfaces — */
 .dark-theme .text-\[\#221f1a\],
 .dark-theme .text-\[\#3a352e\],
@@ -405,7 +452,7 @@ html.dark-theme body {
 
 /* Scrollbars: the light thumb was hardcoded, and there is already a
    .scrollbar-thin-dark for exactly this. */
-.dark-theme .scrollbar-thin::-webkit-scrollbar-thumb { background-color: #475569 !important; }
+.dark-theme .scrollbar-thin::-webkit-scrollbar-thumb { background-color: var(--dk-raised-2) !important; }
 .dark-theme .scrollbar-thin::-webkit-scrollbar-track { background-color: transparent !important; }
 
 /* Links inside campaign notes (written as raw HTML — see parseFormatting). */
@@ -488,23 +535,23 @@ html.dark-theme body {
 
 /* Dark mode rows */
 .dark-theme .timesheet-row {
-  background-color: #162032 !important;
+  background-color: var(--dk-sunken) !important;
 }
 .dark-theme .timesheet-row:hover {
-  background-color: #1e293b !important;
+  background-color: var(--dk-card) !important;
 }
 .dark-theme .timesheet-row.frozen-row {
-  background-color: #111827 !important;
+  background-color: var(--dk-frozen) !important;
   opacity: 0.85;
 }
 
 /* Cell borders */
-.dark-theme .border-slate-100 { border-color: #1e293b !important; }
-.dark-theme .divide-slate-100 > * + * { border-color: #1e293b !important; }
+.dark-theme .border-slate-100 { border-color: var(--dk-line-soft) !important; }
+.dark-theme .divide-slate-100 > * + * { border-color: var(--dk-line-soft) !important; }
 
 /* ── DAY TABS (pill segment) ────────────────────────────────── */
 /* Track */
-.dark-theme .bg-slate-200\/70 { background-color: #0f172a !important; }
+.dark-theme .bg-slate-200\/70 { background-color: var(--dk-page) !important; }
 /* Inactive pill hover */
 .dark-theme .hover\:bg-white\/50:hover { background-color: rgba(255,255,255,0.07) !important; }
 /* Active pill text — blue active stays blue, no override needed */
@@ -515,7 +562,7 @@ html.dark-theme body {
   background-color: transparent !important;
 }
 .dark-theme textarea::placeholder { color: #334155 !important; }
-.dark-theme textarea:hover { border-color: #334155 !important; }
+.dark-theme textarea:hover { border-color: var(--dk-line) !important; }
 .dark-theme textarea:focus {
   border-color: #12a0e1 !important;
   background-color: rgba(18, 160, 225, 0.05) !important;
@@ -524,7 +571,7 @@ html.dark-theme body {
 /* Select dropdowns inside table */
 .dark-theme select {
   color: #cbd5e1 !important;
-  background-color: #1e293b !important;
+  background-color: var(--dk-card) !important;
 }
 
 /* ── CANVAS / GRADIENT OVERRIDES ────────────────────────────── */
@@ -538,11 +585,11 @@ html.dark-theme body {
 .dark-theme .to-\[\#7cd7c7\] { --tw-gradient-to: #12a188 !important; }
 
 /* ── WRIKE MATRIX TABLE ─────────────────────────────────────── */
-.dark-theme .wrike-matrix-render td { color: #cbd5e1 !important; border-color: #334155 !important; }
-.dark-theme .wrike-matrix-render th { background-color: #0f172a !important; color: #f8fafc !important; border-color: #334155 !important; }
-.dark-theme .wrike-matrix-render tr:nth-child(even) { background-color: #1e293b !important; }
-.dark-theme .wrike-matrix-render tr:nth-child(odd)  { background-color: #0f172a !important; }
-.dark-theme .wrike-matrix-render tr:hover           { background-color: rgba(51,65,85,0.8) !important; }
+.dark-theme .wrike-matrix-render td { color: #cbd5e1 !important; border-color: var(--dk-line) !important; }
+.dark-theme .wrike-matrix-render th { background-color: var(--dk-page) !important; color: #f8fafc !important; border-color: var(--dk-line) !important; }
+.dark-theme .wrike-matrix-render tr:nth-child(even) { background-color: var(--dk-card) !important; }
+.dark-theme .wrike-matrix-render tr:nth-child(odd)  { background-color: var(--dk-page) !important; }
+.dark-theme .wrike-matrix-render tr:hover           { background-color: rgb(var(--dk-raised-rgb) / 0.8) !important; }
 
 /* HOME BLOB NAV shape-morph keyframes moved to a <style> tag inside
    Home.jsx itself — this global stylesheet wasn't hot-reloading reliably
