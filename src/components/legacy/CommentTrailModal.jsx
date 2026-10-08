@@ -1423,7 +1423,7 @@ function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, onPic
               <ItemText item={hover.item} />
             </p>
           )}
-          {hover.bar && <BarDetails s={hover.s} bar={hover.bar} items={within(hover.s, hover.bar)} intervals={view.intervals} />}
+          {hover.bar && <BarDetails bar={hover.bar} items={within(hover.s, hover.bar)} />}
         </FloatingCard>
       )}
     </div>
@@ -1431,8 +1431,7 @@ function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, onPic
 }
 
 // A stretch's hover card: how long, why it started, what happened along it.
-function BarDetails({ s, bar, items, intervals }) {
-  const shared = intervals.some((o) => o.taskId !== s.taskId && o.from < bar.to && o.to > bar.from);
+function BarDetails({ bar, items }) {
   const opened = items.some((x) => x.type === "cue" && Math.abs(x.minute - bar.from) <= 1);
   return (
     <div className="mt-1.5 text-xs">
@@ -1453,7 +1452,6 @@ function BarDetails({ s, bar, items, intervals }) {
           {items.length > 6 && <li className="text-slate-500">and {items.length - 6} more in its Activity</li>}
         </ul>
       )}
-      {shared && <p className="mt-1.5 text-slate-500">Other tasks were open at the same time, so this time is split with them.</p>}
     </div>
   );
 }
