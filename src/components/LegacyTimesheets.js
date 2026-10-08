@@ -3515,14 +3515,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           aria-label={rowsAreEditable ? "Delete row" : undefined}
                           onClick={() => handleDeleteRow(row.id)}
                           disabled={!rowsAreEditable}
-                          className={`mt-1.5 shrink-0 overflow-hidden rounded-full transition-[width,margin,opacity] ${ROW_TOOLS_EASE} ${
+                          className={`self-center shrink-0 overflow-hidden rounded-full transition-[width,margin,opacity] ${ROW_TOOLS_EASE} ${
                             !rowsAreEditable
                               ? "w-0 opacity-0 cursor-not-allowed"
                               : `${ROW_TOOLS_DELETE} hover:!opacity-100 focus-visible:!opacity-100 focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 focus-visible:outline-none`
                           }`}
                         >
                           <XCircle
-                            className={`w-5 h-5 max-w-none ${
+                            className={`block w-5 h-5 max-w-none ${
                               !rowsAreEditable
                                 ? "text-slate-400"
                                 : "text-rose-500 fill-rose-100"
