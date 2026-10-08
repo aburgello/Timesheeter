@@ -81,15 +81,18 @@
 .roll-up   { display: inline-block; animation: rollUp 240ms var(--ease-app) both; }
 .roll-down { display: inline-block; animation: rollDown 240ms var(--ease-app) both; }
 
-/* A timesheet row that has just been added: it fades in under a wash of the
-   accent that drains away, so the eye finds it. The wash is an inset shadow
-   on the cells because a table row has no box of its own to paint. */
-@keyframes rowEnter { from { opacity: 0; } to { opacity: 1; } }
+/* A timesheet row that has just been added: it drops the last few pixels
+   into place as it fades in, under a wash of the accent that drains away, so
+   the eye finds it. The drop is what makes it an arrival; a fade alone was over
+   before it registered and the row just seemed to be there. The wash is an
+   inset shadow on the cells because a table row has no box of its own to
+   paint. */
+@keyframes rowEnter { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: none; } }
 @keyframes rowEnterWash {
   from { box-shadow: inset 0 0 0 999px rgb(18 160 225 / 0.14); }
   to   { box-shadow: inset 0 0 0 999px rgb(18 160 225 / 0); }
 }
-.row-enter { animation: rowEnter 280ms var(--ease-app) both; }
+.row-enter { animation: rowEnter 420ms var(--ease-app) both; }
 .row-enter > td { animation: rowEnterWash 900ms var(--ease-app) both; }
 /* ...and one on its way out. !important: the row's own transition-colors
    would otherwise be the only transition it has. */
