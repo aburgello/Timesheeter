@@ -8,6 +8,7 @@ import {
   Lock,
   ChevronRight,
   Trash2,
+  CalendarDays,
   CheckCircle,
   AlertCircle,
   Check,
@@ -16,6 +17,7 @@ import { motion, animate, AnimatePresence } from "framer-motion";
 import FloatingCard from "../shared/FloatingCard";
 import TableSearchableSelect from "./TableSearchableSelect";
 import MultiCountrySelect from "../shared/MultiCountrySelect";
+import CalendarEventsModal from "./CalendarEventsModal";
 import { CATEGORIES } from "../../constants";
 import { fetchMyCommentsForDay } from "../../lib/wrikeComments";
 import { fetchActivityForDay, historyStart } from "../../lib/taskActivity";
@@ -70,7 +72,8 @@ const shortfall = (estimate, logged) => {
 };
 
 // Time marked by hand on the timeline, per day: { [iso]: [{ id, from, to,
-// kind: "work" | "break", jobNumber, note, category, territory, added }] }. Kept in
+// kind: "work" | "break", jobNumber, note, eventId, category, territory,
+// added }] }. Kept in
 // this browser for the days the timesheet can still hold, so a reload doesn't
 // lose a morning's marks; older days are dropped on the next save.
 const MARK_COLOUR = "#e2e8f0";
@@ -168,6 +171,7 @@ export default function CommentTrailModal({
     [markJobs]
   );
   const [activeDropdown, setActiveDropdown] = useState(null);
+  const [showCalendar, setShowCalendar] = useState(false);
   // Which tasks are listed, by what you did on them. This only hides rows:
   // the estimate is always worked out from the whole day, so a hidden task
   // doesn't hand its time to the ones still showing.
@@ -465,6 +469,8 @@ export default function CommentTrailModal({
         kind: preset.kind || "work",
         jobNumber: preset.jobNumber || "",
         note: preset.note || "",
+        // The calendar event it came from, so the same one isn't added twice.
+        eventId: preset.eventId || "",
         category: defaultCategory || "",
         territory: "",
         added: false,
@@ -604,6 +610,13 @@ export default function CommentTrailModal({
               ))}
             </div>
             <button
+              onClick={() => setShowCalendar(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-colors"
+            >
+              <CalendarDays className="w-4 h-4" />
+              Calendar
+            </button>
+            <button
               onClick={onClose}
               aria-label="Close"
               className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white rounded-xl transition-colors"
@@ -716,6 +729,7 @@ export default function CommentTrailModal({
                 marks={markRows}
                 onMark={addMark}
                 onMoveMark={patchMark}
+                onPickMark={(id) => setJump({ key: `${dayIso}:mark:${id}`, itemId: null, n: Date.now() })}
                 presets={presets}
                 canMark={!isFrozen}
               />
@@ -766,6 +780,7 @@ export default function CommentTrailModal({
                     key={m.key}
                     m={m}
                     frozen={isFrozen}
+                    jump={jump?.key === m.key ? jump : null}
                     jobOptions={jobOptions}
                     activeDropdown={activeDropdown}
                     setActiveDropdown={setActiveDropdown}
@@ -835,6 +850,17 @@ export default function CommentTrailModal({
           </div>
         </div>
       </div>
+      {showCalendar && (
+        <CalendarEventsModal
+          day={day}
+          onClose={() => setShowCalendar(false)}
+          canAdd={!isFrozen}
+          addedIds={new Set((marks[dayIso] || []).map((m) => m.eventId).filter(Boolean))}
+          onAdd={(meeting) =>
+            addMark(meeting.from, meeting.to, { kind: "work", note: `Meeting: ${meeting.title}`, eventId: meeting.id })
+          }
+        />
+      )}
     </div>
   );
 }
@@ -843,7 +869,7 @@ export default function CommentTrailModal({
 // drag for a stretch, on the quarter hour; a plain click marks half an hour.
 // A mark not yet on the timesheets can be dragged to move it, or by its ends
 // to resize it. The tray underneath holds ready-made stretches to drag in.
-function MarkLane({ start, end, pct, hours, marks, onMark, onMove, presets, canMark }) {
+function MarkLane({ start, end, pct, hours, marks, onMark, onMove, onPick, presets, canMark }) {
   const track = useRef(null);
   const [draft, setDraft] = useState(null); // drawing a new one: { a, b }
   const [edit, setEdit] = useState(null); // moving or resizing: { id, from, to }
@@ -904,6 +930,8 @@ function MarkLane({ start, end, pct, hours, marks, onMark, onMove, presets, canM
       grabbed.current = null;
       setEdit(null);
       if (next.from !== g.from || next.to !== g.to) onMove(m.id, next);
+      // Pressed and let go without dragging: a click, which goes to its row.
+      else onPick(m.id);
     },
     onPointerCancel: () => {
       grabbed.current = null;
@@ -975,10 +1003,10 @@ function MarkLane({ start, end, pct, hours, marks, onMark, onMove, presets, canM
               <div
                 key={m.id}
                 data-mark
-                {...(fixed ? {} : grip(m, "move"))}
+                {...(fixed ? { onPointerDown: (e) => e.stopPropagation(), onClick: () => onPick(m.id) } : grip(m, "move"))}
                 title={`${clock(at.from)} to ${clock(at.to)}${m.kind === "break" ? ", break" : ""}`}
                 className={`absolute top-[9px] h-3.5 rounded ${m.kind === "break" ? "mark-break" : ""} ${
-                  fixed ? "pointer-events-none" : "cursor-grab active:cursor-grabbing hover:brightness-125"
+                  fixed ? "cursor-pointer hover:brightness-125" : "cursor-grab active:cursor-grabbing hover:brightness-125"
                 }`}
                 style={{
                   ...span(at.from, at.to),
@@ -1060,12 +1088,28 @@ function MarkLane({ start, end, pct, hours, marks, onMark, onMove, presets, canM
 // A stretch you marked, as a row: what it was, how long, and the job to log it
 // against. A break has no job and is never added; it only holds its time back
 // from the estimates.
-function MarkRow({ m, frozen, jobOptions, activeDropdown, setActiveDropdown, onPatch, onRemove }) {
+function MarkRow({ m, jump, frozen, jobOptions, activeDropdown, setActiveDropdown, onPatch, onRemove }) {
+  const rowRef = useRef(null);
+  const [flash, setFlash] = useState(false);
+  // Clicked on the timeline: bring this row into view and pick it out.
+  useEffect(() => {
+    if (!jump) return;
+    setFlash(true);
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    rowRef.current?.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+    const t = setTimeout(() => setFlash(false), 1600);
+    return () => clearTimeout(t);
+  }, [jump?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const isBreak = m.kind === "break";
   const total = m.regular + m.extra;
   const setLength = (hours) => onPatch({ to: m.from + Math.max(0.25, hours) * 60 });
   return (
-    <li className={`${ENTER} grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 ${m.added ? "opacity-55" : ""}`}>
+    <li
+      ref={rowRef}
+      className={`${ENTER} grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 transition-colors [transition-duration:700ms] ${
+        flash ? "bg-[#12a0e1]/10" : ""
+      } ${m.added ? "opacity-55" : ""}`}
+    >
       <span className={`mt-1.5 w-2.5 h-2.5 rounded-sm ${isBreak ? "mark-break" : ""}`} style={isBreak ? undefined : { background: MARK_COLOUR }} />
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-white">
@@ -1222,7 +1266,7 @@ function Mark({ colour, active, glow, className = "", style, ...rest }) {
 // gets a solid cap at its start instead, and the changes behind a stretch are
 // in its hover card. Every one is still listed under the task's Activity.
 // Clicking a comment or a bar takes you to that task's row, to set its time.
-function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, presets, canMark }) {
+function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, onPickMark, presets, canMark }) {
   // { s, item } for a comment or lane name, { s, bar } for a stretch, + rect.
   const [hover, setHover] = useState(null);
 
@@ -1336,7 +1380,7 @@ function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, prese
             </div>
           );
         })}
-        <MarkLane start={start} end={end} pct={pct} hours={hours} marks={marks} onMark={onMark} onMove={onMoveMark} presets={presets} canMark={canMark} />
+        <MarkLane start={start} end={end} pct={pct} hours={hours} marks={marks} onMark={onMark} onMove={onMoveMark} onPick={onPickMark} presets={presets} canMark={canMark} />
         <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[11px] text-slate-500">
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full border-2 border-slate-400" /> Your comment

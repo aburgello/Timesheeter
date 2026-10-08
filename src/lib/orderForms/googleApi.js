@@ -12,7 +12,7 @@
 
 // Public by design, like the Supabase anon key: it names the app to Google and
 // only works from the origins registered for it in Google Cloud.
-const CLIENT_ID =
+export const CLIENT_ID =
   import.meta.env.VITE_GOOGLE_CLIENT_ID ||
   "1047837005704-h04jm219u2mm5rojhpv1vo797rei5v3a.apps.googleusercontent.com";
 const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
@@ -67,7 +67,7 @@ export function disconnectGoogle() {
   forget();
 }
 
-function loadGsi() {
+export function loadGsi() {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
   if (!gsiLoading) {
     gsiLoading = new Promise((resolve, reject) => {
