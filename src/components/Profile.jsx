@@ -1900,7 +1900,7 @@ function SettingsSection({ onSave }) {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-[#122027]">Fun mode</p>
             <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
-              Playful extras, like the coins that fly when you add time. Your times aren't affected.
+              Playful little additions around the platform.
             </p>
           </div>
           <button
