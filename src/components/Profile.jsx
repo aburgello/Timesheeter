@@ -2067,13 +2067,9 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
         subtitle={[profile?.department, profile?.email].filter(Boolean).join(" · ") || undefined}
         maxWidthClass="max-w-[1400px]"
       >
-        {/* Connection state as a single quiet chip — a green dot when linked,
-            a tappable amber prompt when not. */}
-        {wrikeUser?.id ? (
-          <span className="flex items-center gap-1.5 text-[10px] font-black text-white/90 bg-white/15 border border-white/20 px-2.5 py-1.5 rounded-full uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#1cc1a5]" /> Connected
-          </span>
-        ) : (
+        {/* Only when Wrike isn't connected, as a prompt that opens Settings.
+            Settings' own Wrike card says so when it is. */}
+        {!wrikeUser?.id && (
           <button
             onClick={() => setActiveSection("settings")}
             className="flex items-center gap-1.5 text-[10px] font-black text-white bg-white/15 hover:bg-white/25 border border-white/20 px-2.5 py-1.5 rounded-full uppercase tracking-wider transition-colors"
