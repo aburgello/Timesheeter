@@ -1789,15 +1789,12 @@ function SettingsSection({ onSave }) {
         </div>
         <div className="p-5 space-y-4">
           <p className="text-xs text-[#768994] leading-relaxed">
-            Connect your Wrike account to fetch tasks, timelogs, and timers.
-            You'll approve access on Wrike's own site — no token to copy or
-            paste, and it can be revoked here any time.
+            Fetches your tasks, timelogs and timers. You approve access on Wrike's site and can disconnect here any time.
           </p>
           {unknown ? (
             <div className="space-y-2">
               <p className="text-xs text-[#768994] leading-relaxed">
-                Couldn't check your Wrike connection just now. This doesn't mean
-                you've been disconnected — try again in a moment.
+                Couldn't check the connection. That doesn't mean you're disconnected. Try again in a moment.
               </p>
               <button
                 onClick={checkStatus}
@@ -1836,7 +1833,7 @@ function SettingsSection({ onSave }) {
           <div className="flex-1 min-w-[200px]">
             <p className="text-sm font-bold text-[#122027]">Theme</p>
             <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
-              OLED is dark mode on a true-black background. Remembered on this device.
+              OLED is dark mode on true black. Saved on this device.
             </p>
           </div>
           <div role="radiogroup" aria-label="Theme" className="flex p-1 rounded-xl bg-slate-200 shrink-0">
@@ -1879,10 +1876,7 @@ function SettingsSection({ onSave }) {
               Merge markets into one entry
             </p>
             <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
-              When you pull from Wrike, rows on the same job, day and category
-              are combined into a single entry covering every market, with the
-              time added up. Useful if you do small amounts across many
-              territories.
+              Pulled rows with the same job, day and category become one entry covering every market, with the time added up.
             </p>
           </div>
           <button
@@ -1906,9 +1900,7 @@ function SettingsSection({ onSave }) {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-[#122027]">Fun mode</p>
             <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
-              The playful extras, like the coins that fly when you add or
-              remove time. Switch it off for a plain timesheet. Nothing about
-              your times changes either way.
+              Playful extras, like the coins that fly when you add time. Your times aren't affected.
             </p>
           </div>
           <button
@@ -1932,9 +1924,7 @@ function SettingsSection({ onSave }) {
           <div>
             <p className="text-sm font-bold text-[#122027]">Default category</p>
             <p className="text-xs text-[#768994] mt-0.5 leading-relaxed">
-              Pulled rows land on this category instead of being guessed from
-              the task name. Leave it empty and the guess applies, which only
-              ever picks between production/localisation and revisions.
+              Pulled rows get this category. Left empty, it's guessed from the task name: production/localisation or revisions.
             </p>
           </div>
           <SearchableSelect
