@@ -80,6 +80,51 @@ html.dark-theme.oled-theme {
   border-color: rgb(255 255 255 / 0.12) !important;
 }
 
+/* The always-dark panels: the Wrike Hub, "Where did my day go?" and the
+   pickers inside them. They are dark in every theme, so they paint their navy
+   as fixed hex classes that the variables above never reach. In OLED each of
+   those navies gets the neutral grey at the same depth. Light and Dark don't
+   match these selectors and keep the navy.
+   A new fixed dark hex in one of those panels needs a line here, or it shows
+   up as a navy patch on the black. */
+.oled-theme .bg-\[\#090d14\] { background-color: #000000 !important; }
+.oled-theme .bg-\[\#0b0f17\] { background-color: #050506 !important; }
+.oled-theme .bg-\[\#0f141f\] { background-color: #08080a !important; }
+.oled-theme .bg-\[\#0d1b22\] { background-color: #0a0a0b !important; }
+.oled-theme .bg-\[\#121824\] { background-color: #0c0c0e !important; }
+.oled-theme .bg-\[\#141b27\] { background-color: #0e0e10 !important; }
+.oled-theme .bg-\[\#131a24\] { background-color: #0e0e10 !important; }
+.oled-theme .bg-\[\#151c26\] { background-color: #101013 !important; }
+.oled-theme .bg-\[\#19202b\] { background-color: #121215 !important; }
+.oled-theme .bg-\[\#1a2333\] { background-color: #151518 !important; }
+.oled-theme .bg-\[\#1e2530\] { background-color: #17171a !important; }
+.oled-theme .bg-\[\#202938\] { background-color: #1a1a1e !important; }
+.oled-theme .bg-\[\#1e293b\] { background-color: #1c1c20 !important; }
+.oled-theme .bg-\[\#121824\]\/90 { background-color: rgb(12 12 14 / 0.9) !important; }
+.oled-theme .bg-\[\#121824\]\/50 { background-color: rgb(12 12 14 / 0.5) !important; }
+.oled-theme .bg-\[\#0b0f17\]\/95 { background-color: rgb(5 5 6 / 0.95) !important; }
+.oled-theme .bg-\[\#1e293b\]\/40 { background-color: rgb(28 28 32 / 0.4) !important; }
+.oled-theme .hover\:bg-\[\#121824\]:hover { background-color: #111114 !important; }
+.oled-theme .hover\:bg-\[\#1a2436\]:hover { background-color: #17171a !important; }
+.oled-theme .hover\:bg-\[\#1e2530\]:hover { background-color: #1a1a1e !important; }
+.oled-theme .hover\:bg-\[\#253042\]:hover { background-color: #222227 !important; }
+.oled-theme .hover\:bg-\[\#253247\]:hover { background-color: #222227 !important; }
+.oled-theme .border-\[\#222f3e\] { border-color: #1f1f24 !important; }
+.oled-theme .border-\[\#263143\] { border-color: #232328 !important; }
+.oled-theme .border-\[\#2d3748\] { border-color: #2a2a30 !important; }
+.oled-theme .border-\[\#2d3d52\] { border-color: #2e2e35 !important; }
+.oled-theme .border-\[\#1e293b\] { border-color: #1c1c20 !important; }
+.oled-theme .border-\[\#1e293b\]\/40 { border-color: rgb(28 28 32 / 0.4) !important; }
+.oled-theme .hover\:border-\[\#384252\]:hover { border-color: #3a3a42 !important; }
+.oled-theme .divide-\[\#1e293b\]\/60 > * + * { border-color: rgb(28 28 32 / 0.6) !important; }
+/* Their card gradient. `to` has to follow `from`: `from` resets both ends. */
+.oled-theme .from-\[\#1c2333\] {
+  --tw-gradient-from: #151518 var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgb(21 21 24 / 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+.oled-theme .to-\[\#141b28\] { --tw-gradient-to: #0e0e10 var(--tw-gradient-to-position) !important; }
+
 html.dark-theme {
   --rne-fg: #e2e8f0;
   --rne-muted: #94a3b8;
