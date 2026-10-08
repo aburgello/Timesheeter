@@ -2226,6 +2226,37 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     return () => clearTimeout(t);
   }, [rows]);
 
+  // A row whose edit has just been saved: a streak of light runs along its top
+  // and bottom edges (.timesheet-row in tailwind.css parks it off the left).
+  // justSaved maps row id to a fresh nonce per save. Played through the Web
+  // Animations API because a fast tab across cells saves the same row twice in
+  // well under a second, and a class already on the row would not replay.
+  const shownSaves = useRef({});
+  useEffect(() => {
+    for (const [id, nonce] of Object.entries(justSaved || {})) {
+      if (shownSaves.current[id] === nonce) continue;
+      shownSaves.current[id] = nonce;
+      const tr = document.querySelector(`tr[data-row-id="${CSS.escape(String(id))}"]`);
+      if (!tr) continue;
+      if (prefersReducedMotion()) {
+        // The confirmation is information, so it stays; only the travel goes.
+        // Both edges light for a moment, full width, then clear.
+        tr.animate(
+          [
+            { backgroundSize: "100% 2px, 100% 2px", backgroundPosition: "0 0, 0 100%" },
+            { backgroundSize: "100% 2px, 100% 2px", backgroundPosition: "0 0, 0 100%" },
+          ],
+          { duration: 500 }
+        );
+        continue;
+      }
+      tr.animate(
+        [{ backgroundPosition: "-100% 0, -100% 100%" }, { backgroundPosition: "200% 0, 200% 100%" }],
+        { duration: 800, easing: "cubic-bezier(0.45, 0, 0.25, 1)" }
+      );
+    }
+  }, [justSaved]);
+
   // Which way the day changed, for as long as the rows take to slide in.
   const lastDay = useRef(activeDay);
   const [daySlide, setDaySlide] = useState(null);
@@ -3561,6 +3592,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 return (
                 <tr
                   key={row.id}
+                  data-row-id={row.id}
                   className={`timesheet-row transition-colors group relative ${
                     enteringIds.has(row.id) ? "row-enter" : ""
                   } ${leavingIds.has(row.id) ? "row-leave" : ""} ${
@@ -3573,17 +3605,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   }`}
                 >
                   <td className={`group/tools p-2 border-r border-[#f0f4f8] align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
-                    {/* Save confirmation. Absolute against the row (the <tr> is
-                        position:relative), so it sweeps the full width from
-                        inside the first cell — a <tr> can only hold cells, so it
-                        can't live directly on the row.
-                        Keyed by the nonce: React remounts it on each save, which
-                        restarts the animation. Re-applying a class would not,
-                        and a fast tab across cells saves the same row twice in
-                        well under a second. */}
-                    {justSaved?.[row.id] && (
-                      <span key={justSaved[row.id]} className="row-saved-flash" aria-hidden="true" />
-                    )}
                     {/* The select box and the delete button take no room until
                         the row's first cell is pointed at or focused, or the row is selected, then ease in
                         (ROW_TOOLS_*). Reserved permanently, they cost every row
