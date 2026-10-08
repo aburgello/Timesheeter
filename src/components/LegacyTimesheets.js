@@ -247,6 +247,16 @@ const FilmMissing = () => (
   </span>
 );
 
+// A timesheet row's select box and delete button, revealed when the row (a
+// Tailwind `group`) is hovered or has focus inside it. Written out in full so
+// Tailwind's scanner sees every class. On a device with no hover there is
+// nothing to reveal them, so they are simply always there.
+const ROW_TOOLS_EASE = "duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none";
+const ROW_TOOLS_GUTTER = "w-0 group-hover:w-6 group-focus-within:w-6 [@media(hover:none)]:w-6";
+const ROW_TOOLS_INSET = "pl-1 group-hover:pl-6 group-focus-within:pl-6 [@media(hover:none)]:pl-6";
+const ROW_TOOLS_DELETE =
+  "w-0 mr-0 opacity-0 group-hover:w-5 group-hover:mr-2 group-hover:opacity-70 group-focus-within:w-5 group-focus-within:mr-2 group-focus-within:opacity-70 [@media(hover:none)]:w-5 [@media(hover:none)]:mr-2 [@media(hover:none)]:opacity-70";
+
 export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Drag-resizable column configs (persisted per table).
   const WRIKE_TS_COLS = [
@@ -3459,6 +3469,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     {justSaved?.[row.id] && (
                       <span key={justSaved[row.id]} className="row-saved-flash" aria-hidden="true" />
                     )}
+                    {/* The select box and the delete button take no room until
+                        the row is pointed at, focused or selected, then ease in
+                        (ROW_TOOLS_*). Reserved permanently, they cost every row
+                        52px of the Job Number column for controls that are
+                        invisible most of the time. */}
                     {/* Selection gutter. Absolutely positioned against the row
                         (the <tr> is position:relative) so it reads as a strip
                         down the left edge of the TABLE rather than as a control
@@ -3474,8 +3489,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           onClick={() => toggleRowSelected(row.id)}
                           aria-pressed={selectedRowIds.has(row.id)}
                           aria-label="Select row for batch edit"
-                          className={`absolute left-0 top-0 bottom-0 w-6 flex items-center justify-center transition-colors z-[1] ${
-                            selectedRowIds.has(row.id) ? "bg-[#12a0e1]/10" : "hover:bg-slate-100"
+                          className={`absolute left-0 top-0 bottom-0 overflow-hidden flex items-center justify-center z-[1] transition-[width,background-color] ${ROW_TOOLS_EASE} ${
+                            selectedRowIds.has(row.id) ? "w-6 bg-[#12a0e1]/10" : `${ROW_TOOLS_GUTTER} hover:bg-slate-100`
                           }`}
                         >
                           <span
@@ -3492,20 +3507,22 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         </button>
                       </HoverLabel>
                     )}
-                    <div className={`flex items-start gap-2 ${rowsAreEditable ? "pl-6" : "pl-1"}`}>
+                    <div className={`flex items-start transition-[padding] ${ROW_TOOLS_EASE} ${
+                      !rowsAreEditable ? "pl-1" : selectedRowIds.has(row.id) ? "pl-6" : ROW_TOOLS_INSET
+                    }`}>
                       <HoverLabel label={rowsAreEditable ? "Delete row" : undefined} delay={400}>
                         <button
                           aria-label={rowsAreEditable ? "Delete row" : undefined}
                           onClick={() => handleDeleteRow(row.id)}
                           disabled={!rowsAreEditable}
-                          className={`mt-1.5 transition-opacity ${
+                          className={`mt-1.5 shrink-0 overflow-hidden rounded-full transition-[width,margin,opacity] ${ROW_TOOLS_EASE} ${
                             !rowsAreEditable
-                              ? "opacity-0 cursor-not-allowed"
-                              : "opacity-0 group-hover:opacity-70 hover:!opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 focus-visible:outline-none"
+                              ? "w-0 opacity-0 cursor-not-allowed"
+                              : `${ROW_TOOLS_DELETE} hover:!opacity-100 focus-visible:!opacity-100 focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 focus-visible:outline-none`
                           }`}
                         >
                           <XCircle
-                            className={`w-5 h-5 ${
+                            className={`w-5 h-5 max-w-none ${
                               !rowsAreEditable
                                 ? "text-slate-400"
                                 : "text-rose-500 fill-rose-100"
