@@ -3104,7 +3104,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       {/* --- HEADER --- */}
       <PageHeader pageId="legacy" icon={Database} title="Weekly Timesheet" subtitle={weekDateRange}>
         <div className="flex items-center gap-2 text-[13px] text-white/85 font-medium">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          {/* Waves on arrival and again when pointed at. Still with fun mode off. */}
+          <span className={`text-base leading-none shrink-0 ${funMode ? "hand-wave" : ""}`} aria-hidden="true">👋</span>
           Welcome Back, {wrikeFullName ? wrikeFullName : "Loading..."}
         </div>
       </PageHeader>

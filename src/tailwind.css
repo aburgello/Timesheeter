@@ -112,7 +112,33 @@
   animation: rowSavedPulse 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* The hand beside "Welcome Back". Two waves from the wrist as the page
+   arrives, then still. Pointing at it waves again: the hover rule names a
+   second, identical keyframes so the browser sees a new animation and plays
+   it, where repeating the same name would do nothing. */
+@keyframes handWave {
+  0%, 100% { transform: rotate(0deg); }
+  12%, 37%, 62% { transform: rotate(16deg); }
+  25%, 50% { transform: rotate(-10deg); }
+  75% { transform: rotate(0deg); }
+}
+@keyframes handWaveAgain {
+  0%, 100% { transform: rotate(0deg); }
+  12%, 37%, 62% { transform: rotate(16deg); }
+  25%, 50% { transform: rotate(-10deg); }
+  75% { transform: rotate(0deg); }
+}
+.hand-wave {
+  display: inline-block;
+  transform-origin: 70% 75%;
+  animation: handWave 1.6s ease-in-out 0.5s 1 both;
+}
+.hand-wave:hover { animation: handWaveAgain 1.6s ease-in-out 1 both; }
+
 @media (prefers-reduced-motion: reduce) {
+  .hand-wave,
+  .hand-wave:hover { animation: none; }
+
   .row-saved-flash {
     animation: rowSavedFade 700ms linear both;
     transform: none;
