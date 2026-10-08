@@ -247,15 +247,18 @@ const FilmMissing = () => (
   </span>
 );
 
-// A timesheet row's select box and delete button, revealed when the row (a
-// Tailwind `group`) is hovered or has focus inside it. Written out in full so
-// Tailwind's scanner sees every class. On a device with no hover there is
+// A timesheet row's select box and delete button, revealed when the row's
+// first cell (the `group/tools`) is hovered or has focus inside it. The cell
+// and not the whole row: revealing them shifts the job field, and that
+// shouldn't happen every time the pointer crosses a row on its way to the
+// territory or time columns. Written out in full so Tailwind's scanner sees
+// every class. On a device with no hover there is
 // nothing to reveal them, so they are simply always there.
 const ROW_TOOLS_EASE = "duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none";
-const ROW_TOOLS_GUTTER = "w-0 group-hover:w-6 group-focus-within:w-6 [@media(hover:none)]:w-6";
-const ROW_TOOLS_INSET = "pl-1 group-hover:pl-6 group-focus-within:pl-6 [@media(hover:none)]:pl-6";
+const ROW_TOOLS_GUTTER = "w-0 group-hover/tools:w-6 group-focus-within/tools:w-6 [@media(hover:none)]:w-6";
+const ROW_TOOLS_INSET = "pl-1 group-hover/tools:pl-6 group-focus-within/tools:pl-6 [@media(hover:none)]:pl-6";
 const ROW_TOOLS_DELETE =
-  "w-0 mr-0 opacity-0 group-hover:w-5 group-hover:mr-2 group-hover:opacity-70 group-focus-within:w-5 group-focus-within:mr-2 group-focus-within:opacity-70 [@media(hover:none)]:w-5 [@media(hover:none)]:mr-2 [@media(hover:none)]:opacity-70";
+  "w-0 mr-0 opacity-0 group-hover/tools:w-5 group-hover/tools:mr-2 group-hover/tools:opacity-70 group-focus-within/tools:w-5 group-focus-within/tools:mr-2 group-focus-within/tools:opacity-70 [@media(hover:none)]:w-5 [@media(hover:none)]:mr-2 [@media(hover:none)]:opacity-70";
 
 export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   // Drag-resizable column configs (persisted per table).
@@ -3459,7 +3462,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     selectedRowIds.has(row.id) ? "!bg-[#12a0e1]/[0.07]" : ""
                   }`}
                 >
-                  <td className={`p-2 border-r border-[#f0f4f8] align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
+                  <td className={`group/tools p-2 border-r border-[#f0f4f8] align-middle min-w-[240px] ${isSub ? "bg-slate-50/40" : ""}`}>
                     {/* Save confirmation. Absolute against the row (the <tr> is
                         position:relative), so it sweeps the full width from
                         inside the first cell — a <tr> can only hold cells, so it
@@ -3472,7 +3475,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       <span key={justSaved[row.id]} className="row-saved-flash" aria-hidden="true" />
                     )}
                     {/* The select box and the delete button take no room until
-                        the row is pointed at, focused or selected, then ease in
+                        the row's first cell is pointed at or focused, or the row is selected, then ease in
                         (ROW_TOOLS_*). Reserved permanently, they cost every row
                         52px of the Job Number column for controls that are
                         invisible most of the time. */}
@@ -3499,7 +3502,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                             className={`w-[13px] h-[13px] rounded-[4px] border flex items-center justify-center transition-[background-color,border-color,opacity] duration-150 ${
                               selectedRowIds.has(row.id)
                                 ? "bg-[#12a0e1] border-[#12a0e1]"
-                                : "border-[#c2d0da] bg-white opacity-0 group-hover:opacity-100"
+                                : "border-[#c2d0da] bg-white opacity-0 group-hover/tools:opacity-100 group-focus-within/tools:opacity-100"
                             }`}
                           >
                             {selectedRowIds.has(row.id) && (
