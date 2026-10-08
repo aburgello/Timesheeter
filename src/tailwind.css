@@ -57,7 +57,7 @@
 }
 
 /* ── Timesheet row save confirmation ────────────────────────────────────────
-   A teal wipe across the row the moment its edit lands in Supabase. Edits are
+   A teal mark at the row's left edge the moment its edit lands in Supabase. Edits are
    optimistic, so the cell already shows the new value; this is the only signal
    that it actually persisted, which on a timesheet is the thing you most want
    to know.
@@ -67,8 +67,8 @@
    feedback — anything you'd notice twice becomes something you resent by the
    afternoon. It reads at the edge of vision and is gone in 700ms.
 
-   Only opacity and transform, so it composites on the GPU and never touches the
-   table's layout. Under reduced motion it becomes a brief static tint instead:
+   Only opacity, so it composites on the GPU and never touches the table's
+   layout. Under reduced motion it becomes a brief static tint instead:
    the confirmation is information, so it must not disappear entirely — only the
    movement does.
 
@@ -76,40 +76,46 @@
    by `inset: 0`. Chromium makes a <td> a containing block for absolutely
    positioned children even with no position set on it, so a full-bleed overlay
    in the first cell stops at that cell's edge rather than crossing the row.
-   Pinning only the left edge sidesteps the question — the bar and its bloom
-   land in the same place whichever element turns out to be the container. */
+   Pinning only the left edge sidesteps the question: the mark lands in the
+   same place whichever element turns out to be the container. */
 @keyframes rowSavedPulse {
-  0%   { opacity: 0; transform: scaleY(0.3); }
-  18%  { opacity: 1; transform: scaleY(1); }
-  100% { opacity: 0; transform: scaleY(1); }
+  0%   { opacity: 0; }
+  18%  { opacity: 1; }
+  100% { opacity: 0; }
 }
 @keyframes rowSavedFade {
   0%, 55% { opacity: 1; }
   100%    { opacity: 0; }
 }
 
+/* A hairline down the row's left edge with a soft tint fading out to its
+   right, which appears and goes. No glow and nothing that grows: a bar that
+   swelled from the middle with a wide bloom read as a blob, and now that the
+   job field starts at the row's edge it sat on top of the text.
+
+   The tint stops inside the first cell (it is clipped by it, see the geometry
+   note above), which is enough: this is seen at the edge of vision. */
 .row-saved-flash {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
-  width: 3px;
+  width: 160px;
   pointer-events: none;
   z-index: 1;
-  border-radius: 9999px;
   /* Deep teal, not the brand's #1cc1a5. These rows are already mint
      (.timesheet-row is #f0fdf8, #dcfce7 on hover), so the brand teal lands at
-     2.18:1 against them — under the 3:1 floor for a non-text indicator, i.e. a
-     green success mark on a green row. #0f766e measures 5.24:1 and is already
-     the palette's deep teal (Analytics uses it for completed %). */
-  background: #0f766e;
-  /* The bloom, not the bar, is what registers at the edge of vision: a wide
-     soft spread carries the confirmation across the row without an element
-     that has to measure the row. Brighter than the bar on purpose — the bar
-     carries the signal, the bloom carries the energy. */
-  box-shadow: 0 0 20px 5px rgba(28, 193, 165, 0.55);
-  transform-origin: center;
-  animation: rowSavedPulse 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
+     2.18:1 against them, under the 3:1 floor for a non-text indicator. #0f766e
+     measures 5.24:1 and is already the palette's deep teal. */
+  border-left: 2px solid #0f766e;
+  background: linear-gradient(to right, rgb(15 118 110 / 0.14), rgb(15 118 110 / 0));
+  animation: rowSavedPulse 650ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* On the dark themes the rows are dark, so the lighter teal is the one that
+   shows. */
+.dark-theme .row-saved-flash {
+  border-left-color: #2dd4bf;
+  background: linear-gradient(to right, rgb(45 212 191 / 0.12), rgb(45 212 191 / 0));
 }
 
 /* ── Micro-interactions ───────────────────────────────────────────────────────
