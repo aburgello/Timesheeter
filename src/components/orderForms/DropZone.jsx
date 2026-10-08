@@ -38,7 +38,7 @@ export default function DropZone({ onFile, busy, dragging, error }) {
       <button
         onClick={() => inputRef.current?.click()}
         disabled={busy}
-        className="mt-6 flex items-center gap-2 px-5 py-2.5 bg-[#122027] hover:bg-[#25373c] text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-50"
+        className="press mt-6 flex items-center gap-2 px-5 py-2.5 bg-[#122027] hover:bg-[#25373c] text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-50"
       >
         <Upload className="w-4 h-4" />
         Choose file

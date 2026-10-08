@@ -44,6 +44,9 @@ export default function OrderForms({ wrikeData }) {
   const [view, setView] = useState(readHash);
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
+  // The markets read so far while a film loads from Google, shown as they
+  // arrive. Not a file yet: nothing is stored until the load finishes.
+  const [partial, setPartial] = useState(null);
   const [refreshing, setRefreshing] = useState(null); // { done, total }
   const [signedInTick, setSignedInTick] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -198,11 +201,13 @@ export default function OrderForms({ wrikeData }) {
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-6 space-y-4">
         {files === null && <div className="h-64 rounded-2xl bg-white/60 border border-[#dce4ec] animate-pulse" />}
 
-        {files && googleConfigured() && <GoogleSource onLoaded={addFilm} onBusy={setGoogleBusy} signedInTick={signedInTick} />}
+        {files && googleConfigured() && <GoogleSource onLoaded={addFilm} onBusy={setGoogleBusy} onPartial={setPartial} signedInTick={signedInTick} />}
 
-        {empty && <DropZone onFile={addFile} busy={busy} dragging={dragging} error={error} />}
+        {partial && <MarketList file={partial} today={today} wrikeIndex={wrikeIndex} arriving />}
 
-        {files && files.length > 0 && (
+        {empty && !partial && <DropZone onFile={addFile} busy={busy} dragging={dragging} error={error} />}
+
+        {files && files.length > 0 && !partial && (
           <>
             <div className="flex flex-wrap items-stretch gap-2">
               <FileSwitcher
@@ -218,7 +223,7 @@ export default function OrderForms({ wrikeData }) {
                   onClick={refresh}
                   disabled={working}
                   title={`Read from Google at ${readAt(file.loadedAt)}`}
-                  className="ml-auto flex items-center gap-2 px-4 rounded-xl bg-white border border-[#dce4ec] hover:border-[#12a0e1] text-sm font-bold text-[#122027] transition-colors disabled:opacity-60 min-h-[52px]"
+                  className="press ml-auto flex items-center gap-2 px-4 rounded-xl bg-white border border-[#dce4ec] hover:border-[#12a0e1] text-sm font-bold text-[#122027] transition-colors disabled:opacity-60 min-h-[52px]"
                 >
                   {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                   {refreshing ? `Reading ${refreshing.done} of ${refreshing.total || "…"}` : `Refresh · read at ${readAt(file.loadedAt)}`}

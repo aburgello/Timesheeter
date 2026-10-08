@@ -49,7 +49,10 @@ function SortHeader({ id, sort, onSort, children }) {
   );
 }
 
-export default function MarketList({ file, today, wrikeIndex, onOpen }) {
+// `arriving` is a film still loading: rows ease in as each market is read,
+// their bars fill, and they don't open yet. A finished list is shown still,
+// since it is returned to from every market and shouldn't replay each time.
+export default function MarketList({ file, today, wrikeIndex, onOpen, arriving = false }) {
   const [filter, setFilter] = useState(null);
   // null = the default order (what needs attention first).
   const [sort, setSort] = useState(null);
@@ -115,7 +118,7 @@ export default function MarketList({ file, today, wrikeIndex, onOpen }) {
       {rows.map((m) => {
         if (m.status === "unreadable") {
           return (
-            <div key={m.name} className={`${GRID} py-3 border-b border-slate-100 last:border-b-0 text-sm`}>
+            <div key={m.name} className={`${GRID} py-3 border-b border-slate-100 last:border-b-0 text-sm ${arriving ? "list-row-in" : ""}`}>
               <MarketName name={m.name} />
               <span><span className={`${pillClass} ${STATUS_CLASS.unreadable}`}>{STATUS_LABEL.unreadable}</span></span>
               <span className="col-span-5 text-[#768994] truncate">{m.unreadable}</span>
@@ -126,14 +129,15 @@ export default function MarketList({ file, today, wrikeIndex, onOpen }) {
         return (
           <button
             key={m.name}
-            onClick={() => onOpen(m.name)}
-            className={`${GRID} w-full py-3 border-b border-slate-100 last:border-b-0 text-sm text-left hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 transition-colors group`}
+            onClick={() => onOpen?.(m.name)}
+            disabled={arriving}
+            className={`${arriving ? "list-row-in " : ""}${GRID} w-full py-3 border-b border-slate-100 last:border-b-0 text-sm text-left hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 transition-colors group`}
           >
             <MarketName name={m.name} undated={m.undated} />
             <span><span className={`${pillClass} ${STATUS_CLASS[m.status]}`}>{STATUS_LABEL[m.status]}</span></span>
             <span className="flex items-center gap-3 min-w-0">
               <span className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                <span className="block h-full rounded-full bg-[#1cc1a5]" style={{ width: `${pct}%` }} />
+                <span className={`block h-full rounded-full bg-[#1cc1a5] ${arriving ? "bar-fill" : ""}`} style={{ width: `${pct}%` }} />
               </span>
               <span className="text-xs text-[#768994] tabular-nums shrink-0 w-14 text-right">{m.confirmed} of {m.total}</span>
             </span>

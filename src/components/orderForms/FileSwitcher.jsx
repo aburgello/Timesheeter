@@ -52,7 +52,7 @@ export default function FileSwitcher({ files, selectedId, onSelect, onRemove, on
       <button
         onClick={() => inputRef.current?.click()}
         disabled={busy}
-        className="flex items-center gap-1.5 px-3.5 rounded-xl border border-dashed border-[#c5d2dc] text-sm font-bold text-[#768994] hover:border-[#12a0e1] hover:text-[#12a0e1] transition-colors disabled:opacity-50 min-h-[52px]"
+        className="press flex items-center gap-1.5 px-3.5 rounded-xl border border-dashed border-[#c5d2dc] text-sm font-bold text-[#768994] hover:border-[#12a0e1] hover:text-[#12a0e1] transition-colors disabled:opacity-50 min-h-[52px]"
       >
         <Plus className="w-4 h-4" />
         Add file

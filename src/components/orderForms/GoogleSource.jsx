@@ -28,9 +28,10 @@ export const googleMessage = (err) => GOOGLE_MESSAGES[err?.reason] || "Something
 const inputClass =
   "px-3 py-2 text-sm border border-[#dce4ec] rounded-xl outline-none focus:border-[#12a0e1] bg-white min-w-0";
 const buttonClass =
-  "flex items-center gap-2 px-4 py-2 bg-[#122027] hover:bg-[#25373c] text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0";
+  "press flex items-center gap-2 px-4 py-2 bg-[#122027] hover:bg-[#25373c] text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0";
 
-export default function GoogleSource({ onLoaded, onBusy, signedInTick }) {
+// `onPartial` gets the markets read so far while a film loads, then null.
+export default function GoogleSource({ onLoaded, onBusy, onPartial, signedInTick }) {
   const [connected, setConnected] = useState(googleConnected);
   const [indexId, setIndexId] = useState(() => localStorage.getItem(INDEX_KEY) || "");
   const [linkDraft, setLinkDraft] = useState("");
@@ -108,6 +109,7 @@ export default function GoogleSource({ onLoaded, onBusy, signedInTick }) {
     const film = index.films.find((f) => f.title === tab);
     setError("");
     setProgress({ done: 0, total: 0 });
+    const arrived = [];
     try {
       // The hour may have run out since the films were listed. Asked for here,
       // inside the click, so the browser lets Google's window open.
@@ -115,6 +117,10 @@ export default function GoogleSource({ onLoaded, onBusy, signedInTick }) {
       const file = await loadFilm({
         indexId, tab, columns: film.columns, contains,
         onProgress: (done, total) => setProgress({ done, total }),
+        onMarket: (market) => {
+          arrived.push(market);
+          onPartial?.({ name: tab, markets: [...arrived] });
+        },
       });
       if (!file) setError("That tab has no markets listed.");
       else await onLoaded(file);
@@ -122,6 +128,7 @@ export default function GoogleSource({ onLoaded, onBusy, signedInTick }) {
       fail(err);
     } finally {
       setProgress(null);
+      onPartial?.(null);
     }
   };
 

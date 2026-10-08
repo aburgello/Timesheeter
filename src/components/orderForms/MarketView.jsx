@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ExternalLink } from "lucide-react";
+import { motion } from "framer-motion";
 import { marketSummary, orderUrgency } from "../../lib/orderForms/status";
 import { findTask } from "../../lib/orderForms/wrikeMatch";
 import OrderPanel from "./OrderPanel";
@@ -81,10 +82,22 @@ export default function MarketView({ market, kind, today, wrikeIndex, wrikeParen
                   aria-selected={active}
                   tabIndex={active ? 0 : -1}
                   onClick={() => setSelected(i)}
-                  className={`w-full flex items-center gap-3 px-5 py-3 border-b border-slate-100 text-left text-sm focus:outline-none transition-colors ${
-                    active ? "bg-[#12a0e1]/10" : "hover:bg-slate-50 focus-visible:bg-slate-50"
+                  className={`relative isolate w-full flex items-center gap-3 px-5 py-3 border-b border-slate-100 text-left text-sm focus:outline-none transition-colors ${
+                    active ? "" : "hover:bg-slate-50 focus-visible:bg-slate-50"
                   }`}
                 >
+                  {/* One highlight shared by the list (layoutId), so it slides
+                      to the next order instead of blinking off one and on
+                      another. Behind the row's content: the row is its own
+                      stacking context (isolate) and this sits at its back. */}
+                  {active && (
+                    <motion.span
+                      layoutId="order-highlight"
+                      aria-hidden="true"
+                      className="absolute inset-0 -z-10 bg-[#12a0e1]/10"
+                      transition={{ type: "tween", duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                    />
+                  )}
                   <span className={`${pillClass} bg-slate-100 text-slate-600 w-16 justify-center shrink-0`}>{o.placement || "—"}</span>
                   <span className={`flex-1 min-w-0 truncate ${active ? "font-bold text-sky-600" : "text-[#122027]"}`}>
                     {o.siteName || <span className="text-[#9aabb5]">No site name</span>}

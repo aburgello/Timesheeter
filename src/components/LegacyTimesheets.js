@@ -78,6 +78,7 @@ import CommentTrailModal from "./legacy/CommentTrailModal";
 import ReportProblemModal from "./legacy/ReportProblemModal";
 import PullTimesButton from "./legacy/PullTimesButton";
 import { HoverLabel } from "./shared/FloatingCard";
+import { Rolling, Tick, prefersReducedMotion } from "./shared/motion";
 
 const ACTIVE_DAY_KEY = "xyi_legacy_activeDay";
 const todayName = () => DAYS[(new Date().getDay() + 6) % 7];
@@ -169,6 +170,9 @@ function AutoGrowTextarea({ value, clampRows, onFocus, onBlur, ...rest }) {
 // native one is drawn by the browser, and on the dark themes it came out as a
 // flat grey square that read as disabled.
 function RowCheck({ checked, onChange, disabled, label }) {
+  // Only a tick made by this click is drawn. One that was already there when
+  // the row appeared is just shown.
+  const [justTicked, setJustTicked] = useState(false);
   return (
     <button
       type="button"
@@ -176,12 +180,12 @@ function RowCheck({ checked, onChange, disabled, label }) {
       aria-checked={!!checked}
       aria-label={label}
       disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`inline-flex w-[18px] h-[18px] items-center justify-center rounded-[5px] border align-middle transition-[background-color,border-color] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 ${
+      onClick={() => { setJustTicked(!checked); onChange(!checked); }}
+      className={`${justTicked && checked ? "tick-pop " : ""}inline-flex w-[18px] h-[18px] items-center justify-center rounded-[5px] border align-middle transition-[background-color,border-color] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 ${
         checked ? "bg-[#12a0e1] border-[#12a0e1]" : "bg-white border-[#c2d0da] hover:border-[#12a0e1]"
       } ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
     >
-      {checked && <Check className="w-3 h-3 text-white" strokeWidth={3.5} />}
+      {checked && <Tick draw={justTicked} className="w-3 h-3 text-white" />}
     </button>
   );
 }
@@ -2181,10 +2185,59 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     updateRow(id, field, value);
   };
 
+  // The row fades and slides out first, then is deleted, so it is clear which
+  // one went. It is still there for those 180ms, hence pointer-events: none on
+  // .row-leave.
+  const [leavingIds, setLeavingIds] = useState(() => new Set());
   const handleDeleteRow = (id) => {
     if (frozenDays[activeDay]) return;
-    deleteRow(id);
+    if (prefersReducedMotion()) { deleteRow(id); return; }
+    setLeavingIds((prev) => new Set(prev).add(id));
+    setTimeout(() => {
+      deleteRow(id);
+      setLeavingIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    }, 180);
   };
+
+  // Rows arriving. A row is new if its id wasn't there a moment ago. The first
+  // rows to load are not new, they are the week arriving: the set of known ids
+  // starts from them (or from nothing, on a week that stays empty).
+  const knownRowIds = useRef(null);
+  const rowsNow = useRef(rows);
+  rowsNow.current = rows;
+  const [enteringIds, setEnteringIds] = useState(() => new Set());
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (knownRowIds.current === null) knownRowIds.current = new Set(rowsNow.current.map((r) => r.id));
+    }, 2500);
+    return () => clearTimeout(t);
+  }, []);
+  useEffect(() => {
+    const ids = rows.map((r) => r.id);
+    if (knownRowIds.current === null) {
+      if (ids.length) knownRowIds.current = new Set(ids);
+      return;
+    }
+    const fresh = ids.filter((id) => !knownRowIds.current.has(id));
+    if (!fresh.length) return;
+    fresh.forEach((id) => knownRowIds.current.add(id));
+    setEnteringIds(new Set(fresh));
+    const t = setTimeout(() => setEnteringIds(new Set()), 1000);
+    return () => clearTimeout(t);
+  }, [rows]);
+
+  // Which way the day changed, for as long as the rows take to slide in.
+  const lastDay = useRef(activeDay);
+  const [daySlide, setDaySlide] = useState(null);
+  useLayoutEffect(() => {
+    if (lastDay.current === activeDay) return;
+    const forward = DAYS.indexOf(activeDay) > DAYS.indexOf(lastDay.current);
+    lastDay.current = activeDay;
+    if (prefersReducedMotion()) return;
+    setDaySlide(forward ? "right" : "left");
+    const t = setTimeout(() => setDaySlide(null), 300);
+    return () => clearTimeout(t);
+  }, [activeDay]);
 
   const toggleFreeze = () => {
     setFrozenDays((prev) => ({
@@ -3233,7 +3286,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                           : "text-[#768994]"
                       }`}
                     >
-                      {formatDayTotal(getDayTotal(day))}h
+                      <Rolling amount={getDayTotal(day)}>{formatDayTotal(getDayTotal(day))}h</Rolling>
                     </span>
                   )}
                 </div>
@@ -3254,7 +3307,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         />
 
         {/* --- TABLE AREA --- */}
-        <div ref={consolScrollRef} className="flex-1 bg-white relative overflow-x-auto w-full min-h-[600px]">
+        <div ref={consolScrollRef} className={`flex-1 bg-white relative overflow-x-auto w-full min-h-[600px] ${daySlide ? "day-sliding" : ""}`}>
           <table className="w-full text-left text-[12px] border-collapse [&_td]:overflow-hidden" style={{ tableLayout: "fixed", minWidth: `${consolTotal}px` }}>
             <colgroup>
               {CONSOL_COLS.map((c) => <col key={c.key} style={{ width: consolWidths[c.key] }} />)}
@@ -3309,7 +3362,12 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#f0f4f8]">
+            {/* Keyed by the day so each change is a fresh body and the slide
+                replays, even going the same way twice. */}
+            <tbody
+              key={activeDay}
+              className={`divide-y divide-[#f0f4f8] ${daySlide === "right" ? "day-in-right" : daySlide === "left" ? "day-in-left" : ""}`}
+            >
               {showConsolidationWarning && (
                 <tr>
                   <td
@@ -3504,6 +3562,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 <tr
                   key={row.id}
                   className={`timesheet-row transition-colors group relative ${
+                    enteringIds.has(row.id) ? "row-enter" : ""
+                  } ${leavingIds.has(row.id) ? "row-leave" : ""} ${
                     !rowsAreEditable ? "frozen-row" : ""
                   } ${isSub ? "bg-white" : ""} ${
                     // The gutter tick is 13px; on a wide table that is not
@@ -3847,14 +3907,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                     over ? "text-amber-600" : "text-[#122027]"
                   }`}
                 >
-                  <span ref={timeTotalRef} className="inline-block">{formatDayTotal(regular)}h</span>
+                  <span ref={timeTotalRef} className="inline-block"><Rolling key={activeDay} amount={regular}>{formatDayTotal(regular)}h</Rolling></span>
                 </span>
                 <span
                   style={{ width: widthOf("Add. Time") }}
                   title="Add. time"
                   className="shrink-0 py-2 text-center tabular-nums border-l border-[#f0f4f8] text-[#122027]"
                 >
-                  <span ref={addTotalRef} className="inline-block">{formatDayTotal(extra)}h</span>
+                  <span ref={addTotalRef} className="inline-block"><Rolling key={activeDay} amount={extra}>{formatDayTotal(extra)}h</Rolling></span>
                 </span>
               </div>
               <div className="flex items-center justify-end border-t border-[#f0f4f8]">
@@ -3865,7 +3925,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   style={{ width: widthOf("Add. Time") }}
                   className="shrink-0 py-2 text-center tabular-nums text-[#122027] text-sm font-black"
                 >
-                  {formatDayTotal(regular + extra)}h
+                  <Rolling key={activeDay} amount={regular + extra}>{formatDayTotal(regular + extra)}h</Rolling>
                 </span>
               </div>
             </div>
@@ -4046,7 +4106,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   }`}
                 >
                   {jsonCopied ? (
-                    <CheckCircle className="w-4 h-4" />
+                    <CheckCircle className="pop-in w-4 h-4" />
                   ) : (
                     <Copy className="w-4 h-4" />
                   )}

@@ -42,7 +42,9 @@ async function loadMarket({ name, link }, contains, medium) {
 
 // `columns` is indexColumns() of the tab's header. Returns an OrderFile whose
 // `source` is what Refresh needs to read it again.
-export async function loadFilm({ indexId, tab, columns, contains, onProgress }, now = new Date()) {
+// `onMarket` is told about each market as its sheet is read, in the order
+// they finish, so the page can show them arriving instead of a counter.
+export async function loadFilm({ indexId, tab, columns, contains, onProgress, onMarket }, now = new Date()) {
   const [names, links] = await readIndexColumns(indexId, tab, [columnLetter(columns.market), columnLetter(columns.link)]);
   const rows = names
     .map((name, i) => ({ name: String(name || "").trim(), link: links[i] || "" }))
@@ -56,6 +58,7 @@ export async function loadFilm({ indexId, tab, columns, contains, onProgress }, 
   const markets = await mapPool(rows, IN_FLIGHT, async (row) => {
     const market = await loadMarket(row, wanted, medium);
     onProgress?.(++done, rows.length);
+    onMarket?.(market);
     return market;
   });
 

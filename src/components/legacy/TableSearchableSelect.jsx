@@ -64,6 +64,7 @@ export default function TableSearchableSelect({
   const isOpen = activeDropdown === dropdownId && !disabled;
   const [searchTerm, setSearchTerm] = useState(value || "");
   const wrapperRef = useRef(null);
+  const inputRef = useRef(null);
   const [fixedStyle, setFixedStyle] = useState({});
 
   // `disabled` too: a step still waiting to be saved when the day is locked is
@@ -113,7 +114,18 @@ export default function TableSearchableSelect({
         ? Math.floor(seconds / STEP_SECONDS) * STEP_SECONDS + STEP_SECONDS
         : Math.ceil(seconds / STEP_SECONDS) * STEP_SECONDS - STEP_SECONDS;
     const next = secondsToHM(Math.min(ceiling, Math.max(0, onGrid)));
-    if (parseTimeToSeconds(next) !== seconds) onStep?.(direction, wrapperRef.current);
+    if (parseTimeToSeconds(next) !== seconds) {
+      onStep?.(direction, wrapperRef.current);
+      // The new figure comes up from below on +, down from above on -. Through
+      // the Web Animations API so a second click mid-slide starts it again
+      // cleanly; a CSS class already on the element would not replay.
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        inputRef.current?.animate(
+          [{ transform: `translateY(${direction > 0 ? 60 : -60}%)`, opacity: 0 }, { transform: "none", opacity: 1 }],
+          { duration: 200, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+        );
+      }
+    }
     pendingStep.current = next;
     setSearchTerm(next);
     setActiveDropdown(null);
@@ -279,6 +291,7 @@ export default function TableSearchableSelect({
           </span>
         )}
         <input
+          ref={inputRef}
           type="text"
           value={searchTerm}
           onChange={(e) => {

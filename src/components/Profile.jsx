@@ -1733,6 +1733,24 @@ function SettingsSection({ onSave }) {
   const [status, setStatus] = useState({ checked: false, connected: false });
   const [disconnecting, setDisconnecting] = useState(false);
   const [theme, setThemeState] = useState(getTheme);
+  // The new theme spreads out from the button that chose it, where the browser
+  // can do that (view transitions); otherwise, and with reduced motion, it
+  // just changes. The class and the three variables are read by themeReveal in
+  // tailwind.css.
+  const chooseTheme = (id, e) => {
+    const apply = () => setThemeState(setTheme(id));
+    if (id === theme || !document.startViewTransition || prefersReducedMotion()) { apply(); return; }
+    const box = e.currentTarget.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const reach = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+    const root = document.documentElement;
+    root.style.setProperty("--reveal-x", `${x}px`);
+    root.style.setProperty("--reveal-y", `${y}px`);
+    root.style.setProperty("--reveal-r", `${reach}px`);
+    root.classList.add("theme-revealing");
+    document.startViewTransition(apply).finished.finally(() => root.classList.remove("theme-revealing"));
+  };
   const { defaultCategory, groupMultiCountry, funMode, setPrefs } = useTimesheetPrefs();
 
   const checkStatus = useCallback(() => {
@@ -1840,8 +1858,8 @@ function SettingsSection({ onSave }) {
                 key={id}
                 role="radio"
                 aria-checked={theme === id}
-                onClick={() => setThemeState(setTheme(id))}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                onClick={(e) => chooseTheme(id, e)}
+                className={`press flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
                   theme === id ? "bg-white text-[#122027] shadow-sm" : "text-[#768994] hover:text-[#122027]"
                 }`}
               >
