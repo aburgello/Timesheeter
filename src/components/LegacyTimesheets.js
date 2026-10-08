@@ -2227,7 +2227,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   }, [rows]);
 
   // A row whose edit has just been saved: one soft sheen crosses it, left to
-  // right. A background gradient the width of a third of the row, animated from
+  // right. A background gradient nearly half the row wide, animated over a second from
   // off its left edge to off its right, so nothing is added to the row and
   // nothing rests on it afterwards.
   //
@@ -2251,7 +2251,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const tr = document.querySelector(`tr[data-row-id="${CSS.escape(String(id))}"]`);
       if (!tr) continue;
       const rowWidth = tr.offsetWidth;
-      const band = Math.round(rowWidth * 0.34);
+      const band = Math.round(rowWidth * 0.46);
       const dark = document.documentElement.classList.contains("dark-theme");
       const peak = dark ? 0.2 : 0.16;
       const sheen = `linear-gradient(100deg, rgb(18 160 225 / 0) 0%, rgb(18 160 225 / ${peak}) 42%, rgb(28 193 165 / ${peak}) 58%, rgb(28 193 165 / 0) 100%)`;
@@ -2269,7 +2269,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           ];
       const timing = prefersReducedMotion()
         ? { duration: 450 }
-        : { duration: 620, easing: "cubic-bezier(0.3, 0, 0.2, 1)" };
+        : { duration: 1000, easing: "cubic-bezier(0.3, 0, 0.2, 1)" };
       for (const el of [tr, tr.cells[0]]) el?.animate(frames, timing);
     }
   }, [justSaved]);
