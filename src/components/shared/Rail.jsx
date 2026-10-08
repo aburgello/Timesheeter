@@ -166,12 +166,17 @@ export default function Rail({ activePage, setActivePage }) {
               : "text-[#768994] hover:text-[#122027] hover:bg-slate-100 focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[#12a0e1]/30"
           }`}
         >
-          <span
-            className={`w-14 h-14 shrink-0 flex items-center justify-center text-sm font-black rounded-2xl ${
-              activePage === "profile" ? "" : "bg-slate-100"
-            }`}
-          >
-            {initials || "?"}
+          {/* The initials tile is inset in its slot, like the icons above it are
+              in theirs. Filling the slot put the tile's edge against the label
+              with nothing between them. */}
+          <span className="w-14 h-14 shrink-0 flex items-center justify-center">
+            <span
+              className={`w-10 h-10 flex items-center justify-center text-sm font-black rounded-xl ${
+                activePage === "profile" ? "" : "bg-slate-100"
+              }`}
+            >
+              {initials || "?"}
+            </span>
           </span>
           <span className={railLabelClass}>{PAGES.profile.label}</span>
         </button>
