@@ -79,6 +79,7 @@ import ReportProblemModal from "./legacy/ReportProblemModal";
 import PullTimesButton from "./legacy/PullTimesButton";
 import { HoverLabel } from "./shared/FloatingCard";
 import { Rolling, Tick, prefersReducedMotion } from "./shared/motion";
+import { snapshotRows, glideRows, sweepRows, nudge, picturesOf } from "./legacy/rowMotion";
 
 const ACTIVE_DAY_KEY = "xyi_legacy_activeDay";
 const todayName = () => DAYS[(new Date().getDay() + 6) % 7];
@@ -2301,12 +2302,23 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     return () => clearTimeout(t);
   }, [activeDay]);
 
+  // Set when the lock was pressed, so the sweep below plays for that and not
+  // for arriving on a day that happens to be locked already.
+  const lockPressed = useRef(false);
+  const lockIconRef = useRef(null);
   const toggleFreeze = () => {
+    lockPressed.current = true;
+    nudge(lockIconRef.current);
     setFrozenDays((prev) => ({
       ...prev,
       [activeDay]: !prev[activeDay],
     }));
   };
+  useLayoutEffect(() => {
+    if (!lockPressed.current) return;
+    lockPressed.current = false;
+    sweepRows(consolScrollRef.current);
+  }, [frozenDays]);
 
   // Clean a stored job number for display: if the Job Book has a canonical
   // "Film : CODE, Desc" for this code, show that instead of whatever polluted
@@ -2323,6 +2335,19 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const isDayFrozen = frozenDays[activeDay] || false;
 
   const [consolidatedView, setConsolidatedView] = useState(true);
+  // Switching between the grouped and the flat table: note where every row is,
+  // switch, then let each one glide to its new place (rowMotion.js). The switch
+  // itself is the same state change it always was.
+  const rowsBeforeSwitch = useRef(null);
+  const switchConsolidated = (to) => {
+    rowsBeforeSwitch.current = snapshotRows(consolScrollRef.current);
+    setConsolidatedView((v) => (typeof to === "boolean" ? to : !v));
+  };
+  useLayoutEffect(() => {
+    const before = rowsBeforeSwitch.current;
+    rowsBeforeSwitch.current = null;
+    if (before) glideRows(consolScrollRef.current, before);
+  }, [consolidatedView]);
 
   // ── Batch edit ──────────────────────────────────────────────────────────
   // Row ids ticked for a bulk change. Real row ids only: the consolidated
@@ -2701,8 +2726,15 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const merged = { ...mergeRows(selectedRows), id: Date.now() + Math.floor(Math.random() * 1000) };
       // addRows has already said so if the save failed; the originals stay.
       if (!(await addRows([merged]))) return;
+      // Display only, and it only looks at the screen: pictures of the rows
+      // that are about to go, taken while they are still there. The save above
+      // and the delete below are exactly as they were (see rowMotion.js).
+      const pictures = picturesOf(consolScrollRef.current, selectedRows.map((r) => r.id));
       await deleteRows(selectedRows.map((r) => r.id));
       clearSelection();
+      // The rows are gone and the merged one is in. On the next frame, once the
+      // table has redrawn, the pictures slide into the merged row and fade.
+      requestAnimationFrame(() => pictures.convergeOn(merged.id));
       const markets = splitTerritories(merged.territory).length;
       const extra = merged.additionalTime !== "none" ? `, plus ${merged.additionalTime} add. time` : "";
       // Undo puts the originals back as they were (same ids, times, markets
@@ -3442,7 +3474,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         totals may appear inflated due to per-row rounding.
                       </span>
                       <button
-                        onClick={() => setConsolidatedView(true)}
+                        onClick={() => switchConsolidated(true)}
                         className="ml-auto shrink-0 flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors active:scale-95"
                       >
                         <Layers className="w-3 h-3" />
@@ -3458,7 +3490,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   const g = item.group;
                   const collapsed = collapsedGroups[g.jobNumber];
                   return (
-                    <tr key={g.id} className="bg-slate-50 border-y border-[#dce4ec]">
+                    <tr key={g.id} data-group-id={g.id} className="bg-slate-50 border-y border-[#dce4ec]">
                       {/* overflow-visible (inline, to beat the table's [&_td]:overflow-hidden)
                           so the multi-country add popover isn't clipped by the cell. */}
                       <td className="p-2 border-r border-[#dce4ec] align-middle" style={{ overflow: "visible" }}>
@@ -4054,7 +4086,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           <div className="pointer-events-auto flex flex-wrap justify-center items-center gap-1 max-w-full bg-white border border-[#dce4ec] rounded-3xl sm:rounded-full shadow-md px-1.5 py-1">
             <HoverLabel label="One row per job, with its markets and categories nested underneath">
               <button
-                onClick={() => setConsolidatedView((v) => !v)}
+                onClick={() => switchConsolidated()}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors ${
                   consolidatedView ? "text-[#12a0e1]" : "text-[#768994] hover:text-[#122027]"
                 }`}
@@ -4074,7 +4106,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   isDayFrozen ? "text-amber-600" : "text-[#768994] hover:text-[#122027]"
                 }`}
               >
-                <Lock className="w-3.5 h-3.5" />
+                <Lock ref={lockIconRef} className="w-3.5 h-3.5" />
                 {isDayFrozen ? `${activeDay} locked` : `Lock ${activeDay}`}
               </button>
             </HoverLabel>
