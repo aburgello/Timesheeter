@@ -71,6 +71,15 @@ html.dark-theme.oled-theme {
   --dk-grid: #1f1f24;
 }
 
+/* The hover card (FloatingCard) has one dark look in every theme, a navy
+   gradient. On a black page that navy is the only blue on screen and reads as
+   a glow, so in OLED it takes the same neutral greys as everything else, a
+   step above the cards so it still lifts off them. */
+.oled-theme .floating-card {
+  background-image: linear-gradient(to bottom, #1f1f24, #151518) !important;
+  border-color: rgb(255 255 255 / 0.12) !important;
+}
+
 html.dark-theme {
   --rne-fg: #e2e8f0;
   --rne-muted: #94a3b8;

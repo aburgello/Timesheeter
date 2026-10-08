@@ -27,7 +27,7 @@ export default function FloatingCard({ rect, className = "", innerRef, children,
     <div
       ref={ref}
       {...rest}
-      className={`fixed z-[100002] rounded-xl border border-white/10 bg-gradient-to-b from-[#1f2738] to-[#171e2c] shadow-2xl shadow-black/50 text-slate-300 ${className}`}
+      className={`floating-card fixed z-[100002] rounded-xl border border-white/10 bg-gradient-to-b from-[#1f2738] to-[#171e2c] shadow-2xl shadow-black/50 text-slate-300 ${className}`}
       style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: 0, visibility: "hidden" }}
     >
       <div className="absolute inset-x-0 top-0 h-px rounded-t-xl bg-gradient-to-r from-transparent via-white/20 to-transparent" />
