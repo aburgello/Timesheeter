@@ -315,11 +315,11 @@ function StatCard({ label, value, unit, icon: Icon, accent = "#12a0e1", format }
 // text-base it was 16px, sitting above 19px day headings and 17px job numbers —
 // the outline read backwards, every level quieter than the one it contained.
 // The scale now descends: section 22px → day 19px → row 17px → meta 11px.
-function SectionTitle({ icon: Icon, children, right }) {
+function SectionTitle({ icon: Icon, title, right }) {
   return (
     <div className="flex items-center justify-between gap-4 mb-5">
       <h2 className="font-display text-[22px] font-bold text-[#122027] tracking-[-0.03em] leading-none flex items-center gap-2.5 min-w-0">
-        <Icon className="w-4 h-4 text-[#12a0e1] shrink-0" /> <span className="truncate">{children}</span>
+        <Icon className="w-4 h-4 text-[#12a0e1] shrink-0" /> <span className="truncate">{title}</span>
       </h2>
       {right}
     </div>
@@ -1761,8 +1761,6 @@ function SettingsSection({ onSave }) {
 
   return (
     <div className="space-y-6">
-      <SectionTitle icon={Settings} title="Settings" />
-
       {/* Wrike connection card */}
       <div className="border border-[#dce4ec] rounded-2xl overflow-hidden">
         <div className="bg-slate-50 border-b border-[#dce4ec] px-5 py-3 flex items-center gap-2">
