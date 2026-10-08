@@ -27,6 +27,11 @@ export default function TableSearchableSelect({
   isJob = false,
   disabled = false,
   isDarkModal = false,
+  // For a cell too narrow for the usual field: no chevron and next to no side
+  // padding, so the value has the width. The field still opens on focus. The
+  // Wrike Hub's day cells are 44px, and the normal padding and chevron take 42
+  // of them.
+  compact = false,
   // Options to surface in their own group at the very top — the caller's
   // "you keep picking these" shortlist. Only shown while the list is
   // unfiltered: once you are searching you have said what you want, and a
@@ -287,7 +292,7 @@ export default function TableSearchableSelect({
           disabled={disabled}
           placeholder={placeholder}
           title={[searchTerm, hint].filter(Boolean).join("\n")}
-          className={`w-full min-w-0 py-2 ${showStepper ? "px-0 tabular-nums" : "px-2.5"} bg-transparent text-[12px] font-semibold outline-none truncate ${
+          className={`w-full min-w-0 py-2 ${showStepper ? "px-0 tabular-nums" : compact ? "px-0.5 tabular-nums" : "px-2.5"} bg-transparent text-[12px] font-semibold outline-none truncate ${
             isDarkModal
               ? "text-slate-100 placeholder:text-slate-600"
               : "text-slate-800 placeholder:text-slate-400"
@@ -307,7 +312,7 @@ export default function TableSearchableSelect({
           >
             <Plus className="w-3 h-3" strokeWidth={2.5} />
           </button>
-        ) : (
+        ) : compact ? null : (
           <ChevronDown
             className={`w-3.5 h-3.5 mr-2 shrink-0 transition-transform duration-200 ${
               isOpen ? "rotate-180" : ""

@@ -1506,7 +1506,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
             ) : (
               <TableSearchableSelect
                 options={TIME_OPTIONS}
-                value={localValue}
+                value={isActive ? localValue : ""}
                 onChange={(val) => handleModalTimeChange(task, dayOfWeek, val)}
                 placeholder="+"
                 dropdownId={`wrike-day-${task.id}-${dayOfWeek}`}
@@ -1514,6 +1514,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                 setActiveDropdown={setActiveDropdown}
                 isTime={true}
                 isDarkModal={true}
+                compact
               />
             )}
           </div>
