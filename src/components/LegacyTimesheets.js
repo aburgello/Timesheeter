@@ -2226,34 +2226,51 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     return () => clearTimeout(t);
   }, [rows]);
 
-  // A row whose edit has just been saved: a streak of light runs along its top
-  // and bottom edges (.timesheet-row in tailwind.css parks it off the left).
-  // justSaved maps row id to a fresh nonce per save. Played through the Web
-  // Animations API because a fast tab across cells saves the same row twice in
-  // well under a second, and a class already on the row would not replay.
+  // A row whose edit has just been saved: one soft sheen crosses it, left to
+  // right. A background gradient the width of a third of the row, animated from
+  // off its left edge to off its right, so nothing is added to the row and
+  // nothing rests on it afterwards.
+  //
+  // justSaved maps a row's id to a count that goes up with each save and is
+  // dropped a second later, so the next save starts again from 1. Hence the
+  // forgetting below: without it a row's second save looks like one already
+  // shown.
+  //
+  // The first cell is animated too, with the same frames. A sub-row's first
+  // cell has a fill of its own that would cover the row's background there, and
+  // both share the row's left edge, so the two passes line up as one.
   const shownSaves = useRef({});
   useEffect(() => {
-    for (const [id, nonce] of Object.entries(justSaved || {})) {
-      if (shownSaves.current[id] === nonce) continue;
-      shownSaves.current[id] = nonce;
+    const saved = justSaved || {};
+    for (const id of Object.keys(shownSaves.current)) {
+      if (!(id in saved)) delete shownSaves.current[id];
+    }
+    for (const [id, count] of Object.entries(saved)) {
+      if (shownSaves.current[id] === count) continue;
+      shownSaves.current[id] = count;
       const tr = document.querySelector(`tr[data-row-id="${CSS.escape(String(id))}"]`);
       if (!tr) continue;
-      if (prefersReducedMotion()) {
-        // The confirmation is information, so it stays; only the travel goes.
-        // Both edges light for a moment, full width, then clear.
-        tr.animate(
-          [
-            { backgroundSize: "100% 2px, 100% 2px", backgroundPosition: "0 0, 0 100%" },
-            { backgroundSize: "100% 2px, 100% 2px", backgroundPosition: "0 0, 0 100%" },
-          ],
-          { duration: 500 }
-        );
-        continue;
-      }
-      tr.animate(
-        [{ backgroundPosition: "-100% 0, -100% 100%" }, { backgroundPosition: "200% 0, 200% 100%" }],
-        { duration: 800, easing: "cubic-bezier(0.45, 0, 0.25, 1)" }
-      );
+      const rowWidth = tr.offsetWidth;
+      const band = Math.round(rowWidth * 0.34);
+      const dark = document.documentElement.classList.contains("dark-theme");
+      const peak = dark ? 0.2 : 0.16;
+      const sheen = `linear-gradient(100deg, rgb(18 160 225 / 0) 0%, rgb(18 160 225 / ${peak}) 42%, rgb(28 193 165 / ${peak}) 58%, rgb(28 193 165 / 0) 100%)`;
+      const layer = { backgroundImage: sheen, backgroundRepeat: "no-repeat" };
+      // With reduced motion the row is tinted for a moment instead: the
+      // confirmation is information, so it stays, and only the travel goes.
+      const frames = prefersReducedMotion()
+        ? [
+            { ...layer, backgroundSize: "300% 100%", backgroundPosition: "50% 0", opacity: 1 },
+            { ...layer, backgroundSize: "300% 100%", backgroundPosition: "50% 0", opacity: 1 },
+          ]
+        : [
+            { ...layer, backgroundSize: `${band}px 100%`, backgroundPosition: `${-band}px 0` },
+            { ...layer, backgroundSize: `${band}px 100%`, backgroundPosition: `${rowWidth}px 0` },
+          ];
+      const timing = prefersReducedMotion()
+        ? { duration: 450 }
+        : { duration: 620, easing: "cubic-bezier(0.3, 0, 0.2, 1)" };
+      for (const el of [tr, tr.cells[0]]) el?.animate(frames, timing);
     }
   }, [justSaved]);
 

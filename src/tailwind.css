@@ -57,29 +57,15 @@
 }
 
 /* ── Timesheet row save confirmation ────────────────────────────────────────
-   A streak of light that runs along the row's top and bottom edges, left to
-   right, the moment its edit lands in Supabase. Edits are optimistic, so the
-   cell already shows the new value; this is the only signal that it actually
-   persisted, which on a timesheet is the thing you most want to know.
+   One soft sheen that crosses the row, left to right, the moment its edit lands
+   in Supabase. Edits are optimistic, so the cell already shows the new value;
+   this is the only signal that it actually persisted, which on a timesheet is
+   the thing you most want to know.
 
-   It is two thin gradients in the row's own background, parked off its left
-   edge. Saving animates their position across and off the right (see the
-   effect beside `justSaved` in LegacyTimesheets.js). Nothing is added to the
-   row and nothing sits over its content, so there is no element to clip, no
-   bar on the edge and no glow over the job field. It reads at the edge of
-   vision and is gone in under a second.
-
-   45% is the streak's length as a share of the row. With a background that
-   size, a position of -100% puts it wholly off the left and 200% wholly off
-   the right. The cells are see-through, which is why a background on the row
-   shows at all. */
-.timesheet-row {
-  --row-shine: linear-gradient(90deg, rgb(18 160 225 / 0), #12a0e1 40%, #1cc1a5 60%, rgb(28 193 165 / 0));
-  background-image: var(--row-shine), var(--row-shine);
-  background-size: 45% 2px, 45% 2px;
-  background-repeat: no-repeat;
-  background-position: -100% 0, -100% 100%;
-}
+   There is no CSS for it here on purpose. It is played with the Web Animations
+   API from the effect beside `justSaved` in LegacyTimesheets.js, as a
+   background gradient on the row for the length of the pass, so at rest the
+   row carries nothing: no element over its content, no bar on its edge. */
 
 /* ── Micro-interactions ───────────────────────────────────────────────────────
    Small movements that say what just happened: a total rolling to its new
