@@ -11,7 +11,7 @@ import { parseTimeToHours, parseTimeToSeconds, secondsToHM } from "../../utils/t
 import { useColumnResize } from "../../lib/useColumnResize";
 import { toIsoDate } from "../../utils/dates";
 import { fullName as cleanFullName } from "../../lib/formatName";
-import { DEFAULT_HOURLY_RATE } from "./constants";
+import { clientKey, formatMoney, hourlyRate, indexRates } from "../../lib/rateCards";
 import { FeedSelect } from "./fields";
 import { ImportModal } from "./ImportModal";
 
@@ -39,7 +39,6 @@ const isoDate = (d) =>
 // How far back the week pickers reach. 18 months covers the current and prior
 // financial year, which is as far as anyone reads this feed back.
 const WEEKS_BACK = 78;
-const fmtMoney = (n) => (n == null || isNaN(n) ? "—" : `$${Number(n).toFixed(2)}`);
 // A task's job number and film both live inside the composed job label
 // ("Forgotten Island : XY025164, INT - Titles"), which is authoritative — the
 // task's own film_title column can lag a rename. Shared by the filters, the
@@ -162,10 +161,7 @@ export function JobsFeedSection() {
     const userIds = [...new Set(tasks.map(t => t.wrike_user_id).filter(Boolean))];
     const jobNums = [...new Set(tasks.map(t => t.job_number).filter(Boolean))];
 
-    // `select("*")` for positions and job_categories on purpose: naming the
-    // rate columns would make the whole read fail (and blank out every name in
-    // the table) on a deploy that lands before the rates migration does.
-    const [{ data: profiles }, { data: jobs }, { data: positions }, { data: cats }] = await Promise.all([
+    const [{ data: profiles }, { data: jobs }, { data: positions }, { data: cats }, { data: clients }, { data: clientRates }] = await Promise.all([
       userIds.length
         ? supabase.from("profiles").select("wrike_user_id, first_name, last_name, department, position_id").in("wrike_user_id", userIds)
         : Promise.resolve({ data: [] }),
@@ -176,8 +172,10 @@ export function JobsFeedSection() {
         ? selectAll("jobs", "id, job_number, film_title, client, office, print_digital, job_work_category, ordered_by, billed_to, fixed_cost")
             .then((data) => ({ data }))
         : Promise.resolve({ data: [] }),
-      supabase.from("positions").select("*"),
-      supabase.from("job_categories").select("*"),
+      supabase.from("positions").select("id, rate_role_id"),
+      supabase.from("job_categories").select("name, unbilled, rate_role_id"),
+      supabase.from("clients").select("id, name, currency"),
+      supabase.from("client_rates").select("client_id, rate_role_id, hourly_rate"),
     ]);
 
     const profileMap = Object.fromEntries((profiles || []).map(p => [p.wrike_user_id, p]));
@@ -192,28 +190,33 @@ export function JobsFeedSection() {
       const cur = jobByCode[k];
       if (!cur || jobScore(j) > jobScore(cur) || (jobScore(j) === jobScore(cur) && j.id < cur.id)) jobByCode[k] = j;
     }
-    const rateByPosition = Object.fromEntries(
-      (positions || []).map(p => [p.id, p.hourly_rate != null ? Number(p.hourly_rate) : DEFAULT_HOURLY_RATE])
-    );
+    const roleByPosition = Object.fromEntries((positions || []).map(p => [p.id, p.rate_role_id]));
+    const clientByName = Object.fromEntries((clients || []).map(c => [clientKey(c.name), c]));
+    const cards = indexRates(clientRates);
     const catMap = Object.fromEntries((cats || []).map(c => [c.name, c]));
 
     setEntries(tasks.map(t => {
       const p = profileMap[t.wrike_user_id];
       const cat = catMap[t.category];
-      // Rate follows the work, not the worker: a category that bills at
-      // another position's rate (a designer proofreading bills the Proofreader
-      // rate) wins over the logger's own position. Unbilled categories are
-      // zero-rated outright.
       const unbilled = !!cat?.unbilled;
-      const positionId = cat?.rate_position_id || p?.position_id;
+      const job = jobMap[t.job_number] || (t.job_number && jobByCode[jobKey(t.job_number)]) || {};
+      // Priced from the rate card of the client the row shows; see hourlyRate
+      // for which line of it, and for when there's no price.
+      const client = clientByName[clientKey(t.client || job.client)];
       return {
         ...t,
         _iso: t.work_date || toIsoDate(t.date),
         _name: p ? cleanFullName(p.first_name, p.last_name) : "—",
         _dept: p?.department || "",
         _unbilled: unbilled,
-        _rate: unbilled ? 0 : (rateByPosition[positionId] ?? DEFAULT_HOURLY_RATE),
-        _job: jobMap[t.job_number] || (t.job_number && jobByCode[jobKey(t.job_number)]) || {},
+        _rate: hourlyRate({
+          unbilled,
+          categoryRoleId: cat?.rate_role_id,
+          positionRoleId: roleByPosition[p?.position_id],
+          card: client && cards.get(client.id),
+        }),
+        _currency: client?.currency || "USD",
+        _job: job,
         _bookFilm: t.job_number ? bookFilmTitle(jobByCode[jobKey(t.job_number)]) : "",
       };
     }));
@@ -359,7 +362,7 @@ export function JobsFeedSection() {
       case "ordered_by":          return j.ordered_by || "—";
       case "billed_to":           return j.billed_to || "—";
       case "worked_on":           return e._name;
-      case "hourly_rate":         return fmtMoney(e._rate);
+      case "hourly_rate":         return formatMoney(e._rate, e._currency);
       case "time_spent":          return fmtNum(e.time_spent);
       case "extra_time":          return fmtNum(e.additional_time);
       // No over-time column on tasks — nothing to read, so it's a constant
@@ -369,7 +372,7 @@ export function JobsFeedSection() {
       // replaces only ever carried logged time, so the two agree there.
       case "total": {
         const hrs = hoursOf(e.time_spent) + hoursOf(e.additional_time);
-        return hrs > 0 ? fmtMoney(e._rate * hrs) : "—";
+        return hrs > 0 && e._rate != null ? formatMoney(e._rate * hrs, e._currency) : "—";
       }
       default:                    return "—";
     }

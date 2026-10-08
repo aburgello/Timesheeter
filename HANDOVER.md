@@ -216,7 +216,8 @@ database enforces this; `src/lib/access.js` only decides what the app shows.
   on someone's screen, you'll only hear about it from them. Adding an error
   service (Sentry's free tier is enough) is the next step, but it needs an
   account created by whoever owns the project.
-- **System status**, at the bottom of the Administration page, shows when
+- **System status**, in the Admin panel (the quick-actions bubble, admins
+  only), shows when
   Wrike last synced, when the folder and people lists were refreshed, the last
   live update, and whether Wrike still has the webhook active. Amber means
   stale during working hours; red means the webhook is missing or suspended,

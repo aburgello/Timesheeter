@@ -11,7 +11,9 @@ import { FilmStudioPicker } from "./management/FilmStudioPicker";
 import { JobsFeedSection } from "./management/JobsFeedSection";
 import { findNavItem, sectionFromHash } from "./management/nav";
 import { PeopleSection } from "./management/PeopleSection";
-import { PositionsAndRatesSection } from "./management/PositionsAndRatesSection";
+import { PositionsSection } from "./management/PositionsSection";
+import { ItemCategoryOverrides } from "./management/ItemCategoryOverrides";
+import { ClientsSection } from "./management/ClientsSection";
 import { SimpleListSection } from "./management/SimpleListSection";
 import { TranslationCountriesSection } from "./management/TranslationCountriesSection";
 
@@ -246,7 +248,7 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
         pageId="management"
         icon={Shield}
         title="Administration"
-        subtitle="Reports · Staff Accounts · Supporting Content"
+        subtitle="Reports · Staff Accounts · Client Accounts"
       />
 
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 pt-6 pb-6">
@@ -337,13 +339,19 @@ export default function Management({ wrikeUserId, department, wrikeData = [] }) 
                       wrikeFilmSync onItemClick={setCampaignFilm}
                       renderRowExtra={(item, patchItem) => <FilmStudioPicker item={item} patchItem={patchItem} />} />
                   )}
-                  {activeTab === "clients"    && <SimpleListSection table="clients" labelField="name" label="Clients" quickFilters={STUDIO_GROUPS} quickFilterLabel="Filter by studio" />}
-                  {activeTab === "categories" && <SimpleListSection table="job_categories" labelField="name" label="Item Categories" groups={CATEGORY_GROUPS} />}
+                  {activeTab === "clients"    && <ClientsSection quickFilters={STUDIO_GROUPS} />}
+                  {activeTab === "rate-roles" && <SimpleListSection table="rate_roles" labelField="name" label="Rate Card Positions" placeholder="e.g. Senior Designer…" />}
+                  {activeTab === "categories" && (
+                    <div className="space-y-10">
+                      <SimpleListSection table="job_categories" labelField="name" label="Item Categories" groups={CATEGORY_GROUPS} />
+                      <ItemCategoryOverrides />
+                    </div>
+                  )}
                   {/* Territory-prefixed like project descriptions, so it reuses
                       their group chips rather than the Digital/Print ones. */}
                   {activeTab === "work-categories" && <SimpleListSection table="job_work_categories" labelField="name" label="Job Work Categories" placeholder="e.g. AUS - Publicity…" groups={DESCRIPTION_GROUPS} />}
-                  {activeTab === "descs"      && <SimpleListSection table="project_descriptions" labelField="description" label="Project Type Descriptions" isLong quickFilters={DESC_QUICK_FILTERS} quickFilterLabel="Filter by territory" groups={DESCRIPTION_GROUPS} />}
-                  {activeTab === "rates"      && <PositionsAndRatesSection />}
+                  {activeTab === "descs"      && <SimpleListSection table="project_descriptions" labelField="description" label="Job Descriptions" isLong quickFilters={DESC_QUICK_FILTERS} quickFilterLabel="Filter by territory" groups={DESCRIPTION_GROUPS} />}
+                  {activeTab === "rates"      && <PositionsSection />}
                   {activeTab === "translations" && <TranslationCountriesSection />}
                   {activeTab === "departments"  && <SimpleListSection table="job_departments" labelField="name" label="Departments" placeholder="e.g. Print…" />}
                 </div>

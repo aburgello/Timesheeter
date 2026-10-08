@@ -1,4 +1,4 @@
-// Administration's "is Wrike syncing?" card. See lib/systemStatus.js for what
+// The admin panel's "is Wrike syncing?" card. See lib/systemStatus.js for what
 // each line means and when it warns.
 import { useCallback, useEffect, useState } from "react";
 import { Activity, RefreshCw } from "lucide-react";

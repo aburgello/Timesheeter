@@ -10,6 +10,7 @@ import { confirmAction } from "../../lib/confirm";
 import { SEED_CLIENTS, SEED_PROJECT_DESCRIPTIONS } from "../../data/seedData";
 import { CATEGORIES } from "../../constants";
 import { FilmSyncModal } from "./FilmSyncModal";
+import { ROW_ENTER, rowEnterDelay } from "./rowEnter";
 
 // ── Letter avatar colour palette ──────────────────────────────────────────────
 const LETTER_PALETTES = [
@@ -430,13 +431,13 @@ export function SimpleListSection({ table, labelField = "name", label, placehold
                     </div>
                     {!isOpen ? null : (<>
                     <div className={isLong ? "space-y-2" : "grid grid-cols-2 xl:grid-cols-3 gap-2.5"}>
-                      {visibleItems.map(item => {
+                      {visibleItems.map((item, i) => {
                         const text        = item[labelField] || "";
                         const displayText = group.stripPrefix ? text.replace(group.stripPrefix, "") : text;
                         const isEditing   = editId === item.id;
                         return (
-                          <div key={item.id}
-                            className={`group/item flex items-center gap-2.5 px-3.5 py-3 bg-white border rounded-2xl
+                          <div key={item.id} style={rowEnterDelay(i)}
+                            className={`${ROW_ENTER} group/item flex items-center gap-2.5 px-3.5 py-3 bg-white border rounded-2xl
                                         transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                               isEditing
                                 ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15"
@@ -491,14 +492,14 @@ export function SimpleListSection({ table, labelField = "name", label, placehold
       ) : (
         /* ── Flat mode ── */
         <div className={isLong ? "space-y-2" : "grid grid-cols-2 xl:grid-cols-3 gap-2.5"}>
-          {paginated.map(item => {
+          {paginated.map((item, i) => {
             const text   = item[labelField] || "";
             const first  = text.charAt(0).toUpperCase() || "?";
             const [avatarCls, borderCls] = letterPalette(first);
             const isEditing = editId === item.id;
             return (
-              <div key={item.id}
-                className={`group flex items-center gap-3 p-3.5 bg-white border rounded-2xl
+              <div key={item.id} style={rowEnterDelay(i)}
+                className={`${ROW_ENTER} group flex items-center gap-3 p-3.5 bg-white border rounded-2xl
                             transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                   isEditing
                     ? "border-[#12a0e1] ring-2 ring-[#12a0e1]/15"
@@ -539,7 +540,9 @@ export function SimpleListSection({ table, labelField = "name", label, placehold
                       </span>
                     )}
                     {renderRowExtra?.(item, patchItem)}
-                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    {/* Takes no width until the row is hovered or focused, so
+                        whatever sits before it rests against the row's edge. */}
+                    <div className="flex items-center gap-0.5 shrink-0 overflow-hidden max-w-0 -ml-3 opacity-0 transition-[max-width,margin,opacity] duration-200 ease-out group-hover:max-w-[4rem] group-hover:ml-0 group-hover:opacity-100 group-focus-within:max-w-[4rem] group-focus-within:ml-0 group-focus-within:opacity-100">
                       <button onClick={() => { setEditId(item.id); setEditVal(text); }}
                         className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-[#122027] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40">
                         <Pencil className="w-3 h-3" />

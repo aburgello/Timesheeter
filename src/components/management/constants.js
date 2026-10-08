@@ -1,5 +1,5 @@
 // Lists more than one Administration screen relies on: studios,
-// job statuses and the default hourly rate.
+// job statuses.
 //
 // Part of Administration. Split out of components/Management.jsx, which is
 // still the entry point and re-exports what other screens import.
@@ -21,5 +21,3 @@ export const STUDIO_LIST = [
 export const FILM_GROUP_ORDER = [...STUDIO_LIST, "Other"];
 export const JOB_STATUSES = ["Inactive", "Active", "Closed"];
 export const STUDIO_OPTIONS = ["Paramount", "Universal"];
-// Standard rate for anyone without one of their own on their profile.
-export const DEFAULT_HOURLY_RATE = 150;

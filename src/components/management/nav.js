@@ -3,7 +3,7 @@
 //
 // Part of Administration. Split out of components/Management.jsx, which is
 // still the entry point and re-exports what other screens import.
-import { Film, Users, Tag, AlignLeft, Building2, FileBarChart, ClipboardList, Globe, Layers, TrendingUp, Banknote, MessageSquareWarning } from "lucide-react";
+import { Film, Users, Tag, AlignLeft, Building2, FileBarChart, ClipboardList, Globe, Layers, TrendingUp, Banknote, BriefcaseBusiness, MessageSquareWarning } from "lucide-react";
 
 // Jobs (Setup / Book / Feed) deliberately live on the standalone Job Book
 // page now (JobBook.jsx) — Administration keeps Reports, Staff Accounts, and
@@ -30,25 +30,26 @@ export const NAV_GROUPS = [
   {
     id: "staff",
     label: "Staff Accounts",
-    desc: "People, their positions & department access",
+    desc: "People, their positions & what the work is filed under",
     icon: Users,
     gradient: "from-teal-500 to-[#1cc1a5]",
     items: [
       { id: "people", label: "People", icon: Users, desc: "Everyone's role, position & department" },
-      { id: "rates", label: "Positions & Rates", icon: Banknote, desc: "Job titles, what each bills per hour, and item-category overrides" },
+      { id: "rates", label: "XYI Employee Positions", icon: BriefcaseBusiness, desc: "The job titles a person can hold, and what each bills as" },
+      { id: "categories", label: "Item Categories", icon: Tag, desc: "Work item categories used on jobs, and how each one bills" },
     ],
   },
   {
     id: "supporting",
-    label: "Supporting Content",
-    desc: "Films, clients, descriptions, categories, countries & departments",
+    label: "Client Accounts",
+    desc: "Clients, films, job descriptions, countries & departments",
     icon: Layers,
     gradient: "from-violet-500 to-purple-600",
     items: [
+      { id: "clients", label: "Clients", icon: Building2, desc: "Studios and companies you work with, and their rate cards" },
+      { id: "rate-roles", label: "Rate Card Positions", icon: Banknote, desc: "The positions a client's rate card is quoted in" },
       { id: "films", label: "Films", icon: Film, desc: "Every film in production" },
-      { id: "clients", label: "Clients", icon: Building2, desc: "Studios and companies you work with" },
-      { id: "descs", label: "Project Type Descriptions", icon: AlignLeft, desc: "The project types that follow each job number" },
-      { id: "categories", label: "Item Categories", icon: Tag, desc: "Work item categories used on jobs" },
+      { id: "descs", label: "Job Descriptions", icon: AlignLeft, desc: "The descriptions that follow each job number" },
       { id: "work-categories", label: "Job Work Categories", icon: Tag, desc: "The work category set on a job itself" },
       { id: "translations", label: "Translation Countries", icon: Globe, desc: "Countries available for translation work" },
       { id: "departments", label: "Departments", icon: Layers, desc: "The department list used across the app" },

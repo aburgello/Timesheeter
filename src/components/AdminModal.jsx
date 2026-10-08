@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { fullName } from "../lib/formatName";
-import { X, Shield, Users, Clock, RefreshCw, CheckCircle, AlertCircle, Zap, Eye } from "lucide-react";
+import { X, Shield, CheckCircle, AlertCircle, Zap, Eye } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useDepartmentPreviewState, setDepartmentPreview } from "../hooks/useDepartment";
 import { isServiceAccount, hasLeft } from "../lib/people";
+import { SystemStatusCard } from "./management/SystemStatusCard";
 
 export default function AdminModal({ onClose }) {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [taskCounts, setTaskCounts] = useState({});
   const [webhookState, setWebhookState] = useState({ status: "idle", message: "" });
   const departmentPreview = useDepartmentPreviewState();
   // The real list (Administration › Departments), so a department added there
@@ -46,20 +45,6 @@ export default function AdminModal({ onClose }) {
           // aren't people — never count them toward team stats here.
           const realProfiles = profileData.filter((p) => !isServiceAccount(p.wrike_user_id) && !hasLeft(p));
           setProfiles(realProfiles);
-
-          // Fetch task counts per user
-          const ids = realProfiles.map((p) => p.wrike_user_id);
-          const counts = {};
-          await Promise.all(
-            ids.map(async (uid) => {
-              const { count } = await supabase
-                .from("tasks")
-                .select("id", { count: "exact", head: true })
-                .eq("wrike_user_id", uid);
-              counts[uid] = count || 0;
-            })
-          );
-          setTaskCounts(counts);
         }
       } catch (e) {
         console.error(e);
@@ -69,17 +54,6 @@ export default function AdminModal({ onClose }) {
     };
     load();
   }, []);
-
-  const fmtDate = (iso) => {
-    if (!iso) return "Never";
-    const d = new Date(iso);
-    const mins = Math.floor((Date.now() - d.getTime()) / 60000);
-    if (mins < 1) return "Just now";
-    if (mins < 60) return `${mins}m ago`;
-    if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  };
-
 
   return (
     <div
@@ -98,7 +72,7 @@ export default function AdminModal({ onClose }) {
           </div>
           <div>
             <h2 className="text-base font-black text-[#122027]">Admin Panel</h2>
-            <p className="text-[11px] text-[#768994] font-medium">Team overview — visible only to you</p>
+            <p className="text-[11px] text-[#768994] font-medium">System status and department preview. Visible only to you.</p>
           </div>
           <button onClick={onClose} className="ml-auto text-[#768994] hover:text-[#122027] transition-colors">
             <X className="w-5 h-5" />
@@ -106,12 +80,11 @@ export default function AdminModal({ onClose }) {
         </div>
 
         {/* Stats bar */}
-        <div className="grid grid-cols-3 divide-x divide-[#dce4ec] border-b border-[#dce4ec]">
+        <div className="grid grid-cols-2 divide-x divide-[#dce4ec] border-b border-[#dce4ec]">
           {[
-            { label: "Team members", value: profiles.length, icon: Users },
-            { label: "Total rows logged", value: Object.values(taskCounts).reduce((a, b) => a + b, 0), icon: Clock },
-            { label: "Active today", value: profiles.filter((p) => p.updated_at && new Date(p.updated_at) > new Date(Date.now() - 86400000)).length, icon: CheckCircle },
-          ].map(({ label, value, icon: Icon }) => (
+            { label: "Team members", value: profiles.length },
+            { label: "Active today", value: profiles.filter((p) => p.updated_at && new Date(p.updated_at) > new Date(Date.now() - 86400000)).length },
+          ].map(({ label, value }) => (
             <div key={label} className="px-5 py-3 text-center">
               <div className="text-xl font-black text-[#122027]">{loading ? "—" : value}</div>
               <div className="text-[10px] font-black text-[#768994] uppercase tracking-wider mt-0.5">{label}</div>
@@ -176,75 +149,8 @@ export default function AdminModal({ onClose }) {
           ))}
         </div>
 
-        {/* Team list */}
-        <div className="overflow-y-auto flex-1 p-4 space-y-2">
-          {loading ? (
-            <div className="flex items-center justify-center py-12 gap-3 text-[#768994]">
-              <RefreshCw className="w-5 h-5 animate-spin text-[#12a0e1]" />
-              <p className="text-sm font-bold">Loading team data…</p>
-            </div>
-          ) : profiles.length === 0 ? (
-            <div className="text-center py-12 text-[#768994]">
-              <Users className="w-8 h-8 mx-auto mb-2 opacity-30" />
-              <p className="text-sm font-bold">No profiles found yet</p>
-            </div>
-          ) : (
-            profiles.map((p) => {
-              const initials = `${p.first_name?.[0] || ""}${p.last_name?.[0] || ""}`.toUpperCase() || "?";
-              const isAdmin = p.wrike_user_id === "KUAWDLVN";
-              const hasData = !!p.first_name;
-              const mins = p.updated_at ? Math.floor((Date.now() - new Date(p.updated_at).getTime()) / 60000) : null;
-              const isActive = mins !== null && mins < 1440; // active in last 24h
-
-              return (
-                <div key={p.wrike_user_id} className="flex items-center gap-4 bg-slate-50 border border-[#dce4ec] rounded-2xl p-4">
-                  {/* Avatar */}
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shrink-0 ${
-                    hasData
-                      ? "bg-gradient-to-br from-[#12a0e1] to-[#1cc1a5] text-white shadow-sm"
-                      : "bg-slate-200 text-slate-500"
-                  }`}>
-                    {initials}
-                  </div>
-
-                  {/* Identity */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-black text-[#122027]">
-                        {fullName(p.first_name, p.last_name) || "Unknown user"}
-                      </p>
-                      {isAdmin && (
-                        <span className="text-[9px] font-black text-[#122027] bg-[#122027]/10 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                          Admin
-                        </span>
-                      )}
-                      {!hasData && (
-                        <span className="flex items-center gap-1 text-[9px] font-black text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                          <AlertCircle className="w-2.5 h-2.5" /> No profile
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                      {p.email && <span className="text-[11px] text-[#768994]">{p.email}</span>}
-                      <span className="text-[10px] font-mono text-[#768994] opacity-60">{p.wrike_user_id}</span>
-                    </div>
-                  </div>
-
-                  {/* Stats */}
-                  <div className="flex items-center gap-4 shrink-0 text-right">
-                    <div>
-                      <p className="text-base font-black text-[#122027]">{taskCounts[p.wrike_user_id] ?? "—"}</p>
-                      <p className="text-[9px] font-black text-[#768994] uppercase tracking-wider">rows</p>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <div className={`w-2 h-2 rounded-full ${isActive ? "bg-[#1cc1a5]" : "bg-slate-300"}`} />
-                      <span className="text-[10px] font-bold text-[#768994]">{fmtDate(p.updated_at)}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
+        <div className="overflow-y-auto flex-1 p-4">
+          <SystemStatusCard />
         </div>
       </div>
     </div>

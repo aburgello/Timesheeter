@@ -152,7 +152,18 @@ create table public.canvas_pinned_notes (
 create table public.clients (
   id bigint generated always as identity not null,
   name text not null,
-  created_at timestamp with time zone default now()
+  created_at timestamp with time zone default now(),
+  -- The currency this client's rate card is in.
+  currency text not null default 'USD' check (currency in ('USD', 'GBP', 'EUR', 'AUD'))
+);
+
+-- A client's rate card: what an hour of each rate-card position costs them.
+-- A position missing here isn't on that client's card.
+create table public.client_rates (
+  client_id bigint not null,
+  rate_role_id bigint not null,
+  hourly_rate numeric(10,2) not null check (hourly_rate >= 0),
+  primary key (client_id, rate_role_id)
 );
 
 create table public.dooh_assets (
@@ -198,10 +209,12 @@ create table public.job_categories (
   id bigint generated always as identity not null,
   name text not null,
   created_at timestamp with time zone default now(),
-  -- Bill this category at another position's rate (null = the logger's own
-  -- position); unbilled categories never bill at all.
+  -- Bill this category at this rate-card position (null = what the logger's
+  -- own position bills as); unbilled categories never bill at all.
+  -- rate_position_id is what this replaced and is no longer read.
   rate_position_id bigint,
-  unbilled boolean not null default false
+  unbilled boolean not null default false,
+  rate_role_id bigint
 );
 
 create table public.job_departments (
@@ -252,7 +265,19 @@ create table public.positions (
   id bigint generated always as identity not null,
   title text not null,
   created_at timestamp with time zone default now(),
-  hourly_rate numeric(10,2) default 150
+  -- No longer read: rates are per client, in client_rates.
+  hourly_rate numeric(10,2) default 150,
+  -- The rate-card position this job title bills as.
+  rate_role_id bigint
+);
+
+-- The short list of positions a client is quoted in (Designer, Senior
+-- Designer, Uploading…). XYi job titles map onto these.
+create table public.rate_roles (
+  id bigint generated always as identity primary key,
+  name text not null unique,
+  sort_order integer not null default 100,
+  created_at timestamp with time zone default now()
 );
 
 create table public.profiles (
@@ -423,6 +448,10 @@ alter table public.films add constraint films_title_key unique (title);
 alter table public.job_categories add constraint job_categories_pkey primary key (id);
 alter table public.job_categories add constraint job_categories_name_key unique (name);
 alter table public.job_categories add constraint job_categories_rate_position_id_fkey foreign key (rate_position_id) references positions(id) on delete set null;
+alter table public.job_categories add constraint job_categories_rate_role_id_fkey foreign key (rate_role_id) references rate_roles(id) on delete set null;
+alter table public.positions add constraint positions_rate_role_id_fkey foreign key (rate_role_id) references rate_roles(id) on delete set null;
+alter table public.client_rates add constraint client_rates_client_id_fkey foreign key (client_id) references clients(id) on delete cascade;
+alter table public.client_rates add constraint client_rates_rate_role_id_fkey foreign key (rate_role_id) references rate_roles(id) on delete cascade;
 alter table public.job_departments add constraint job_departments_pkey primary key (id);
 alter table public.job_departments add constraint job_departments_name_key unique (name);
 alter table public.job_work_categories add constraint job_work_categories_pkey primary key (id);
@@ -489,6 +518,8 @@ create trigger board_now_touch before update on public.board_now for each row ex
 -- Row Level Security
 -- ---------------------------------------------------------------------------
 alter table public.board_now enable row level security;
+alter table public.rate_roles enable row level security;
+alter table public.client_rates enable row level security;
 alter table public.campaign_eoc_notes enable row level security;
 alter table public.campaign_links enable row level security;
 alter table public.campaign_meta enable row level security;
@@ -543,6 +574,8 @@ create policy "auth_all" on public.job_departments as permissive for all to publ
 create policy "auth_all" on public.job_work_categories as permissive for all to authenticated using (true) with check (true);
 create policy "auth_all" on public.jobs as permissive for all to authenticated using (true) with check (true);
 create policy "auth_all" on public.positions as permissive for all to authenticated using (true) with check (true);
+create policy "auth_all" on public.rate_roles as permissive for all to authenticated using (true) with check (true);
+create policy "auth_all" on public.client_rates as permissive for all to authenticated using (true) with check (true);
 create policy "profiles_read" on public.profiles as permissive for select to authenticated using (true);
 -- Self-write (the path that stamps wrike_user_id at first login) plus the
 -- management ids, which need to edit other people's department/position and to

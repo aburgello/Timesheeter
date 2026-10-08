@@ -4,7 +4,6 @@
 // still the entry point and re-exports what other screens import.
 import HubRow from "../shared/HubRow";
 import { NAV_GROUPS } from "./nav";
-import { SystemStatusCard } from "./SystemStatusCard";
 
 // ── Administration hub (level 0) ────────────────────────────────────────────
 export function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
@@ -30,7 +29,7 @@ export function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
           // `open` prop) rather than as an expand/collapse toggle.
           const singleItem = group.items.length === 1;
           // Once any group is open, every other top-level row shrinks and
-          // drops its description. Supporting Content alone has seven
+          // drops its description. Client Accounts alone has seven
           // children, and at full height the siblings above/below it pushed
           // those off the bottom of the viewport. This was written when
           // tailwind.css also applied html{zoom:1.1}, which made the effective
@@ -78,8 +77,6 @@ export function AdminHub({ expandedGroup, onToggleGroup, onOpenItem }) {
           );
         })}
       </div>
-
-      <SystemStatusCard />
 
     </div>
   );
