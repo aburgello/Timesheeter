@@ -7,18 +7,24 @@ import {
   Plus,
   Lock,
   ChevronRight,
+  Trash2,
   CheckCircle,
   AlertCircle,
   Check,
 } from "lucide-react";
+import { motion, animate, AnimatePresence } from "framer-motion";
 import FloatingCard from "../shared/FloatingCard";
+import TableSearchableSelect from "./TableSearchableSelect";
+import MultiCountrySelect from "../shared/MultiCountrySelect";
+import { CATEGORIES } from "../../constants";
 import { fetchMyCommentsForDay } from "../../lib/wrikeComments";
 import { fetchActivityForDay, historyStart } from "../../lib/taskActivity";
 import {
   estimateFromActivity,
   activityToEvents,
   splitDay,
-  activitySource,
+  splitMarked,
+  NORMAL_DAY_MIN,
   ACTIVITY_SOURCES,
   hoursLoggedFor,
   localMinuteOf,
@@ -50,8 +56,8 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
 // means going over and back under, so the footer's tally turns red instead.
 const NORMAL_DAY_HOURS = 7.5;
 
-// The kinds of activity a day's suggestions can be built from.
-const SOURCE_LABELS = { messages: "Sent messages", status: "Status change", assigned: "Assigned" };
+// What you can have done on a task, for choosing which tasks are listed.
+const SOURCE_LABELS = { messages: "Sent messages", status: "Had a status change", assigned: "Were assigned" };
 
 const hm = (hours) => secondsToHM(hours * 3600, "0:00");
 const clock = (minute) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
@@ -61,6 +67,42 @@ const plural = (n, word) => `${n} ${word}${n !== 1 ? "s" : ""}`;
 const shortfall = (estimate, logged) => {
   const short = estimate - logged;
   return short >= 0.125 ? Math.round(short * 4) / 4 : 0;
+};
+
+// Time marked by hand on the timeline, per day: { [iso]: [{ id, from, to,
+// kind: "work" | "break", jobNumber, note, category, territory, added }] }. Kept in
+// this browser for the days the timesheet can still hold, so a reload doesn't
+// lose a morning's marks; older days are dropped on the next save.
+const MARK_COLOUR = "#e2e8f0";
+const MARKS_KEY = "xyi_dayMarks";
+const MARK_JOBS_KEY = "xyi_markJobs";
+const readStored = (key) => {
+  try {
+    return JSON.parse(localStorage.getItem(key)) || {};
+  } catch {
+    return {};
+  }
+};
+const writeStored = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage full or blocked: the marks still work until the page closes.
+  }
+};
+
+// What the tray under the timeline offers to drag onto "Something else": the
+// standing ones, then the jobs you've marked most often. A meeting is work
+// with the job still to pick; its name goes on the row as the note.
+const STANDING_PRESETS = [
+  { id: "meeting", label: "Meeting", minutes: 60, kind: "work", note: "Meeting" },
+  { id: "lunch", label: "Lunch", minutes: 60, kind: "break" },
+  { id: "break", label: "Break", minutes: 15, kind: "break" },
+];
+const jobShort = (jobNumber) => {
+  const [film, rest = ""] = jobNumber.split(" : ");
+  const code = (rest.match(/XY\d{5,6}/i) || [""])[0];
+  return code ? `${film} · ${code}` : jobNumber;
 };
 
 // Monday of this week through today — the days the timesheet grid can hold.
@@ -89,6 +131,9 @@ export default function CommentTrailModal({
   prepare,
   statusName,
   statusGroup,
+  jobOptions = [],
+  getJob,
+  defaultCategory = "",
 }) {
   const days = useMemo(daysSoFar, []);
   const [dayIso, setDayIso] = useState(
@@ -107,8 +152,25 @@ export default function CommentTrailModal({
   // Per "iso:taskId": what the member changed — { on, hours, extra }.
   const [edits, setEdits] = useState({});
   const [added, setAdded] = useState(null);
-  // Which kinds of activity count. Leaving one out removes it from the
-  // timeline and from the estimate, as if it hadn't happened.
+  const [marks, setMarks] = useState(() => {
+    const keep = new Set(days.map((d) => d.iso));
+    return Object.fromEntries(Object.entries(readStored(MARKS_KEY)).filter(([iso]) => keep.has(iso)));
+  });
+  const [markJobs, setMarkJobs] = useState(() => readStored(MARK_JOBS_KEY));
+  const presets = useMemo(
+    () => [
+      ...STANDING_PRESETS,
+      ...Object.entries(markJobs)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([jobNumber]) => ({ id: jobNumber, label: jobShort(jobNumber), minutes: 30, kind: "work", jobNumber })),
+    ],
+    [markJobs]
+  );
+  const [activeDropdown, setActiveDropdown] = useState(null);
+  // Which tasks are listed, by what you did on them. This only hides rows:
+  // the estimate is always worked out from the whole day, so a hidden task
+  // doesn't hand its time to the ones still showing.
   const [sources, setSources] = useState(() => new Set(ACTIVITY_SOURCES));
   const toggleSource = (id) =>
     setSources((prev) => {
@@ -205,11 +267,7 @@ export default function CommentTrailModal({
     const { statusName: nameOf, statusGroup: groupOf } = live.current;
     const myIds = state.myTaskIds;
     const me = wrikeUserId;
-    // Yours only. Other people's comments stay either way: they're context for
-    // where your work on a task began, not activity of yours.
-    const taskComments = !state.hasHistory || sources.has("messages") ? state.comments.filter((c) => c.taskId) : [];
-    const otherComments = state.others;
-    const shownActivity = state.activity.filter((a) => sources.has(activitySource(a)));
+    const taskComments = state.comments.filter((c) => c.taskId);
     const assignedToday = new Set(
       state.activity
         .filter((a) => a.event_type === "TaskResponsiblesAdded" && a.user_ids?.includes(me))
@@ -226,16 +284,16 @@ export default function CommentTrailModal({
       const id = `${a.task_id}:${a.event_type}:${a.occurred_at}`;
       const name = nameOf(a.custom_status_id) || a.status || "a new status";
       if (a.event_type === "TaskResponsiblesAdded" && a.user_ids?.includes(me))
-        return { id, minute, type: "cue", text: "You were assigned" };
+        return { id, minute, type: "cue", kind: "assigned", text: "You were assigned" };
       if (a.event_type === "TaskResponsiblesRemoved" && a.user_ids?.includes(me))
-        return { id, minute, type: "closed", text: "You were taken off it" };
+        return { id, minute, type: "closed", kind: "assigned", text: "You were taken off it" };
       if (a.event_type !== "TaskStatusChanged") return null;
-      if (a.author_id === me) return { id, minute, type: "mine", text: `You moved it to ${name}` };
+      if (a.author_id === me) return { id, minute, type: "mine", kind: "status", text: `You moved it to ${name}` };
       if (!isMyTask(a.task_id)) return null;
       const group = groupOf(a.custom_status_id);
       return group && group !== "Active"
-        ? { id, minute, type: "closed", text: `Moved to ${name}` }
-        : { id, minute, type: "cue", text: `Moved to ${name}` };
+        ? { id, minute, type: "closed", kind: "status", text: `Moved to ${name}` }
+        : { id, minute, type: "cue", kind: "status", text: `Moved to ${name}` };
     };
 
     const now = new Date();
@@ -252,14 +310,20 @@ export default function CommentTrailModal({
     if (state.hasHistory) {
       const events = activityToEvents({
         comments: taskComments,
-        others: otherComments,
-        activity: shownActivity,
+        others: state.others,
+        activity: state.activity,
         me,
         isMyTask,
         statusGroup: groupOf,
       });
-      ({ byTask, overtimeByTask, intervals } = estimateFromActivity(events, { dayEnd }));
-      split = splitDay(byTask, overtimeByTask);
+      // Marked time is yours to account for: no task is credited with it, and
+      // what you marked as work comes out of the day the estimates share.
+      const claimed = marks[day.iso] || [];
+      const markedWork = claimed
+        .filter((m) => m.kind === "work")
+        .reduce((sum, m) => sum + splitMarked(m).regular * 60, 0);
+      ({ byTask, overtimeByTask, intervals } = estimateFromActivity(events, { dayEnd, claimed }));
+      split = splitDay(byTask, overtimeByTask, { capMinutes: Math.max(0, NORMAL_DAY_MIN - markedWork) });
       // Listed for your own action or a hand-off to you. A task whose only
       // events are someone closing it or commenting on it wasn't worked on.
       taskOrder = [
@@ -299,26 +363,28 @@ export default function CommentTrailModal({
         gap = shortfall(est, logged.hours);
         gapExtra = Math.min(shortfall(estExtra, logged.extra), gap);
         gapRegular = gap - gapExtra;
+        // An estimate can't tell work from a task left open over lunch, so it
+        // never says a logged time is wrong. Anything logged is "covered"; a
+        // higher estimate is only mentioned, and the gap can still be added.
         // "none": too little activity to suggest a time, and nothing logged.
-        // Left open so a time can still be set by hand.
-        standing = est === 0 && logged.hours === 0 ? "none" : gap === 0 ? "covered" : logged.hours > 0 ? "short" : "missing";
+        standing = logged.hours > 0 ? "covered" : est === 0 ? "none" : "missing";
       } else {
         standing = logged.hours > 0 ? "covered" : "missing";
       }
       const items = [
         ...taskComments
           .filter((c) => c.taskId === taskId)
-          .map((c) => ({ id: c.id, minute: localMinuteOf(c.createdDate), type: "comment", text: c.text })),
-        ...otherComments
+          .map((c) => ({ id: c.id, minute: localMinuteOf(c.createdDate), type: "comment", kind: "messages", text: c.text })),
+        ...state.others
           .filter((c) => c.taskId === taskId)
           .map((c) => ({ id: c.id, minute: localMinuteOf(c.createdDate), type: "theirs", text: c.text })),
-        ...shownActivity.filter((a) => a.task_id === taskId).map(describe).filter(Boolean),
+        ...state.activity.filter((a) => a.task_id === taskId).map(describe).filter(Boolean),
       ].sort((a, b) => a.minute - b.minute);
       const key = `${day.iso}:${taskId}`;
       const e = edits[key] || {};
       // With an estimate, a covered task can't be ticked. Without one, nothing
       // says the logged time is enough, so everything stays tickable.
-      const locked = est !== null && standing === "covered";
+      const locked = est !== null && standing === "covered" && gap === 0;
       return {
         key,
         taskId,
@@ -327,6 +393,9 @@ export default function CommentTrailModal({
         title: task?.title || "A task you can no longer open",
         fields: { guessed, client, filmTitle },
         items,
+        // What you did on it, for the "Show" toggles. Other people's comments
+        // carry no kind: they aren't your activity.
+        kinds: new Set(items.map((x) => x.kind).filter(Boolean)),
         commentCount: items.filter((x) => x.type === "comment").length,
         est,
         estExtra,
@@ -349,19 +418,23 @@ export default function CommentTrailModal({
     const loggedRegular = dayRows.reduce((s, r) => s + hmToHours(r.timeSpent), 0);
     const loggedExtra = dayRows.reduce((s, r) => s + hmToHours(r.additionalTime), 0);
 
+    const all = suggestions;
+    const shown = state.hasHistory ? all.filter((x) => [...x.kinds].some((k) => sources.has(k))) : all;
+    const shownIds = new Set(shown.map((x) => x.taskId));
     return {
-      suggestions,
+      suggestions: shown,
+      hidden: all.length - shown.length,
       loggedRegular,
       loggedExtra,
-      intervals,
+      intervals: intervals.filter((b) => shownIds.has(b.taskId)),
       hasHistory: state.hasHistory,
       since: state.since,
       commentCount: taskComments.length,
       folderOnly: state.comments.length - taskComments.length,
-      estTotal: suggestions.reduce((s, x) => s + (x.est || 0), 0),
-      missing: suggestions.filter((s) => s.standing === "short" || s.standing === "missing"),
+      estTotal: shown.reduce((s, x) => s + (x.est || 0), 0),
+      missing: shown.filter((s) => s.standing === "missing"),
     };
-  }, [state, rows, day, edits, rowFieldsFromTask, wrikeUserId, sources]);
+  }, [state, rows, day, edits, rowFieldsFromTask, wrikeUserId, sources, marks]);
 
   const edit = (key, patch) => setEdits((p) => ({ ...p, [key]: { ...p[key], ...patch } }));
 
@@ -376,14 +449,54 @@ export default function CommentTrailModal({
       return next;
     });
 
+  const setDayMarks = (change) =>
+    setMarks((p) => {
+      const next = { ...p, [dayIso]: change(p[dayIso] || []) };
+      writeStored(MARKS_KEY, next);
+      return next;
+    });
+  const addMark = (from, to, preset = {}) =>
+    setDayMarks((list) => [
+      ...list,
+      {
+        id: `${Date.now()}-${list.length}`,
+        from,
+        to,
+        kind: preset.kind || "work",
+        jobNumber: preset.jobNumber || "",
+        note: preset.note || "",
+        category: defaultCategory || "",
+        territory: "",
+        added: false,
+      },
+    ]);
+  const patchMark = (id, patch) => setDayMarks((list) => list.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  const removeMark = (id) => setDayMarks((list) => list.filter((m) => m.id !== id));
+
+  const markRows = (marks[dayIso] || [])
+    .map((m) => {
+      const known = m.jobNumber ? getJob?.(m.jobNumber) : null;
+      return {
+        ...m,
+        ...splitMarked(m),
+        key: `${dayIso}:mark:${m.id}`,
+        client: known?.client || "",
+        filmTitle: known?.film_title || "",
+      };
+    })
+    .sort((a, b) => a.from - b.from);
+  // A marked stretch is added once it has a job; you drew it, so it needs no tick.
+  const pickedMarks = markRows.filter((m) => m.kind === "work" && !m.added && m.jobNumber && m.regular + m.extra > 0);
+
   const picked = view ? view.suggestions.filter((s) => s.on && s.hours + s.extra > 0) : [];
-  const pickedRegular = picked.reduce((s, x) => s + x.hours, 0);
-  const pickedExtra = picked.reduce((s, x) => s + x.extra, 0);
+  const toAdd = picked.length + pickedMarks.length;
+  const pickedRegular = picked.reduce((s, x) => s + x.hours, 0) + pickedMarks.reduce((s, m) => s + m.regular, 0);
+  const pickedExtra = picked.reduce((s, x) => s + x.extra, 0) + pickedMarks.reduce((s, m) => s + m.extra, 0);
   // The day's normal time once the ticked rows are added.
   const dayRegular = view ? view.loggedRegular + pickedRegular : 0;
 
   const handleAdd = () => {
-    if (!picked.length || isFrozen) return;
+    if (!toAdd || isFrozen) return;
     const date = day.date.toLocaleDateString("en-GB");
     const newRows = picked.map((s) => ({
       id: Date.now() + Math.floor(Math.random() * 100000),
@@ -404,7 +517,33 @@ export default function CommentTrailModal({
       _countrySource: s.fields.guessed.countrySource,
       _categorySource: s.fields.guessed.categorySource,
     }));
+    pickedMarks.forEach((m, i) =>
+      newRows.push({
+        id: Date.now() + 200000 + i,
+        dayOfWeek: day.name,
+        date,
+        jobNumber: m.jobNumber,
+        client: m.client,
+        filmTitle: m.filmTitle,
+        projectDescription: m.jobNumber.includes(",") ? m.jobNumber.slice(m.jobNumber.indexOf(",") + 1).trim() : "",
+        territory: m.territory || "",
+        category: m.category || "",
+        clientAmends: false,
+        notes: m.note || "",
+        is3D: false,
+        timeSpent: secondsToHM(m.regular * 3600),
+        additionalTime: secondsToHM(m.extra * 3600),
+      })
+    );
     onAddRows(newRows, day.name);
+    if (pickedMarks.length) {
+      const counts = { ...markJobs };
+      pickedMarks.forEach((m) => (counts[m.jobNumber] = (counts[m.jobNumber] || 0) + 1));
+      setMarkJobs(counts);
+      writeStored(MARK_JOBS_KEY, counts);
+    }
+    // Kept, as added: it still holds its time against the estimates.
+    setDayMarks((list) => list.map((m) => (pickedMarks.some((x) => x.id === m.id) ? { ...m, added: true } : m)));
     // The suggestions recompute against the new rows; drop what was typed for
     // them so a leftover shortfall starts from the fresh figure.
     setEdits((p) => {
@@ -496,9 +635,9 @@ export default function CommentTrailModal({
             </div>
           )}
 
-          {view?.hasHistory && (
-            <div className="px-6 py-2.5 border-b border-white/5 flex flex-wrap items-center gap-2" role="group" aria-label="Activity to count">
-              <span className="text-[11px] font-bold text-slate-500 mr-1">Based on</span>
+          {view?.hasHistory && view.suggestions.length + view.hidden > 0 && (
+            <div className="px-6 py-2.5 border-b border-white/5 flex flex-wrap items-center gap-2" role="group" aria-label="Tasks to show">
+              <span className="text-[11px] font-bold text-slate-500 mr-1">Show tasks where you</span>
               {ACTIVITY_SOURCES.map((id) => {
                 const on = sources.has(id);
                 return (
@@ -513,7 +652,7 @@ export default function CommentTrailModal({
                         : "bg-transparent border-white/10 text-slate-500 hover:text-slate-300"
                     }`}
                   >
-                    {on && <Check className="w-3 h-3" strokeWidth={3} />}
+                    {on && <Check className="w-3 h-3 animate-in zoom-in-50 [animation-duration:150ms] motion-reduce:animate-none" strokeWidth={3} />}
                     {SOURCE_LABELS[id]}
                   </button>
                 );
@@ -522,9 +661,9 @@ export default function CommentTrailModal({
           )}
 
           {view && view.suggestions.length === 0 && (
-            <div className="py-20 px-6 text-center text-sm text-slate-400">
-              {view.hasHistory && sources.size < ACTIVITY_SOURCES.length
-                ? `Nothing on ${day.name} from the kinds of activity selected.`
+            <div className={`${markRows.length ? "py-6" : "py-12"} px-6 text-center text-sm text-slate-400`}>
+              {view.hidden > 0
+                ? `${plural(view.hidden, "task")} hidden. Turn a toggle back on to see ${view.hidden === 1 ? "it" : "them"}.`
                 : view.hasHistory
                 ? `No Wrike activity from you on ${day.name}: no tasks handed to you and no comments.`
                 : `You didn't comment on any Wrike tasks on ${day.name}.`}
@@ -536,14 +675,14 @@ export default function CommentTrailModal({
             </div>
           )}
 
-          {view && view.suggestions.length > 0 && (
+          {view && (
             <>
               {/* Summary */}
-              <div className="grid grid-cols-2 md:grid-cols-4 border-b border-white/5">
+              <div className={`grid grid-cols-2 md:grid-cols-4 border-b border-white/5 ${view.suggestions.length ? "" : "hidden"}`}>
                 {view.hasHistory ? (
                   <>
                     <Stat value={view.suggestions.length} label="tasks you worked on" />
-                    <Stat value={hm(view.estTotal)} label="estimated from your activity" />
+                    <Stat value={<RollingTime hours={view.estTotal} />} label="estimated from your activity" />
                   </>
                 ) : (
                   <>
@@ -552,13 +691,13 @@ export default function CommentTrailModal({
                   </>
                 )}
                 <Stat
-                  value={hm(view.loggedRegular)}
+                  value={<RollingTime hours={view.loggedRegular} />}
                   label={`on the timesheets for ${day.name}${view.loggedExtra > 0 ? `, plus ${hm(view.loggedExtra)} add. time` : ""}`}
                 />
                 {view.hasHistory ? (
                   <Stat
-                    value={view.missing.length ? hm(view.missing.reduce((s, x) => s + x.gap, 0)) : "—"}
-                    label={view.missing.length ? `${plural(view.missing.length, "task")} short or missing` : "nothing missing"}
+                    value={view.missing.length ? <RollingTime hours={view.missing.reduce((s, x) => s + x.gap, 0)} /> : "—"}
+                    label={view.missing.length ? `${plural(view.missing.length, "task")} not on the timesheets yet` : "nothing missing"}
                     warn={view.missing.length > 0}
                   />
                 ) : (
@@ -574,6 +713,11 @@ export default function CommentTrailModal({
                 view={view}
                 activeItemId={jump?.itemId}
                 onPick={(s, item) => setJump({ key: s.key, itemId: item.id, n: Date.now() })}
+                marks={markRows}
+                onMark={addMark}
+                onMoveMark={patchMark}
+                presets={presets}
+                canMark={!isFrozen}
               />
 
               {(state.truncated || view.folderOnly > 0) && (
@@ -614,8 +758,20 @@ export default function CommentTrailModal({
                 </div>
               )}
               <ul className="border-t border-white/5">
-                {view.suggestions.map((s) => (
-                  <Suggestion key={s.key} s={s} frozen={isFrozen} edit={edit} jump={jump?.key === s.key ? jump : null} />
+                {view.suggestions.map((s, i) => (
+                  <Suggestion key={s.key} index={i} s={s} frozen={isFrozen} edit={edit} jump={jump?.key === s.key ? jump : null} />
+                ))}
+                {markRows.map((m) => (
+                  <MarkRow
+                    key={m.key}
+                    m={m}
+                    frozen={isFrozen}
+                    jobOptions={jobOptions}
+                    activeDropdown={activeDropdown}
+                    setActiveDropdown={setActiveDropdown}
+                    onPatch={(patch) => patchMark(m.id, patch)}
+                    onRemove={() => removeMark(m.id)}
+                  />
                 ))}
               </ul>
             </>
@@ -636,10 +792,10 @@ export default function CommentTrailModal({
                 <Lock className="w-3.5 h-3.5" />
                 {day.name} is locked. Unlock the day to add rows.
               </span>
-            ) : view && picked.length ? (
+            ) : view && toAdd ? (
               <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
                 <span>
-                  <b className="text-white">{plural(picked.length, "row")}</b> to add to {day.name}
+                  <b className="text-white">{plural(toAdd, "row")}</b> to add to {day.name}
                 </span>
                 <span>
                   Time <b className="text-white font-mono">{hm(pickedRegular)}</b>
@@ -671,10 +827,10 @@ export default function CommentTrailModal({
             </button>
             <button
               onClick={handleAdd}
-              disabled={!picked.length || isFrozen}
+              disabled={!toAdd || isFrozen}
               className="px-4 py-2 text-xs font-bold rounded-lg bg-[#12a0e1] hover:bg-[#0d8bc4] text-white shadow-md shadow-[#12a0e1]/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#12a0e1]"
             >
-              {picked.length ? `Add ${plural(picked.length, "row")} to ${day.name}` : "Add rows"}
+              {toAdd ? `Add ${plural(toAdd, "row")} to ${day.name}` : "Add rows"}
             </button>
           </div>
         </div>
@@ -682,6 +838,361 @@ export default function CommentTrailModal({
     </div>
   );
 }
+
+// The lane you draw on: work Wrike has no record of, or a break. Press and
+// drag for a stretch, on the quarter hour; a plain click marks half an hour.
+// A mark not yet on the timesheets can be dragged to move it, or by its ends
+// to resize it. The tray underneath holds ready-made stretches to drag in.
+function MarkLane({ start, end, pct, hours, marks, onMark, onMove, presets, canMark }) {
+  const track = useRef(null);
+  const [draft, setDraft] = useState(null); // drawing a new one: { a, b }
+  const [edit, setEdit] = useState(null); // moving or resizing: { id, from, to }
+  const [tray, setTray] = useState(false);
+  const [carried, setCarried] = useState(null); // the preset being dragged in
+  const [ghost, setGhost] = useState(null); // where it would land: { from, to }
+  const minuteAt = (clientX) => {
+    const r = track.current.getBoundingClientRect();
+    const m = start + ((clientX - r.left) / r.width) * (end - start);
+    return Math.max(start, Math.min(end, Math.round(m / 15) * 15));
+  };
+
+  const down = (e) => {
+    if (!canMark || e.button !== 0 || e.target.closest("[data-mark]")) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const m = minuteAt(e.clientX);
+    setDraft({ a: m, b: m });
+  };
+  const move = (e) => draft && setDraft({ a: draft.a, b: minuteAt(e.clientX) });
+  const up = () => {
+    if (!draft) return;
+    const from = Math.min(draft.a, draft.b);
+    const to = draft.a === draft.b ? Math.min(end, from + 30) : Math.max(draft.a, draft.b);
+    setDraft(null);
+    if (to > from) onMark(from, to);
+  };
+
+  // Pointer handlers for a mark's body ("move") or one of its ends. What was
+  // grabbed lives in a ref: every move re-renders, and the handlers with it.
+  const grabbed = useRef(null); // { id, mode, at, from, to } as it was picked up
+  const place = (clientX) => {
+    const g = grabbed.current;
+    const by = minuteAt(clientX) - g.at;
+    const length = g.to - g.from;
+    if (g.mode === "move") {
+      const from = Math.max(start, Math.min(end - length, g.from + by));
+      return { from, to: from + length };
+    }
+    return g.mode === "start"
+      ? { from: Math.max(start, Math.min(g.to - 15, g.from + by)), to: g.to }
+      : { from: g.from, to: Math.min(end, Math.max(g.from + 15, g.to + by)) };
+  };
+  const grip = (m, mode) => ({
+    onPointerDown: (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      grabbed.current = { id: m.id, mode, at: minuteAt(e.clientX), from: m.from, to: m.to };
+      setEdit({ id: m.id, from: m.from, to: m.to });
+    },
+    onPointerMove: (e) => {
+      if (grabbed.current?.id === m.id && grabbed.current.mode === mode) setEdit({ id: m.id, ...place(e.clientX) });
+    },
+    onPointerUp: (e) => {
+      const g = grabbed.current;
+      if (!g || g.id !== m.id || g.mode !== mode) return;
+      const next = place(e.clientX);
+      grabbed.current = null;
+      setEdit(null);
+      if (next.from !== g.from || next.to !== g.to) onMove(m.id, next);
+    },
+    onPointerCancel: () => {
+      grabbed.current = null;
+      setEdit(null);
+    },
+  });
+
+  const landing = (clientX) => {
+    const from = Math.min(minuteAt(clientX), end - 15);
+    return { from, to: Math.min(end, from + carried.minutes) };
+  };
+
+  const span = (from, to) => ({ left: pct(from), width: `calc(${pct(to)} - ${pct(from)})` });
+  const drawn = draft
+    ? { from: Math.min(draft.a, draft.b), to: Math.max(draft.a, draft.b) }
+    : edit || ghost;
+
+  return (
+    <>
+      <div className="grid grid-cols-[180px_1fr] items-center h-8 border-t border-dashed border-white/5">
+        <div className="flex items-center gap-2 pr-3 text-[11px] font-semibold text-slate-400">
+          <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: MARK_COLOUR }} />
+          <span className="truncate">Something else</span>
+          {canMark && (
+            <button
+              type="button"
+              onClick={() => setTray((t) => !t)}
+              aria-expanded={tray}
+              aria-label="Ready-made stretches to drag in"
+              className={`ml-auto p-0.5 rounded hover:bg-white/10 transition-colors ${tray ? "text-white" : "text-slate-500 hover:text-slate-200"}`}
+            >
+              <ChevronRight className={`w-3.5 h-3.5 transition-transform ${tray ? "rotate-90" : ""}`} />
+            </button>
+          )}
+        </div>
+        <div
+          ref={track}
+          onPointerDown={down}
+          onPointerMove={move}
+          onPointerUp={up}
+          onPointerCancel={() => setDraft(null)}
+          onDragOver={(e) => {
+            if (!carried) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            const next = landing(e.clientX);
+            if (!ghost || ghost.from !== next.from) setGhost(next);
+          }}
+          onDragLeave={() => setGhost(null)}
+          onDrop={(e) => {
+            if (!carried) return;
+            e.preventDefault();
+            const { from, to } = landing(e.clientX);
+            onMark(from, to, carried);
+            setGhost(null);
+            setCarried(null);
+          }}
+          className={`relative h-full touch-none select-none ${canMark ? "cursor-crosshair hover:bg-white/[0.03]" : ""} ${
+            carried ? "bg-white/[0.05]" : ""
+          }`}
+        >
+          {hours.map((h) => (
+            <div key={h} className="absolute inset-y-0 w-px bg-white/5 pointer-events-none" style={{ left: pct(h) }} />
+          ))}
+          {marks.map((m) => {
+            const at = edit?.id === m.id ? edit : m;
+            const fixed = m.added || !canMark;
+            return (
+              <div
+                key={m.id}
+                data-mark
+                {...(fixed ? {} : grip(m, "move"))}
+                title={`${clock(at.from)} to ${clock(at.to)}${m.kind === "break" ? ", break" : ""}`}
+                className={`absolute top-[9px] h-3.5 rounded ${m.kind === "break" ? "mark-break" : ""} ${
+                  fixed ? "pointer-events-none" : "cursor-grab active:cursor-grabbing hover:brightness-125"
+                }`}
+                style={{
+                  ...span(at.from, at.to),
+                  background: m.kind === "break" ? undefined : `color-mix(in srgb, ${MARK_COLOUR} ${m.added ? 35 : 70}%, transparent)`,
+                }}
+              >
+                {!fixed && (
+                  <>
+                    <span data-mark {...grip(m, "start")} className="absolute inset-y-0 -left-0.5 w-2 cursor-ew-resize" />
+                    <span data-mark {...grip(m, "end")} className="absolute inset-y-0 -right-0.5 w-2 cursor-ew-resize" />
+                  </>
+                )}
+              </div>
+            );
+          })}
+          {draft && drawn.to > drawn.from && (
+            <div className="absolute top-[9px] h-3.5 rounded bg-white/50 pointer-events-none" style={span(drawn.from, drawn.to)} />
+          )}
+          {ghost && !draft && (
+            <div className="absolute top-[9px] h-3.5 rounded border border-dashed border-white/60 bg-white/20 pointer-events-none" style={span(ghost.from, ghost.to)} />
+          )}
+          {drawn && drawn.to > drawn.from && (
+            <span
+              className="absolute -top-3 -translate-x-1/2 text-[10px] font-mono text-white bg-[#0b0f17] border border-white/10 rounded px-1 pointer-events-none whitespace-nowrap z-10"
+              style={{ left: pct((drawn.from + drawn.to) / 2) }}
+            >
+              {clock(drawn.from)}–{clock(drawn.to)}
+            </span>
+          )}
+        </div>
+      </div>
+      <AnimatePresence initial={false}>
+        {tray && canMark && (
+          <motion.div
+            key="tray"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="ml-[180px] py-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mr-1">Drag onto the line</span>
+              {presets.map((preset) => (
+                <span
+                  key={preset.id}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("text/plain", preset.label);
+                    e.dataTransfer.effectAllowed = "copy";
+                    setCarried(preset);
+                  }}
+                  onDragEnd={() => {
+                    setCarried(null);
+                    setGhost(null);
+                  }}
+                  title={preset.jobNumber || `${preset.label}, not logged`}
+                  className="flex items-center gap-1.5 max-w-[240px] px-2 py-1 rounded-lg border border-white/10 bg-white/[0.04] hover:bg-white/10 text-[11px] font-bold text-slate-200 cursor-grab active:cursor-grabbing select-none"
+                >
+                  <span
+                    className={`w-2 h-2 rounded-sm shrink-0 ${preset.kind === "break" ? "mark-break" : ""}`}
+                    style={preset.kind === "break" ? undefined : { background: MARK_COLOUR }}
+                  />
+                  <span className="truncate">{preset.label}</span>
+                  <span className="font-mono font-medium text-slate-500">{hm(preset.minutes / 60)}</span>
+                </span>
+              ))}
+            </div>
+            <p className="ml-[180px] pb-2 text-[11px] text-slate-500">
+              Drag along "Something else" to mark time Wrike doesn't know about, or a break. Drag a mark to move it, or its ends to resize it.
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
+// A stretch you marked, as a row: what it was, how long, and the job to log it
+// against. A break has no job and is never added; it only holds its time back
+// from the estimates.
+function MarkRow({ m, frozen, jobOptions, activeDropdown, setActiveDropdown, onPatch, onRemove }) {
+  const isBreak = m.kind === "break";
+  const total = m.regular + m.extra;
+  const setLength = (hours) => onPatch({ to: m.from + Math.max(0.25, hours) * 60 });
+  return (
+    <li className={`${ENTER} grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 ${m.added ? "opacity-55" : ""}`}>
+      <span className={`mt-1.5 w-2.5 h-2.5 rounded-sm ${isBreak ? "mark-break" : ""}`} style={isBreak ? undefined : { background: MARK_COLOUR }} />
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-white">
+          <span className="font-mono">{clock(m.from)}–{clock(m.to)}</span>
+          {m.note && !isBreak && <span>{m.note}</span>}
+          {m.added ? (
+            <Pill cls="text-emerald-400 bg-emerald-400/10">Added to the timesheets</Pill>
+          ) : (
+            <span className="flex gap-0.5 p-0.5 rounded-lg bg-black/20 border border-white/10" role="group" aria-label="What this time was">
+              {[["work", "Work"], ["break", "Break"]].map(([kind, label]) => (
+                <button
+                  key={kind}
+                  type="button"
+                  aria-pressed={m.kind === kind}
+                  disabled={frozen}
+                  onClick={() => onPatch({ kind })}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-colors ${
+                    m.kind === kind ? "bg-white/15 text-white" : "text-slate-500 hover:text-slate-300"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </span>
+          )}
+        </div>
+        {isBreak ? (
+          <p className="mt-1 text-[11px] text-slate-400">Not logged. Tasks open across it aren't given this time.</p>
+        ) : m.added ? (
+          <p className="mt-1 text-[11px] text-slate-400 break-words">{m.jobNumber}</p>
+        ) : (
+          <div className="mt-2 max-w-md">
+            <TableSearchableSelect
+              options={jobOptions}
+              value={m.jobNumber}
+              onChange={(jobNumber) => onPatch({ jobNumber: jobNumber || "" })}
+              placeholder="Pick the job this was for…"
+              dropdownId={`ct-mark-${m.id}`}
+              activeDropdown={activeDropdown}
+              setActiveDropdown={setActiveDropdown}
+              isJob={true}
+              isDarkModal={true}
+              disabled={frozen}
+            />
+            {(m.filmTitle || m.client) && (
+              <p className="mt-1 text-[11px] text-slate-400">{[m.filmTitle, m.client].filter(Boolean).join(" · ")}</p>
+            )}
+            {/* Only once there's a job, so an unfinished mark stays one line. */}
+            {m.jobNumber && (
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                <TableSearchableSelect
+                  options={CATEGORIES}
+                  value={m.category || ""}
+                  onChange={(category) => onPatch({ category: category || "" })}
+                  placeholder="Category"
+                  isGrouped={true}
+                  dropdownId={`ct-mark-cat-${m.id}`}
+                  activeDropdown={activeDropdown}
+                  setActiveDropdown={setActiveDropdown}
+                  isCategory={true}
+                  isDarkModal={true}
+                  disabled={frozen}
+                />
+                <MultiCountrySelect
+                  value={m.territory || ""}
+                  onChange={(territory) => onPatch({ territory: territory || "" })}
+                  placeholder="Country"
+                  dropdownId={`ct-mark-country-${m.id}`}
+                  activeDropdown={activeDropdown}
+                  setActiveDropdown={setActiveDropdown}
+                  isDarkModal={true}
+                  disabled={frozen}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="flex flex-col items-end gap-1 col-start-2 sm:col-start-auto max-sm:items-start max-sm:mt-2">
+        {m.added ? (
+          <span className="font-mono text-sm font-bold text-slate-300">{hm(total)}</span>
+        ) : (
+          <Stepper value={total} frozen={frozen} onChange={setLength} />
+        )}
+        <span className="text-[11px] text-slate-500">
+          {isBreak
+            ? "Not added"
+            : m.added
+            ? ""
+            : m.jobNumber
+            ? m.extra > 0
+              ? `${hm(m.regular)} time, ${hm(m.extra)} add. time`
+              : "Added with the rows you tick"
+            : "Pick a job to add it"}
+        </span>
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={frozen}
+          className="flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-rose-400 disabled:opacity-40"
+        >
+          <Trash2 className="w-3 h-3" /> Remove
+        </button>
+      </div>
+    </li>
+  );
+}
+
+// A time that rolls to its new value when a row is added or a task is hidden.
+function RollingTime({ hours }) {
+  const [shown, setShown] = useState(hours);
+  const from = useRef(hours);
+  useEffect(() => {
+    const controls = animate(from.current, hours, {
+      duration: 0.4,
+      ease: [0.16, 1, 0.3, 1],
+      onUpdate: (v) => { from.current = v; setShown(v); },
+    });
+    return () => controls.stop();
+  }, [hours]);
+  return hm(Math.round(shown * 60) / 60);
+}
+
+// Rows and timeline lanes fade up as they appear: on load, and when a "Show"
+// toggle brings them back.
+const ENTER = "animate-in fade-in slide-in-from-bottom-1 [animation-duration:300ms] fill-mode-backwards motion-reduce:animate-none";
+const enterDelay = (index) => ({ animationDelay: `${Math.min(index, 12) * 25}ms` });
 
 function Stat({ value, label, warn }) {
   return (
@@ -711,13 +1222,14 @@ function Mark({ colour, active, glow, className = "", style, ...rest }) {
 // gets a solid cap at its start instead, and the changes behind a stretch are
 // in its hover card. Every one is still listed under the task's Activity.
 // Clicking a comment or a bar takes you to that task's row, to set its time.
-function Timeline({ view, activeItemId, onPick }) {
+function Timeline({ view, activeItemId, onPick, marks, onMark, onMoveMark, presets, canMark }) {
   // { s, item } for a comment or lane name, { s, bar } for a stretch, + rect.
   const [hover, setHover] = useState(null);
 
   const minutes = [
     ...view.intervals.flatMap((b) => [b.from, b.to]),
     ...view.suggestions.flatMap((s) => s.items.map((x) => x.minute)),
+    ...marks.flatMap((m) => [m.from, m.to]),
   ];
   const start = Math.min(9 * 60, Math.floor(Math.min(...minutes) / 60) * 60);
   const end = Math.max(18 * 60, Math.ceil(Math.max(...minutes) / 60) * 60);
@@ -746,14 +1258,14 @@ function Timeline({ view, activeItemId, onPick }) {
             </span>
           ))}
         </div>
-        {view.suggestions.map((s) => {
+        {view.suggestions.map((s, lane) => {
           const comments = s.items.filter((x) => x.type === "comment");
           const bars = view.intervals.filter((b) => b.taskId === s.taskId);
           // The glow goes on the comments, or on the bars of a task you were
           // handed but haven't commented on, so every unlogged task shows it.
           const missing = s.standing === "missing";
           return (
-            <div key={s.key} className="grid grid-cols-[180px_1fr] items-center h-8 border-t border-dashed border-white/5">
+            <div key={s.key} style={enterDelay(lane)} className={`${ENTER} grid grid-cols-[180px_1fr] items-center h-8 border-t border-dashed border-white/5`}>
               <div
                 className="flex items-center gap-2 pr-3 text-[11px] font-semibold text-slate-300 truncate"
                 onMouseEnter={show({ s, item: null })}
@@ -772,8 +1284,12 @@ function Timeline({ view, activeItemId, onPick }) {
                 {bars.map((b, i) => {
                   const cue = openedBy(s, b);
                   return (
-                    <button
+                    <motion.button
                       key={i}
+                      // Drawn out from where the stretch began.
+                      initial={{ scaleX: 0 }}
+                      animate={{ scaleX: 1 }}
+                      transition={{ duration: 0.45, delay: 0.1 + Math.min(lane, 12) * 0.025, ease: [0.16, 1, 0.3, 1] }}
                       onMouseEnter={show({ s, bar: b })}
                       onMouseLeave={hide}
                       onFocus={show({ s, bar: b })}
@@ -786,10 +1302,10 @@ function Timeline({ view, activeItemId, onPick }) {
                       className={`absolute top-[11px] h-2.5 rounded bg-[color-mix(in_srgb,var(--c)_28%,transparent)] hover:bg-[color-mix(in_srgb,var(--c)_48%,transparent)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
                         missing && !comments.length ? "mark-glow" : ""
                       }`}
-                      style={{ "--c": s.colour, "--glow": s.colour, left: pct(b.from), width: `calc(${pct(b.to)} - ${pct(b.from)})` }}
+                      style={{ "--c": s.colour, "--glow": s.colour, left: pct(b.from), width: `calc(${pct(b.to)} - ${pct(b.from)})`, transformOrigin: "left center" }}
                     >
                       {cue && <span className="absolute inset-y-0 left-0 w-1 rounded-l" style={{ background: s.colour }} />}
-                    </button>
+                    </motion.button>
                   );
                 })}
                 {comments.map((item) => {
@@ -820,6 +1336,7 @@ function Timeline({ view, activeItemId, onPick }) {
             </div>
           );
         })}
+        <MarkLane start={start} end={end} pct={pct} hours={hours} marks={marks} onMark={onMark} onMove={onMoveMark} presets={presets} canMark={canMark} />
         <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[11px] text-slate-500">
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full border-2 border-slate-400" /> Your comment
@@ -909,7 +1426,7 @@ function ItemText({ item }) {
   return <span className="italic text-slate-300">{item.text}</span>;
 }
 
-function Suggestion({ s, frozen, edit, jump }) {
+function Suggestion({ s, index, frozen, edit, jump }) {
   const [open, setOpen] = useState(false);
   const [flash, setFlash] = useState(false);
   const rowRef = useRef(null);
@@ -931,8 +1448,6 @@ function Suggestion({ s, frozen, edit, jump }) {
   const pill =
     s.standing === "covered" ? (
       <Pill cls="text-emerald-400 bg-emerald-400/10">On the timesheets · {hm(s.logged.hours)}</Pill>
-    ) : s.standing === "short" ? (
-      <Pill cls="text-amber-400 bg-amber-400/10">Short by {hm(s.gap)}</Pill>
     ) : s.standing === "none" ? (
       <Pill cls="text-slate-400 bg-white/5">No time suggested</Pill>
     ) : (
@@ -951,12 +1466,12 @@ function Suggestion({ s, frozen, edit, jump }) {
         ? `${hm(s.logged.hours)} logged${where}. Add more if needed`
         : "Set the time you spent"
       : s.standing === "covered"
-      ? `Your activity suggests ${hm(s.est)}`
+      ? s.gap > 0
+        ? `Activity suggests up to ${hm(s.est)}`
+        : `Your activity suggests ${hm(s.est)}`
       : s.standing === "none"
       ? "Set a time if you worked on it"
-      : s.standing === "short"
-      ? `${hm(s.est)} suggested, ${hm(s.logged.hours)} logged${where}`
-      : `${hm(s.est)} suggested`;
+      : `Up to ${hm(s.est)} suggested`;
   // Show the Add. Time control when overtime is suggested or already set;
   // otherwise it's one click away.
   const showExtra = s.estExtra > 0 || s.extra > 0;
@@ -965,7 +1480,8 @@ function Suggestion({ s, frozen, edit, jump }) {
     <li
       ref={rowRef}
       tabIndex={-1}
-      className={`grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 outline-none transition-colors duration-700 ${
+      style={enterDelay(index)}
+      className={`${ENTER} grid grid-cols-[24px_minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-6 py-4 border-b border-white/5 last:border-b-0 outline-none transition-colors duration-700 ${
         flash ? "bg-[#12a0e1]/10" : ""
       } ${s.locked ? "opacity-55" : ""}`}
     >
@@ -981,7 +1497,7 @@ function Suggestion({ s, frozen, edit, jump }) {
         <label htmlFor={`ct-${s.key}`} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm font-bold text-white cursor-pointer">
           <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: s.colour }} />
           <span className="min-w-0 break-words">{s.title}</span>
-          {pill}
+          <span key={s.standing} className="animate-in fade-in zoom-in-90 [animation-duration:300ms] motion-reduce:animate-none">{pill}</span>
         </label>
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[11px] text-slate-400">
           {jobCode ? <span className="font-mono text-slate-200">{jobCode}</span> : <span className="italic">No job number found</span>}
@@ -998,22 +1514,42 @@ function Suggestion({ s, frozen, edit, jump }) {
           <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
           {s.items.length === s.commentCount ? plural(s.commentCount, "comment") : `Activity (${s.items.length})`}
         </button>
-        {open && (
-          <ul className="mt-2 -mx-2 flex flex-col gap-0.5">
-            {s.items.map((item) => {
-              const picked = jump?.itemId === item.id;
-              return (
-                <li
-                  key={item.id}
-                  className={`px-2 py-1 rounded-md text-xs break-words ${picked ? "bg-white/[0.07] text-slate-100" : "text-slate-300"}`}
-                >
-                  <span className={`font-mono mr-2 ${picked ? "text-[#38bdf8]" : "text-slate-500"}`}>{clock(item.minute)}</span>
-                  <ItemText item={item} />
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        {/* Opens downward with its lines following one another, and folds
+            back up, so a long thread doesn't jump the rows below it. */}
+        <AnimatePresence initial={false}>
+          {open && (
+            <motion.div
+              key="activity"
+              className="-mx-2 overflow-hidden"
+              initial="closed"
+              animate="open"
+              exit="closed"
+              variants={{
+                closed: { height: 0, transition: { duration: 0.2, ease: [0.4, 0, 0.2, 1] } },
+                open: {
+                  height: "auto",
+                  transition: { duration: 0.3, ease: [0.16, 1, 0.3, 1], staggerChildren: Math.min(0.03, 0.35 / s.items.length) },
+                },
+              }}
+            >
+              <ul className="pt-2 flex flex-col gap-0.5">
+                {s.items.map((item) => {
+                  const picked = jump?.itemId === item.id;
+                  return (
+                    <motion.li
+                      key={item.id}
+                      variants={{ closed: { opacity: 0, y: -4 }, open: { opacity: 1, y: 0 } }}
+                      className={`px-2 py-1 rounded-md text-xs break-words ${picked ? "bg-white/[0.07] text-slate-100" : "text-slate-300"}`}
+                    >
+                      <span className={`font-mono mr-2 ${picked ? "text-[#38bdf8]" : "text-slate-500"}`}>{clock(item.minute)}</span>
+                      <ItemText item={item} />
+                    </motion.li>
+                  );
+                })}
+              </ul>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
       <div className="flex flex-col items-end gap-1 col-start-2 sm:col-start-auto max-sm:items-start max-sm:mt-2">
         {s.locked ? (
@@ -1045,7 +1581,7 @@ function Suggestion({ s, frozen, edit, jump }) {
             )}
           </>
         )}
-        <span className="max-w-[15rem] text-[10px] text-slate-500 text-right max-sm:text-left">{hint}</span>
+        <span className="max-w-[15rem] text-[10px] text-slate-500 text-right max-sm:text-left [text-wrap:balance]">{hint}</span>
         {s.estExtra > 0 && (
           <span className="max-w-[15rem] text-[10px] text-amber-400/80 text-right max-sm:text-left">
             {hm(s.estExtra)} of it after 18:00, as add. time

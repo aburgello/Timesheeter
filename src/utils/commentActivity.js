@@ -42,6 +42,10 @@ import { resolveCountryCode } from "./countryCodes";
 // When stretches overlap, each minute is split evenly between the tasks open
 // in it, so a day never adds up to more hours than it had.
 //
+// Time you've marked by hand (`claimed`) is a fact, not a guess, so it comes
+// out of every stretch it overlaps: a task left open across a marked lunch or
+// meeting isn't credited with that hour.
+//
 // Everything here is in minutes since local midnight; the caller converts.
 
 export const DAY_START_MIN = 9 * 60 + 30;
@@ -51,13 +55,14 @@ export const EARLIEST_MIN = 7 * 60;
 /**
  * events: [{ taskId, minute, kind: "start"|"mine"|"stop"|"other", cue?: "assigned"|"status" }]
  * dayEnd: where unclosed stretches stop — 18:00, or now if that's earlier today.
+ * claimed: [{ from, to }] marked by hand; no task is given those minutes.
  * Returns {
  *   byTask:         { [taskId]: minutes }, all of it
  *   overtimeByTask: { [taskId]: minutes }, the part after 18:00
  *   intervals:      [{ taskId, from, to }], each stretch before splitting, for drawing
  * }
  */
-export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd = DAY_END_MIN, overtimeFrom = DAY_END_MIN } = {}) {
+export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd = DAY_END_MIN, overtimeFrom = DAY_END_MIN, claimed = [] } = {}) {
   const perTask = new Map();
   for (const e of events) {
     if (!e.taskId || !Number.isFinite(e.minute)) continue;
@@ -108,9 +113,10 @@ export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd 
   const byTask = {};
   const overtimeByTask = {};
   for (const taskId of perTask.keys()) byTask[taskId] = overtimeByTask[taskId] = 0;
-  const cuts = [...new Set([...intervals.flatMap((i) => [i.from, i.to]), overtimeFrom])].sort((a, b) => a - b);
+  const cuts = [...new Set([...intervals, ...claimed].flatMap((i) => [i.from, i.to]).concat(overtimeFrom))].sort((a, b) => a - b);
   for (let k = 0; k < cuts.length - 1; k++) {
     const [a, b] = [cuts[k], cuts[k + 1]];
+    if (claimed.some((c) => c.from <= a && c.to >= b)) continue;
     const open = [...new Set(intervals.filter((i) => i.from <= a && i.to >= b).map((i) => i.taskId))];
     for (const taskId of open) {
       byTask[taskId] += (b - a) / open.length;
@@ -120,10 +126,9 @@ export function estimateFromActivity(events, { dayStart = DAY_START_MIN, dayEnd 
   return { byTask, overtimeByTask, intervals };
 }
 
-// The kinds of your activity an estimate can be built from: the comments you
+// The kinds of your own activity a task can be listed for: the comments you
 // sent, status changes, and assignments. A wrike_task_activity row is one of
-// the last two. Other people's comments aren't a kind of their own: they only
-// mark where your next stretch begins, and always count.
+// the last two.
 export const ACTIVITY_SOURCES = ["messages", "status", "assigned"];
 export const activitySource = (a) => (a.event_type === "TaskStatusChanged" ? "status" : "assigned");
 
@@ -206,6 +211,15 @@ export function splitDay(byTask, overtimeByTask = {}, { capMinutes = NORMAL_DAY_
   const regular = share(ids.map((id, i) => Math.max(0, (byTask[id] || 0) - extraMin[i])), capMinutes);
   const extra = share(extraMin);
   return Object.fromEntries(ids.map((id, i) => [id, { regular: regular[i], extra: extra[i] }]));
+}
+
+/**
+ * A stretch marked by hand as the two timesheet columns, in hours on the 0.25
+ * grid: before 18:00 is time, after it add. time.
+ */
+export function splitMarked({ from, to }, overtimeFrom = DAY_END_MIN) {
+  const q = (m) => Math.round(Math.max(0, m) / 15) / 4;
+  return { regular: q(Math.min(to, overtimeFrom) - from), extra: q(to - Math.max(from, overtimeFrom)) };
 }
 
 // Minutes → hours on the timesheet's 0.25 grid, never below one step: anything

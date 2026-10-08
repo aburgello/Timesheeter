@@ -226,6 +226,12 @@
   }
 }
 
+/* A break marked on the "Where did my day go?" timeline: hatched, so it reads
+   as time set aside and not as work. */
+.mark-break {
+  background: repeating-linear-gradient(135deg, rgb(148 163 184 / 0.55) 0 3px, rgb(148 163 184 / 0.15) 3px 6px);
+}
+
 /* Film grain over the whole viewport for depth (sits above the page background
    and cards, below modals/toasts; never intercepts clicks). */
 body::after {

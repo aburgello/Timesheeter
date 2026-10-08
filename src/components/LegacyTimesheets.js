@@ -2610,6 +2610,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           statusName={(id) => statusDictRef.current[id]}
           statusGroup={(id) => statusGroupRef.current[id]}
           onAddRows={handleAddCommentRows}
+          jobOptions={jobOptions}
+          getJob={jobLookup?.getJob}
+          defaultCategory={defaultCategory}
         />
       )}
 

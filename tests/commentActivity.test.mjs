@@ -2,6 +2,7 @@ import {
   estimateFromActivity,
   activityToEvents,
   splitDay,
+  splitMarked,
   activitySource,
   roundToQuarterHours,
   hoursLoggedFor,
@@ -186,3 +187,25 @@ check("split: overtime is shared the same way", splitDay({ a: 10, b: 20 }, { a: 
 // Where an activity row counts when filtering what an estimate is built from.
 check("source: a status change", activitySource({ event_type: "TaskStatusChanged" }), "status");
 check("source: an assignment", [activitySource({ event_type: "TaskResponsiblesAdded" }), activitySource({ event_type: "TaskResponsiblesRemoved" })], ["assigned", "assigned"]);
+
+// Time marked by hand comes out of the stretches it overlaps.
+{
+  const day = [
+    { taskId: "pe", minute: 13 * 60 + 15, kind: "start", cue: "status" },
+    { taskId: "pe", minute: 14 * 60 + 15, kind: "mine" },
+  ];
+  check("marked: without a mark the whole stretch counts", estimateFromActivity(day).byTask.pe, 60);
+  const lunch = estimateFromActivity(day, { claimed: [{ from: 13 * 60, to: 14 * 60 }] });
+  check("marked: a lunch across it leaves what's outside", lunch.byTask.pe, 15);
+  check("marked: the bar is still drawn whole", lunch.intervals, [{ taskId: "pe", from: 13 * 60 + 15, to: 14 * 60 + 15 }]);
+  check("marked: one covering the stretch leaves nothing", estimateFromActivity(day, { claimed: [{ from: 13 * 60, to: 15 * 60 }] }).byTask.pe, 0);
+  check("marked: one elsewhere changes nothing", estimateFromActivity(day, { claimed: [{ from: 16 * 60, to: 17 * 60 }] }).byTask.pe, 60);
+  const late = estimateFromActivity(
+    [{ taskId: "x", minute: 17 * 60, kind: "start", cue: "assigned" }, { taskId: "x", minute: 19 * 60, kind: "mine" }],
+    { claimed: [{ from: 18 * 60, to: 18 * 60 + 30 }] }
+  );
+  check("marked: overtime loses it too", [late.byTask.x, late.overtimeByTask.x], [90, 30]);
+}
+check("marked: before 18:00 is time", splitMarked({ from: 13 * 60, to: 14 * 60 + 30 }), { regular: 1.5, extra: 0 });
+check("marked: across 18:00 splits", splitMarked({ from: 17 * 60 + 30, to: 19 * 60 }), { regular: 0.5, extra: 1 });
+check("marked: after 18:00 is add. time", splitMarked({ from: 19 * 60, to: 19 * 60 + 45 }), { regular: 0, extra: 0.75 });
