@@ -119,11 +119,28 @@ const fitTextareaHeight = (el) => {
   el.style.height = `${el.scrollHeight + border}px`;
 };
 
-function AutoGrowTextarea({ value, ...rest }) {
+// `clampRows` holds a long value to that many lines until the field has focus,
+// so one wordy cell doesn't set the height of its whole row. Clicking into it
+// shows all of it, and the full text is its hover title meanwhile.
+function AutoGrowTextarea({ value, clampRows, onFocus, onBlur, ...rest }) {
   const ref = useRef(null);
-  useLayoutEffect(() => {
-    if (ref.current) fitTextareaHeight(ref.current);
-  }, [value]);
+  const [focused, setFocused] = useState(false);
+  const fit = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    fitTextareaHeight(el);
+    if (!clampRows || focused) return;
+    const cs = getComputedStyle(el);
+    const line = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.25;
+    // No bottom padding in the sum. Overflow is clipped at the padding edge,
+    // not the text's, so with it the top of the next line showed in that strip.
+    const chrome = parseFloat(cs.paddingTop) + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    const max = Math.ceil(line * clampRows + chrome);
+    if (el.offsetHeight > max) el.style.height = `${max}px`;
+  }, [clampRows, focused]);
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  useLayoutEffect(fit, [value, fit]);
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -131,12 +148,42 @@ function AutoGrowTextarea({ value, ...rest }) {
     const ro = new ResizeObserver(() => {
       if (el.offsetWidth === lastWidth) return;
       lastWidth = el.offsetWidth;
-      fitTextareaHeight(el);
+      fitRef.current();
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  return <textarea ref={ref} value={value} {...rest} />;
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      title={clampRows && !focused && value ? value : undefined}
+      onFocus={(e) => { setFocused(true); onFocus?.(e); }}
+      onBlur={(e) => { setFocused(false); onBlur?.(e); }}
+      {...rest}
+    />
+  );
+}
+
+// A tick box for a table cell. A styled button, not <input type=checkbox>: the
+// native one is drawn by the browser, and on the dark themes it came out as a
+// flat grey square that read as disabled.
+function RowCheck({ checked, onChange, disabled, label }) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={!!checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`inline-flex w-[18px] h-[18px] items-center justify-center rounded-[5px] border align-middle transition-[background-color,border-color] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#12a0e1]/40 ${
+        checked ? "bg-[#12a0e1] border-[#12a0e1]" : "bg-white border-[#c2d0da] hover:border-[#12a0e1]"
+      } ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+    >
+      {checked && <Check className="w-3 h-3 text-white" strokeWidth={3.5} />}
+    </button>
+  );
 }
 
 // The category picker in the batch-edit bar. Its own compact list rather than
@@ -3139,6 +3186,9 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               tabColors = isWeekend
                 ? "bg-rose-50 text-rose-400 hover:bg-rose-100 hover:text-rose-600 border-t border-x border-transparent"
                 : "bg-slate-100 text-[#768994] hover:bg-slate-200 hover:text-[#122027] border-t border-x border-transparent";
+              // On the dark themes the idle fills come out as six dark boxes
+              // that outweigh the selected tab. See .day-tab-idle.
+              tabColors += " day-tab-idle";
             }
 
             return (
@@ -3149,6 +3199,14 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   isActive ? "relative z-10 top-[1px]" : ""
                 }`}
               >
+                {/* The selected day's marker. Colour alone didn't carry it:
+                    the tab's fill is the same as the band below it. */}
+                {isActive && (
+                  <span
+                    aria-hidden="true"
+                    className={`absolute inset-x-3 top-0 h-[3px] rounded-b-full ${isWeekend ? "bg-rose-500" : "bg-[#12a0e1]"}`}
+                  />
+                )}
                 <div className="flex flex-col items-center gap-0.5">
                   <div className="flex items-center justify-center gap-1.5">
                     {frozenDays[day] && <Lock className="w-3 h-3 opacity-60 shrink-0" />}
@@ -3441,8 +3499,8 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                       <td className="p-2 border-r border-[#dce4ec]" />
                       <td className="p-2 border-r border-[#dce4ec]" />
                       <td className="p-2 border-r border-[#dce4ec]" />
-                      <td className="p-2 border-r border-[#dce4ec] align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.timeSpent}</td>
-                      <td className="p-2 align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.additionalTime}</td>
+                      <td className="p-2 border-r border-[#dce4ec] align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.timeSpent === "none" ? <span className="opacity-40 font-medium">—</span> : g.timeSpent}</td>
+                      <td className="p-2 align-middle text-center text-[12px] font-black text-[#122027] tabular-nums">{g.additionalTime === "none" ? <span className="opacity-40 font-medium">—</span> : g.additionalTime}</td>
                     </tr>
                   );
                 }
@@ -3618,6 +3676,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
 
                   <td className="p-2 border-r border-[#f0f4f8] align-middle w-[220px]">
                     <AutoGrowTextarea
+                      clampRows={2}
                       rows={2}
                       value={row.projectDescription}
                       onChange={(e) =>
@@ -3670,21 +3729,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   </td>
 
                   <td className="p-2 border-r border-[#f0f4f8] align-middle w-[70px] text-center">
-                    <input
-                      type="checkbox"
+                    <RowCheck
+                      label="Client amends"
                       checked={row.clientAmends}
-                      onChange={(e) =>
-                        handleUpdateRow(
-                          row.id,
-                          "clientAmends",
-                          e.target.checked
-                        )
-                      }
-                      className={`w-4 h-4 rounded text-[#12a0e1] focus:ring-[#12a0e1] ${
-                        !rowsAreEditable
-                          ? "opacity-50 cursor-not-allowed"
-                          : "cursor-pointer"
-                      }`}
+                      onChange={(next) => handleUpdateRow(row.id, "clientAmends", next)}
                       disabled={!rowsAreEditable}
                     />
                   </td>
@@ -3696,6 +3744,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                         handleUpdateRow(row.id, "notes", e.target.value)
                       }
                       placeholder="Notes…"
+                      clampRows={2}
                       rows={2}
                       disabled={!rowsAreEditable}
                       className={`w-full text-[11px] bg-transparent border border-transparent rounded-xl px-2 py-1 resize-none overflow-hidden transition-colors leading-relaxed placeholder:text-slate-500 ${
@@ -3707,17 +3756,10 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
                   </td>
 
                   <td className="p-2 border-r border-[#f0f4f8] align-middle w-[50px] text-center">
-                    <input
-                      type="checkbox"
+                    <RowCheck
+                      label="3D"
                       checked={row.is3D}
-                      onChange={(e) =>
-                        handleUpdateRow(row.id, "is3D", e.target.checked)
-                      }
-                      className={`w-4 h-4 rounded text-[#12a0e1] focus:ring-[#12a0e1] ${
-                        !rowsAreEditable
-                          ? "opacity-50 cursor-not-allowed"
-                          : "cursor-pointer"
-                      }`}
+                      onChange={(next) => handleUpdateRow(row.id, "is3D", next)}
                       disabled={!rowsAreEditable}
                     />
                   </td>

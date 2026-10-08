@@ -2080,9 +2080,10 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
             Board's header treatment. */}
         <div className="flex items-center gap-5 sm:gap-7">
           {[
-            { label: "Logged", value: tasks.length },
-            { label: "Time", value: formatDurationText(totalSeconds) },
-            { label: "All-time", value: userStats.fetched ? userStats.allTime : "—" },
+            { label: "Rows logged", value: tasks.length },
+            // To the minute: seconds on a total in the hundreds of hours is noise.
+            { label: "Time logged", value: formatDurationText(Math.floor(totalSeconds / 60) * 60) },
+            { label: "Tasks, all-time", value: userStats.fetched ? userStats.allTime : "—" },
           ].map(({ label, value }) => (
             <div key={label} className="text-right">
               <div className="font-display text-2xl sm:text-3xl font-bold text-white leading-none">
@@ -2157,16 +2158,6 @@ export default function Profile({ wrikeData, onTokenChange, activeSection: activ
                         key={section.id}
                         section={section}
                         onClick={() => setActiveSection(section.id)}
-                        badge={
-                          section.id === "settings" ? (
-                            <span
-                              title={hasToken ? "Wrike connected" : "Wrike not connected"}
-                              className={`w-2 h-2 rounded-full shrink-0 ${
-                                hasToken ? "bg-emerald-500 group-hover:bg-white" : "bg-amber-400 group-hover:bg-white"
-                              } transition-colors duration-300`}
-                            />
-                          ) : null
-                        }
                       />
                     ))}
                   </div>

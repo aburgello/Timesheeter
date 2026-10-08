@@ -80,6 +80,26 @@ html.dark-theme.oled-theme {
   border-color: rgb(255 255 255 / 0.12) !important;
 }
 
+/* The page header keeps its section colour but under a dark wash. At full
+   strength it is the brightest thing on a black page by a wide margin, which
+   is the glare the theme exists to avoid. Layered over the element's own
+   gradient, so each page keeps its hue and the white text stays white. */
+.oled-theme .page-header {
+  background-image:
+    linear-gradient(rgb(0 0 0 / 0.5), rgb(0 0 0 / 0.5)),
+    linear-gradient(to bottom right, var(--tw-gradient-stops)) !important;
+}
+
+/* Timesheet day tabs that aren't selected. Light mode gives them a grey fill
+   so they read as folder tabs behind the white one. The dark themes turn
+   those fills into dark slabs (and the weekend's into the selected tab's own
+   colour), so there they are bare labels and only the selected day is a tab.
+   `html` in the selector so these outrank the fill overrides further down,
+   which are also two classes and !important and would otherwise win by coming
+   later. */
+html.dark-theme .day-tab-idle { background-color: transparent !important; }
+html.dark-theme .day-tab-idle:hover { background-color: var(--dk-raised) !important; }
+
 /* The always-dark panels: the Wrike Hub, "Where did my day go?" and the
    pickers inside them. They are dark in every theme, so they paint their navy
    as fixed hex classes that the variables above never reach. In OLED each of

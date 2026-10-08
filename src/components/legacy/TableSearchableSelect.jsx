@@ -300,6 +300,10 @@ export default function TableSearchableSelect({
             isCountry && !isDarkModal ? "text-[#3b5998]" : ""
           } ${
             isTime ? "text-center" : ""
+          } ${
+            // An unset time says "none" in every row of the column. Dimmed, the
+            // rows that do have a time are the ones that read.
+            isTime && searchTerm === "none" && !showAttention && !isOpen ? "opacity-35" : ""
           } ${disabled ? "cursor-not-allowed" : ""}`}
         />
         {showStepper ? (
