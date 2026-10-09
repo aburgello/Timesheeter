@@ -9,7 +9,6 @@ import React, {
 } from "react";
 import { motion, AnimatePresence, MotionConfig } from "framer-motion";
 import {
-  Key,
   Bell,
   CheckCircle2,
   X,
@@ -26,6 +25,7 @@ import Home from "./components/Home";
 import { useWrikeCache } from "./hooks/useWrikeCache";
 import { PRINT_HUB_RE } from "./lib/wrikeEnrich";
 import { pageIdsFor, pagesFor } from "./lib/departments";
+import { WrikeConnectionContext } from "./components/shared/PageHeader";
 import { useDepartment } from "./hooks/useDepartment";
 import { MANAGER_PAGE_IDS, isManager } from "./lib/access";
 import { setWrikeUserId, supabase, whenIdentityReady } from "./lib/supabaseClient";
@@ -374,8 +374,15 @@ export default function App() {
   // Admin check
   const isAdmin = wrikeUserId === ADMIN_WRIKE_ID;
 
+  const wrikeConnection = useMemo(
+    () => ({ connected: hasToken, connect: () => setActivePage("profile") }),
+    [hasToken]
+  );
+
   return (
     <MotionConfig reducedMotion="user">
+    {/* The "Wrike not connected" notice is drawn by each page's header. */}
+    <WrikeConnectionContext.Provider value={wrikeConnection}>
     <div className="min-h-screen bg-slate-100 transition-colors duration-300">
       <Rail activePage={activePage} setActivePage={setActivePage} />
 
@@ -493,26 +500,6 @@ export default function App() {
       {/* ── Department preview indicator (self-hides when no preview is set,
            see AdminModal's "Preview as" switcher) ─────────────────────────── */}
       <DepartmentPreviewBanner />
-
-      {/* Global no-token banner — home renders its own compact chip instead,
-          and pt-3 (not mt-3) so the margin can't collapse through the app
-          root and expose the document canvas as a dark strip */}
-      {!hasToken && activePage !== "profile" && activePage !== "home" && (
-        <div className="md:pl-20 mx-auto max-w-[1400px] px-4 sm:px-6 pt-3">
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex items-center gap-3">
-            <Key className="w-4 h-4 text-amber-600 shrink-0" />
-            <p className="text-xs font-bold text-amber-800 flex-1">
-              Wrike not connected — some features won't work until you connect it.
-            </p>
-            <button
-              onClick={() => setActivePage("profile")}
-              className="text-xs font-black text-amber-600 hover:text-amber-800 underline underline-offset-2 shrink-0 transition-colors"
-            >
-              Add in Profile →
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Shortcut bubble — bottom-right. Dark mode used to float here as its
           own button; it now lives in Profile → Settings (which this bubble
@@ -673,6 +660,7 @@ export default function App() {
         )}
       </AnimatePresence>
     </div>
+    </WrikeConnectionContext.Provider>
     </MotionConfig>
   );
 }

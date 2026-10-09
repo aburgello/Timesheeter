@@ -1,4 +1,5 @@
-import React from "react";
+import React, { createContext, useContext } from "react";
+import { Key } from "lucide-react";
 import { PAGE_GRADIENTS } from "../../lib/pageGradients";
 import { PAGES } from "../../lib/departments";
 
@@ -7,10 +8,20 @@ import { PAGES } from "../../lib/departments";
 // grown, so the Home wash-transition resolves directly into it instead of
 // cutting to an unrelated white card. Used by every top-level page. A page
 // marked `wip` in the registry wears a "Work in progress" tag by its title.
+//
+// With Wrike not connected, a notice runs along the header's foot. It belongs
+// to the header so the gradient still starts at the top of the page. Profile
+// leaves it out: that is where you connect.
+
+// App provides this: whether Wrike is connected, and how to go and connect it.
+export const WrikeConnectionContext = createContext({ connected: true, connect: () => {} });
+
 export default function PageHeader({ pageId, icon: Icon, title, subtitle, children, maxWidthClass = "max-w-[1800px]" }) {
   const gradient = PAGE_GRADIENTS[pageId] || PAGE_GRADIENTS.timesheet;
+  const { connected, connect } = useContext(WrikeConnectionContext);
 
   return (
+    <>
     <div className={`page-header bg-gradient-to-br ${gradient} py-6 sm:py-7`}>
       {/* Padding lives inside the max-width box, not on this outer
           full-bleed wrapper — matching the page body's own
@@ -50,6 +61,23 @@ export default function PageHeader({ pageId, icon: Icon, title, subtitle, childr
         )}
       </div>
     </div>
+    {!connected && pageId !== "profile" && (
+      <div className="bg-amber-50 border-b border-amber-200">
+        <div className={`${maxWidthClass} mx-auto px-4 sm:px-6 py-2 flex items-center gap-3`}>
+          <Key className="w-4 h-4 text-amber-600 shrink-0" />
+          <p className="text-xs font-bold text-amber-800 flex-1">
+            Wrike not connected — some features won't work until you connect it.
+          </p>
+          <button
+            onClick={connect}
+            className="text-xs font-black text-amber-600 hover:text-amber-800 underline underline-offset-2 shrink-0 transition-colors"
+          >
+            Add in Profile →
+          </button>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
