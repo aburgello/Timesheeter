@@ -15,6 +15,9 @@ import { isManager, MANAGER_PAGE_IDS } from "./access";
 // Single source of truth for every top-level page: label, description (Home
 // row hover copy), icon, and gradient identity. Home's menu and the Rail
 // derive from this, so a rename here renames it everywhere.
+//
+// `wip: true` marks a page still being tried out. It sits last, under a
+// "Work in progress" heading on Home, for whoever can already open it.
 export const PAGES = {
   timesheet: {
     id: "timesheet",
@@ -71,6 +74,7 @@ export const PAGES = {
     desc: "Market orders at a glance",
     icon: ClipboardList,
     gradient: PAGE_GRADIENTS.orderforms,
+    wip: true,
   },
 };
 
@@ -136,14 +140,20 @@ export function trackerSubtitleFor(department) {
     : "Timesheet Tracker";
 }
 
+const wipLast = (ids) => [
+  ...ids.filter((id) => !PAGES[id].wip),
+  ...ids.filter((id) => PAGES[id].wip),
+];
+
 // The pages a member can reach: their department's, led by the manager pages
-// for the people who have them. Everything that offers or opens a page (Home,
-// the Rail, the quick-actions bubble, App's own guard)
-// asks this, so a page can't be hidden in one place and reachable in another.
+// for the people who have them, with work-in-progress pages after the rest.
+// Everything that offers or opens a page (Home, the Rail, the quick-actions
+// bubble, App's own guard) asks this, so a page can't be hidden in one place
+// and reachable in another.
 export function pageIdsFor(department, wrikeUserId) {
   const ids = department ? settingsFor(department).pages : UNTAGGED_PAGE_IDS;
-  if (!isManager(wrikeUserId)) return ids;
-  return [...MANAGER_PAGE_IDS.filter((id) => !ids.includes(id)), ...ids];
+  if (!isManager(wrikeUserId)) return wipLast(ids);
+  return wipLast([...MANAGER_PAGE_IDS.filter((id) => !ids.includes(id)), ...ids]);
 }
 
 // Returns the page object with any department-specific overrides applied

@@ -17,7 +17,7 @@ import { filterToTeams } from "../src/lib/wrikeEnrich.js";
 const NOBODY = "NOT_A_MANAGER";
 
 check("pages: Motion", pageIdsFor("Motion", NOBODY), ["todayslist", "canvas", "legacy", "profile"]);
-check("pages: PM", pageIdsFor("PM", NOBODY), ["jobbook", "orderforms", "legacy", "profile"]);
+check("pages: PM, with work-in-progress Client Orders last", pageIdsFor("PM", NOBODY), ["jobbook", "legacy", "profile", "orderforms"]);
 check("pages: a department added in Administration gets the standard set", pageIdsFor("Sound", NOBODY), ["todayslist", "canvas", "legacy", "profile"]);
 check("pages: untagged gets a neutral set, no Canvas", pageIdsFor(null, NOBODY), ["todayslist", "legacy", "profile"]);
 

@@ -40,5 +40,6 @@ export const isManager = (wrikeUserId) => {
 
 // The pages a manager has whatever their department: Administration, and the
 // Job Book and Order Forms, which are otherwise the Project Managers' alone.
-// Listed in the order they lead the menu.
+// Listed in the order they lead the menu; a work-in-progress page is moved to
+// the end instead (see pageIdsFor).
 export const MANAGER_PAGE_IDS = ["management", "jobbook", "orderforms"];

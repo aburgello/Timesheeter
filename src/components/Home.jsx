@@ -13,7 +13,8 @@ gsap.registerPlugin(useGSAP);
 // filtered by the member's department — Motion sees its five tools, PMs see
 // Job Book/Timesheets/Profile Hub, and departments without a defined set fall
 // back to the historic four. The managers named in lib/access.js get
-// Administration and the Job Book on top of their department's rows.
+// Administration and the Job Book on top of their department's rows. Pages
+// marked `wip` come last, under their own heading.
 
 // Play the full entrance ceremony once per app session; returning to the
 // menu afterwards gets a shortened rise so daily navigation never drags.
@@ -55,6 +56,7 @@ export default function Home({ onNavigate, hasToken = true }) {
   );
   const containerRef = useRef(null);
   const headerRef = useRef(null);
+  const wipHeadingRef = useRef(null);
   // Refs are keyed by section id (not index) because the row set can change
   // after mount — the department resolves asynchronously on a cold cache.
   // Lookups below always go through the current `sections`, so entries for
@@ -80,6 +82,7 @@ export default function Home({ onNavigate, hasToken = true }) {
 
       const contents = liveNodes(contentRefs);
       gsap.set(headerRef.current, { opacity: 0, y: -12 });
+      if (wipHeadingRef.current) gsap.set(wipHeadingRef.current, { opacity: 0 });
       // Classic masked reveal: each row's icon+label sits inside an
       // overflow-hidden box (see Row below) and slides up from fully
       // below it — no opacity fade, just a clean wipe into place.
@@ -103,6 +106,9 @@ export default function Home({ onNavigate, hasToken = true }) {
           },
           "-=0.2"
         );
+      if (wipHeadingRef.current) {
+        gsap.to(wipHeadingRef.current, { opacity: 1, duration: 0.3, delay: firstVisit ? 0.5 : 0.2 });
+      }
     },
     // Re-runs (as the shortened rise) if the row set changes when the
     // department resolves after first paint on a cold cache.
@@ -175,7 +181,7 @@ export default function Home({ onNavigate, hasToken = true }) {
         onComplete: () => onNavigate(sectionId, section.gradient),
       })
       .to(otherContents, { yPercent: 110, duration: 0.2, ease: "power2.in", stagger: 0.018 }, 0)
-      .to(headerRef.current, { opacity: 0, duration: 0.16, ease: "power2.inOut" }, 0)
+      .to([headerRef.current, wipHeadingRef.current].filter(Boolean), { opacity: 0, duration: 0.16, ease: "power2.inOut" }, 0)
       .to(liveNodes(metaRefs), { opacity: 0, duration: 0.1, ease: "power2.out" }, 0)
       .to(clickedFill, { scaleX: 1, scaleY: scaleYNeeded, duration: 0.26, ease: "power2.inOut" }, 0)
       .to(clickedContent, { yPercent: -110, duration: 0.2, ease: "power2.in" }, 0.03);
@@ -215,18 +221,27 @@ export default function Home({ onNavigate, hasToken = true }) {
       </div>
 
       <div className="flex-1 flex flex-col">
-        {sections.map((section) => (
-          <Row
-            key={section.id}
-            section={section}
-            addRowRef={bindRef(rowRefs, section.id)}
-            addFillRef={bindRef(fillRefs, section.id)}
-            addContentRef={bindRef(contentRefs, section.id)}
-            addMetaRef={bindRef(metaRefs, section.id)}
-            onClick={() => handlePick(section.id)}
-            onHoverIn={() => handleHoverIn(section.id)}
-            onHoverOut={() => handleHoverOut(section.id)}
-          />
+        {sections.map((section, i) => (
+          <React.Fragment key={section.id}>
+            {section.wip && !sections[i - 1]?.wip && (
+              <p
+                ref={wipHeadingRef}
+                className="px-6 sm:px-16 py-2 bg-slate-200/70 border-b border-[#dce4ec] text-[11px] font-bold text-[#5b6b75] uppercase tracking-widest"
+              >
+                Work in progress
+              </p>
+            )}
+            <Row
+              section={section}
+              addRowRef={bindRef(rowRefs, section.id)}
+              addFillRef={bindRef(fillRefs, section.id)}
+              addContentRef={bindRef(contentRefs, section.id)}
+              addMetaRef={bindRef(metaRefs, section.id)}
+              onClick={() => handlePick(section.id)}
+              onHoverIn={() => handleHoverIn(section.id)}
+              onHoverOut={() => handleHoverOut(section.id)}
+            />
+          </React.Fragment>
         ))}
       </div>
     </div>

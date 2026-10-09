@@ -141,19 +141,24 @@ export default function Rail({ activePage, setActivePage }) {
         <div className="mt-6 mb-4 shrink-0" />
 
         <div className="relative z-10 flex flex-col gap-1.5 flex-1 pt-2">
-          {sections.map(({ id, label, icon: Icon }) => {
+          {sections.map(({ id, label, icon: Icon, wip }, i) => {
             const isActive = activePage === id;
             return (
-              <button
-                key={id}
-                onClick={() => setActivePage(id)}
-                className={railRowClass(isActive, PAGE_GRADIENTS[id])}
-              >
-                <span className="w-14 h-14 shrink-0 flex items-center justify-center">
-                  <Icon className="w-6 h-6" strokeWidth={isActive ? 2.5 : 2} />
-                </span>
-                <span className={railLabelClass}>{label}</span>
-              </button>
+              <React.Fragment key={id}>
+                {/* A rule sets the work-in-progress pages apart from the rest. */}
+                {wip && !sections[i - 1]?.wip && (
+                  <div aria-hidden className="mx-2 my-1.5 border-t border-[#dce4ec] shrink-0" />
+                )}
+                <button
+                  onClick={() => setActivePage(id)}
+                  className={railRowClass(isActive, PAGE_GRADIENTS[id])}
+                >
+                  <span className="w-14 h-14 shrink-0 flex items-center justify-center">
+                    <Icon className="w-6 h-6" strokeWidth={isActive ? 2.5 : 2} />
+                  </span>
+                  <span className={railLabelClass}>{label}</span>
+                </button>
+              </React.Fragment>
             );
           })}
         </div>
