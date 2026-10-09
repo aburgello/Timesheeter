@@ -2754,18 +2754,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRows, activeDay, frozenDays, isMerging, addRows, deleteRows, clearSelection]);
 
-  const showConsolidationWarning =
-    !consolidatedView &&
-    currentDayRows.some(
-      (r, _, arr) =>
-        arr.filter(
-          (x) =>
-            x.jobNumber === r.jobNumber &&
-            territoryKey(x.territory) === territoryKey(r.territory) &&
-            x.category === r.category
-        ).length > 1
-    );
-
   const textAreaClass = `w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-[#12a0e1] focus:ring-2 focus:ring-[#12a0e1]/20 outline-none text-[12px] text-[#122027] font-medium p-2 transition-[border-color,box-shadow] rounded-xl resize-none overflow-hidden leading-tight placeholder:text-slate-500 ${
     !rowsAreEditable ? "opacity-60 cursor-not-allowed" : ""
   }`;
@@ -3459,28 +3447,6 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
               key={activeDay}
               className={`divide-y divide-[#f0f4f8] ${daySlide === "right" ? "day-in-right" : daySlide === "left" ? "day-in-left" : ""}`}
             >
-              {showConsolidationWarning && (
-                <tr>
-                  <td
-                    colSpan={COLUMNS.length + 1}
-                    className="px-4 py-2 bg-amber-50 border-b border-amber-200"
-                  >
-                    <div className="text-[11px] font-bold text-amber-700 flex items-center gap-2 flex-wrap">
-                      <span>
-                        ⚠️ Some rows share the same job/territory/category — time
-                        totals may appear inflated due to per-row rounding.
-                      </span>
-                      <button
-                        onClick={() => switchConsolidated(true)}
-                        className="ml-auto shrink-0 flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors active:scale-95"
-                      >
-                        <Layers className="w-3 h-3" />
-                        Consolidate
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )}
               {renderItems.map((item) => {
                 // ── Group header row (consolidated view) ─────────────────────
                 if (item.type === "group") {
