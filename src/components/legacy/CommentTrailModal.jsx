@@ -579,50 +579,52 @@ export default function CommentTrailModal({
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
 
         {/* Header */}
-        <div className="px-6 pt-5 pb-4 border-b border-white/5 flex flex-wrap items-start justify-between gap-4">
-          <div className="flex items-start gap-3 min-w-0">
-            <div className="w-9 h-9 shrink-0 rounded-xl bg-[#12a0e1]/15 text-[#38bdf8] flex items-center justify-center">
-              <MessagesSquare className="w-[18px] h-[18px]" />
+        <div className="px-6 pt-5 pb-4 border-b border-white/5 flex flex-col gap-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="w-9 h-9 shrink-0 rounded-xl bg-[#12a0e1]/15 text-[#38bdf8] flex items-center justify-center">
+                <MessagesSquare className="w-[18px] h-[18px]" />
+              </div>
+              <div className="min-w-0">
+                <h2 id="comment-trail-title" className="text-base font-bold text-white">
+                  Where did my day go?
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
+                  Suggestions from your Wrike activity: the tasks you were handed and the comments you posted.
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h2 id="comment-trail-title" className="text-base font-bold text-white">
-                Where did my day go?
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
-                Suggestions from your Wrike activity: the tasks you were handed and the comments you posted.
-              </p>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowCalendar(true)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-colors"
+              >
+                <CalendarDays className="w-4 h-4" />
+                Calendar
+              </button>
+              <button
+                onClick={onClose}
+                aria-label="Close"
+                className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white rounded-xl transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1 p-1 bg-[#0b0f17] rounded-xl border border-white/5" role="group" aria-label="Day">
-              {days.map((d) => (
-                <button
-                  key={d.iso}
-                  onClick={() => setDayIso(d.iso)}
-                  aria-pressed={d.iso === dayIso}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold leading-tight flex flex-col items-center transition-colors ${
-                    d.iso === dayIso ? "bg-[#12a0e1] text-white" : "text-slate-500 hover:text-slate-200"
-                  }`}
-                >
-                  {d.name.slice(0, 3)}
-                  <span className="text-[10px] font-medium opacity-70">{d.date.getDate()}</span>
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setShowCalendar(true)}
-              className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-colors"
-            >
-              <CalendarDays className="w-4 h-4" />
-              Calendar
-            </button>
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white rounded-xl transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
+          <div className="self-start flex gap-1 p-1 bg-[#0b0f17] rounded-xl border border-white/5" role="group" aria-label="Day">
+            {days.map((d) => (
+              <button
+                key={d.iso}
+                onClick={() => setDayIso(d.iso)}
+                aria-pressed={d.iso === dayIso}
+                className={`px-3 py-1 rounded-lg text-xs font-bold leading-tight flex flex-col items-center transition-colors ${
+                  d.iso === dayIso ? "bg-[#12a0e1] text-white" : "text-slate-500 hover:text-slate-200"
+                }`}
+              >
+                {d.name.slice(0, 3)}
+                <span className="text-[10px] font-medium opacity-70">{d.date.getDate()}</span>
+              </button>
+            ))}
           </div>
         </div>
 
