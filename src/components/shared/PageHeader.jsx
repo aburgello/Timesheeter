@@ -1,10 +1,12 @@
 import React from "react";
 import { PAGE_GRADIENTS } from "../../lib/pageGradients";
+import { PAGES } from "../../lib/departments";
 
 // Full-bleed page header whose gradient matches the Home row it was
 // navigated from (see src/lib/pageGradients.js) — the header IS the row,
 // grown, so the Home wash-transition resolves directly into it instead of
-// cutting to an unrelated white card. Used by every top-level page.
+// cutting to an unrelated white card. Used by every top-level page. A page
+// marked `wip` in the registry wears a "Work in progress" tag by its title.
 export default function PageHeader({ pageId, icon: Icon, title, subtitle, children, maxWidthClass = "max-w-[1800px]" }) {
   const gradient = PAGE_GRADIENTS[pageId] || PAGE_GRADIENTS.timesheet;
 
@@ -23,9 +25,16 @@ export default function PageHeader({ pageId, icon: Icon, title, subtitle, childr
             </div>
           )}
           <div className="min-w-0">
-            <h1 className="font-display text-xl sm:text-2xl font-bold text-white tracking-tight truncate">
-              {title}
-            </h1>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <h1 className="font-display text-xl sm:text-2xl font-bold text-white tracking-tight truncate">
+                {title}
+              </h1>
+              {PAGES[pageId]?.wip && (
+                <span className="shrink-0 px-2 py-0.5 rounded-full bg-white/20 border border-white/30 text-[10px] font-black text-white uppercase tracking-widest">
+                  Work in progress
+                </span>
+              )}
+            </div>
             {subtitle && (
               <p className="text-xs sm:text-sm text-white/80 font-medium mt-0.5 truncate">
                 {subtitle}

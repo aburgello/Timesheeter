@@ -156,7 +156,14 @@ export default function Rail({ activePage, setActivePage }) {
                   <span className="w-14 h-14 shrink-0 flex items-center justify-center">
                     <Icon className="w-6 h-6" strokeWidth={isActive ? 2.5 : 2} />
                   </span>
-                  <span className={railLabelClass}>{label}</span>
+                  <span className={railLabelClass}>
+                    {label}
+                    {wip && (
+                      <span className="ml-2 px-1.5 py-0.5 rounded-full border border-current text-[10px] font-black uppercase tracking-widest opacity-70">
+                        WIP
+                      </span>
+                    )}
+                  </span>
                 </button>
               </React.Fragment>
             );
