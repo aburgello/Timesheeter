@@ -36,6 +36,7 @@ import {
 import { hmToHours, getCurrentWeekStart } from "../../hooks/useLegacyRows";
 import { secondsToHM } from "../../utils/timeHelpers";
 import { isoToday, toIsoDate } from "../../utils/dates";
+import { newRowId } from "../../utils/rowId";
 
 // "Where did my day go?" — suggests timesheet rows from your Wrike activity:
 // the tasks you were handed (assigned, or moved into a new status by someone
@@ -505,7 +506,7 @@ export default function CommentTrailModal({
     if (!toAdd || isFrozen) return;
     const date = day.date.toLocaleDateString("en-GB");
     const newRows = picked.map((s) => ({
-      id: Date.now() + Math.floor(Math.random() * 100000),
+      id: newRowId(),
       taskId: s.taskId,
       dayOfWeek: day.name,
       date,

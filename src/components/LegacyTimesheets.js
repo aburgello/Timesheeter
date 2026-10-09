@@ -80,6 +80,7 @@ import PullTimesButton from "./legacy/PullTimesButton";
 import { HoverLabel } from "./shared/FloatingCard";
 import { Rolling, Tick, prefersReducedMotion } from "./shared/motion";
 import { snapshotRows, glideRows, sweepRows, nudge, picturesOf } from "./legacy/rowMotion";
+import { newRowId } from "../utils/rowId";
 
 const ACTIVE_DAY_KEY = "xyi_legacy_activeDay";
 const todayName = () => DAYS[(new Date().getDay() + 6) % 7];
@@ -563,7 +564,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const handleAddRow = () => {
     if (frozenDays[activeDay]) return;
     addRow({
-      id: Date.now() + Math.floor(Math.random() * 1000),
+      id: newRowId(),
       taskId: null,
       dayOfWeek: activeDay,
       jobNumber: "",
@@ -586,7 +587,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
   const addEntryToGroup = (g, extra = {}) => {
     if (frozenDays[activeDay]) return;
     addRow({
-      id: Date.now() + Math.floor(Math.random() * 1000),
+      id: newRowId(),
       taskId: null,
       dayOfWeek: activeDay,
       jobNumber: g.jobNumber || "",
@@ -1493,7 +1494,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       updateRow(existingRow.id, "category", task.wrikeCategory);
     } else {
       const newRow = {
-        id: Date.now() + Math.floor(Math.random() * 1000),
+        id: newRowId(),
         taskId: task.id,
         dayOfWeek,
         jobNumber: task.wrikeJob,
@@ -1982,7 +1983,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
           jobLookup?.ensureJob?.(guessed.jobNumber, { filmTitle, client });
 
           newRows.push({
-            id: Date.now() + Math.floor(Math.random() * 1000),
+            id: newRowId(),
             wrikeTimelogId: allIds.join(","),
             taskId: task?.id,
             dayOfWeek,
@@ -2022,7 +2023,11 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
         : { rows: newRows.map(({ _rawHours, ...r }) => r), replaces: [] };
 
       if (pulledRows.length > 0) {
-        if ((await addRows(pulledRows)) && replaces.length) await deleteRows(replaces);
+        if (!(await addRows(pulledRows))) {
+          showToast("The pulled rows couldn't be saved, so nothing was added. Pull again.");
+          return;
+        }
+        if (replaces.length) await deleteRows(replaces);
         // The grid only shows rows from the current week (weekStart) — a
         // debug pull for an older date saves fine but won't appear here, so
         // say so instead of implying it's now visible in the table below.
@@ -2681,9 +2686,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
       const { id: _id, wrikeTimelogId: _logId, taskId: _taskId, ...rest } = src;
       copies.push({
         ...rest,
-        // + copies.length so a multi-row duplicate can't collide with itself:
-        // Date.now() is the same millisecond for the whole loop.
-        id: Date.now() + Math.floor(Math.random() * 1000) + copies.length,
+        id: newRowId(),
         taskId: null,
         timeSpent: "none",
         additionalTime: "none",
@@ -2720,7 +2723,7 @@ export default function LegacyTimesheet({ wrikeData, isAdmin = false }) {
     }
     setIsMerging(true);
     try {
-      const merged = { ...mergeRows(selectedRows), id: Date.now() + Math.floor(Math.random() * 1000) };
+      const merged = { ...mergeRows(selectedRows), id: newRowId() };
       // addRows has already said so if the save failed; the originals stay.
       if (!(await addRows([merged]))) return;
       // Display only, and it only looks at the screen: pictures of the rows

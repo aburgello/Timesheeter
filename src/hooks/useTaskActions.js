@@ -8,6 +8,7 @@ import {
   territoryKey,
   toTimesheetTerritories,
 } from "../utils/territories";
+import { newRowId } from "../utils/rowId";
 
 /**
  * All task manipulation handlers: log, delete, edit group/task/time/note,
@@ -205,7 +206,7 @@ export function useTaskActions(state) {
           ? fields.jobNumber.substring(fields.jobNumber.indexOf(",") + 1).trim()
           : "";
         newTasks.push({
-          id: Date.now() + Math.floor(Math.random() * 1000),
+          id: newRowId(),
           wrikeTimelogId: log.id,
           taskId: log.taskId,
           ...fields,
@@ -226,7 +227,7 @@ export function useTaskActions(state) {
         const logDayName = dayNames[logDate.getDay()];
         const accumulatedSeconds = Math.floor((timer.accumulatedMins || 0) * 60);
         newTasks.push({
-          id: Date.now() + Math.floor(Math.random() * 1000),
+          id: newRowId(),
           wrikeTimelogId: timerUniqueId,
           taskId: timer.taskId,
           ...fields,
