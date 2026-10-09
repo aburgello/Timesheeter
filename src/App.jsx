@@ -64,15 +64,6 @@ const AdminModal = lazy(() => import("./components/AdminModal"));
 // Lazy — NotesModal pulls in the whole Canvas module (NotesCanvasCard) and the
 // TipTap editor, none of which belong in the always-loaded app entry chunk.
 const NotesModal = lazy(() => import("./components/shared/NotesModal"));
-const DeliverySpecsModal = lazy(() => import("./components/DeliverySpecsModal"));
-// CsvPreviewModal is a named export of the (heavy) TaskDetailModal module —
-// lazy-load it so the bubble's Scan-PDF → Export-CSV path doesn't pull TipTap
-// et al. into the entry chunk.
-const CsvPreviewModal = lazy(() =>
-  import("./components/TaskDetailModal").then((m) => ({
-    default: m.CsvPreviewModal,
-  }))
-);
 
 // Suspense fallback for a still-downloading page chunk. The spinner fades in
 // after a beat (CSS delay) so the common case — chunk already prefetched,
@@ -134,12 +125,9 @@ export default function App() {
   // so the overlay lifts and reveals the settled destination.
   const [washGradient, setWashGradient] = useState(null);
   const [profileSection, setProfileSection] = useState(null);
-  // Quick-actions overlays (bottom-right bubble): the Notes Canvas modal, and
-  // ad-hoc PDF delivery-spec scanning. Both render over whatever page is up.
+  // The Notes Canvas modal, opened from the quick-actions bubble over
+  // whatever page is up.
   const [notesModalOpen, setNotesModalOpen] = useState(false);
-  const [pdfSpecs, setPdfSpecs] = useState(null);
-  const [pdfName, setPdfName] = useState("");
-  const [csvOpen, setCsvOpen] = useState(false);
   const [hasToken, setHasToken] = useState(
     () => !!localStorage.getItem("wrike_user_id")
   );
@@ -335,27 +323,6 @@ export default function App() {
     (message, type = "error") => notify(message, type),
     []
   );
-
-  // Ad-hoc PDF delivery-spec scan from the quick-actions bubble. Same parser +
-  // checklist UI the task modal and Profile use, but reachable from any page.
-  // The parser (and its heavy pdfjs dependency) is imported dynamically so it
-  // only loads the first time someone actually scans, never at app start.
-  // Nothing is uploaded or stored — the PDF is parsed in-browser and discarded.
-  const scanPdf = useCallback(async (file) => {
-    if (!file) return;
-    setPdfName(file.name);
-    setCsvOpen(false);
-    notify("Reading PDF…", "info");
-    try {
-      const { parsePdfDeliverySpecs } = await import("./utils/pdfTableParser");
-      const specs = await parsePdfDeliverySpecs(file);
-      if (specs?.length) setPdfSpecs(specs);
-      else notify("No spec table found in that PDF.", "error");
-    } catch (e) {
-      console.error(e);
-      notify("Couldn't read that PDF.", "error");
-    }
-  }, []);
 
   // Only Canvas-relevant tasks go to the Canvas: MATRIX tasks (the campaign
   // gallery) plus Print launch hubs + their per-market request subtasks (the
@@ -560,12 +527,11 @@ export default function App() {
           setActivePage(page);
         }}
         onOpenNotes={() => setNotesModalOpen(true)}
-        onScanPdf={scanPdf}
         onOpenAdmin={isAdmin ? () => setShowAdmin(true) : undefined}
       />
 
-      {/* Quick-actions overlays. Both are lazy, so their code (and pdfjs /
-          the TipTap editor) only downloads when first opened. */}
+      {/* The bubble's Notes overlay. Lazy, so its code (and the TipTap
+          editor) only downloads when first opened. */}
       <Suspense fallback={null}>
         {notesModalOpen && (
           <NotesModal
@@ -575,21 +541,6 @@ export default function App() {
               setNotesModalOpen(false);
               setActivePage("canvas");
             }}
-          />
-        )}
-        {pdfSpecs && (
-          <DeliverySpecsModal
-            specs={pdfSpecs}
-            pdfName={pdfName}
-            onClose={() => setPdfSpecs(null)}
-            onExportCsv={() => setCsvOpen(true)}
-          />
-        )}
-        {csvOpen && pdfSpecs && (
-          <CsvPreviewModal
-            rawSpecs={pdfSpecs}
-            pdfName={pdfName}
-            onClose={() => setCsvOpen(false)}
           />
         )}
       </Suspense>

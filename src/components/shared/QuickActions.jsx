@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Zap, StickyNote, Briefcase, Settings, FileScan,
+import { Zap, StickyNote, Briefcase, Settings,
          FolderPlus, FileBarChart, ClipboardList, Shield } from "lucide-react";
 import { PAGE_GRADIENTS } from "../../lib/pageGradients";
 import { pageIdsFor } from "../../lib/departments";
@@ -12,10 +12,10 @@ import { pageIdsFor } from "../../lib/departments";
 //               Settings, lands you *inside* it, skipping the hub screen the
 //               Rail would otherwise dump you on).
 //  • in-place — runs something over the current page without navigating away:
-//               Notes opens the Notes Canvas in a modal, Scan PDF reads a
-//               delivery-spec PDF straight from the corner. These are the
-//               point of the bubble beyond what the Rail already does — a
-//               place to *do* a quick thing, not just go somewhere.
+//               Notes opens the Notes Canvas in a modal, Admin the Admin
+//               panel. These are the point of the bubble beyond what the Rail
+//               already does — a place to *do* a quick thing, not just go
+//               somewhere.
 //
 // Hidden on Home for the same reason the Rail is: Home is its own full-screen
 // menu, and a shortcut bubble floating over it would just be a second, worse
@@ -74,6 +74,17 @@ const ACTIONS = [
     requires: "management",
   },
   {
+    id: "orderforms",
+    label: "Client Orders",
+    icon: ClipboardList,
+    kind: "hash",
+    hash: "orderforms",
+    gradient: PAGE_GRADIENTS.orderforms,
+    requires: "orderforms",
+    // Only for a desk that names it below, not everyone who can open the page.
+    deskOnly: true,
+  },
+  {
     id: "jobs",
     label: "Active Jobs",
     icon: Briefcase,
@@ -83,15 +94,6 @@ const ACTIONS = [
     // Matches the Active Jobs hub row's own identity gradient in Profile.
     gradient: "from-[#12a0e1] to-[#1cc1a5]",
     requires: "profile",
-  },
-  {
-    id: "scan",
-    label: "Scan PDF",
-    icon: FileScan,
-    kind: "scan",
-    gradient: "from-emerald-500 to-teal-600",
-    // No `requires`: reading a delivery-spec PDF is a generic tool, useful from
-    // any page and not tied to a department's page access.
   },
   {
     id: "notes",
@@ -122,7 +124,7 @@ const ADMIN_ACTION = {
 // Administration reports are only offered to an Operations member who is also
 // a manager (lib/access.js) — everyone else on that desk keeps Settings.
 const DEPARTMENT_ACTIONS = {
-  PM: ["jobsSetup", "jobbook", "jobs", "settings"],
+  PM: ["jobsSetup", "jobbook", "orderforms", "jobs", "settings"],
   // timesheetCompletion comes back here once that report exists.
   Operations: ["projectTime", "settings"],
 };
@@ -187,7 +189,7 @@ function useLiftOverMarked(bubbleRef, enabled) {
   return enabled ? lift : 0;
 }
 
-export default function QuickActions({ activePage, department, wrikeUserId, onNavigate, onOpenNotes, onScanPdf, onOpenAdmin }) {
+export default function QuickActions({ activePage, department, wrikeUserId, onNavigate, onOpenNotes, onOpenAdmin }) {
   // Two independent reasons to be open, OR'd together, rather than one flag
   // both handlers write to: with a single flag, mouseenter opens the stack
   // and the bubble's own click then toggles it straight back shut, so a
@@ -196,7 +198,6 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
   const [hovered, setHovered] = useState(false);
   const [pinned, setPinned] = useState(false);
   const open = hovered || pinned;
-  const fileInputRef = useRef(null);
   const bubbleRef = useRef(null);
   const lift = useLiftOverMarked(bubbleRef, activePage !== "home");
 
@@ -208,8 +209,7 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
   if (activePage === "home") return null;
 
   // Same department registry Home and the Rail read, so the bubble
-  // can never offer a page this member has no access to. Entries with no
-  // `requires` (Scan PDF) are always allowed.
+  // can never offer a page this member has no access to.
   const allowed = pageIdsFor(department, wrikeUserId);
   // A desk with a named shortcut set gets exactly that, in that order — the
   // bubble is meant to be the two or three things you actually reach for, and
@@ -219,7 +219,7 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
   const deskActions = preferred
     ? preferred.map((id) => ACTIONS.find((a) => a.id === id))
                 .filter((a) => a && (!a.requires || allowed.includes(a.requires)))
-    : ACTIONS.filter((a) => !a.requires || allowed.includes(a.requires));
+    : ACTIONS.filter((a) => !a.deskOnly && (!a.requires || allowed.includes(a.requires)));
   const actions = onOpenAdmin ? [ADMIN_ACTION, ...deskActions] : deskActions;
   if (!actions.length) return null;
 
@@ -232,13 +232,6 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
     if (action.kind === "admin") {
       close();
       onOpenAdmin?.();
-      return;
-    }
-    if (action.kind === "scan") {
-      // Fire the picker from within this click so the browser accepts the
-      // gesture; closing the stack afterwards doesn't cancel the open dialog.
-      fileInputRef.current?.click();
-      close();
       return;
     }
     if (action.kind === "hash") {
@@ -268,19 +261,6 @@ export default function QuickActions({ activePage, department, wrikeUserId, onNa
         if (!e.currentTarget.contains(e.relatedTarget)) close();
       }}
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="application/pdf"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          // Reset so picking the same file twice still re-fires onChange.
-          e.target.value = "";
-          if (f) onScanPdf?.(f);
-        }}
-      />
-
       <AnimatePresence>
         {open && (
           <motion.div
